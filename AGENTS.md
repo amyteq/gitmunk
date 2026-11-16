@@ -16,6 +16,7 @@ This public repository publishes Claude Code / Codex plugins and a reusable GitH
 
 ```bash
 node scripts/sync-shared.mjs --check
+node --test bin/gitmunk.test.mjs
 (cd plugins/dev-skills && npm ci && npm test)
 python3 -m unittest discover -s plugins/dev-hooks/tests
 python3 -m unittest discover -s scripts/github-agent/tests

@@ -11,6 +11,31 @@ GitHub Actions: a reusable "Ask agent" workflow ([`.github/workflows/ask-agent.y
 
 ## Install
 
+Run the installer (Node.js 20 or later). It changes nothing until you confirm:
+
+```bash
+npx --allow-git=root github:amyteq/gitmunk
+```
+
+npm 12 runs a package straight from a git repository only with `--allow-git=root`; npm 11 accepts the flag too.
+
+It asks three questions, each with a default:
+
+- **channel:** stable `gitmunk` at `main` (default), or beta `gitmunk-beta` at `develop`;
+- **scope:** user (default), project or local, which says where Claude Code records the plugins;
+- **agents:** Claude Code, Codex, or both; the default is every one it finds on `PATH`.
+
+It then prints every command and settings change, asks once, and runs them.
+
+- It installs `dev-skills`. `dev-hooks` is opt-in through `--with-hooks`, because its hooks currently block the Claude Code phases of `dev-review-pr`.
+- A beta install also sets the stable plugin ids to `false` at the same scope, as the [beta template](templates/claude/settings.beta.json) does, so no skill loads twice.
+- Codex installs plugins per user, so the installer sets up Codex only at user scope. It also runs the `npm ci` step that Codex skips.
+- A second run changes nothing. To move Codex to the other channel, run `codex plugin marketplace remove gitmunk` first.
+
+Flags: `--channel stable|beta`, `--scope user|project|local`, `--agents claude,codex`, `--with-hooks`, `--yes` (no questions: flags and defaults, for scripts and CI), `--dry-run` (print the plan only) and `--help`.
+
+To install by hand instead, use the commands below.
+
 ### Claude Code
 
 Per project (shared with the team): merge [`templates/claude/settings.json`](templates/claude/settings.json) into the project's `.claude/settings.json`. Teammates are prompted to trust the marketplace on first run.

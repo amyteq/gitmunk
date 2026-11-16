@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Installer (#33): `npx --allow-git=root github:amyteq/gitmunk` asks for the channel (stable or beta), the scope (user, project or local) and the agents (Claude Code, Codex), prints every step, asks once, and then runs the `claude plugin` and `codex plugin` commands.
+  - For Codex it also runs the `npm ci` step that Codex skips.
+  - A beta install sets the stable plugin ids to `false` at the same scope. `dev-hooks` is installed only with `--with-hooks`.
+  - `--yes` runs without questions and `--dry-run` only prints the plan; a second run changes nothing.
+  - It is a dependency-free `bin` in a root `package.json`; nothing is published to npm. npm 12 needs `--allow-git=root` to run a package from git.
+- Plugins unchanged: `dev-skills` 0.2.0 and `dev-hooks` 0.2.0.
+
 ## 0.3.0
 
 Breaking for private repositories that relied on the unset default: the Ask workflows now start an agent only when its variable `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED` is `true` and its secret reaches the workflow. Set the variable to keep an agent answering.
