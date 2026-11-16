@@ -7,13 +7,13 @@
     {
       "name": "dev-skills",
       "source": "./plugins/dev-skills",
-      "description": "Review PRs in bounded rounds, refine issues into work orders, explain pending decisions, compact long threads, squash merge with a closeout, track discussion series, and plan features and stories (FT_/STY_ docs).",
+      "description": "🐿️ Review PRs in bounded rounds, refine issues into work orders, explain pending decisions, compact long threads, squash merge with a closeout, track discussion series, and plan features and stories (FT_/STY_ docs).",
       "category": "development"
     },
     {
       "name": "dev-hooks",
       "source": "./plugins/dev-hooks",
-      "description": "Guardrail and audit hooks: deny destructive or secret-reading calls, block merging other people's PRs, log redacted events.",
+      "description": "🐿️ Guardrail and audit hooks: deny destructive or secret-reading calls, block merging other people's PRs, log redacted events.",
       "category": "security"
     }
   ]
