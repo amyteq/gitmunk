@@ -21,6 +21,8 @@ The scripts use only the Python standard library.
 
 ## Set up a repository
 
+These steps set up the Ask workflow only; to install the gitmunk plugins in Claude Code or Codex, see the [install guide](../../docs/install.md).
+
 1. Copy `templates/github/ask-claude.yml` and/or `ask-codex.yml` into `.github/workflows/` and merge them into the **default branch**; issue, comment and discussion events only fire from workflow files there.
 2. Add Actions secrets for the agents you use: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), and `CODEX_AUTH_JSON` (the whole `~/.codex/auth.json` written by `codex login`) or `OPENAI_API_KEY`. Codex prefers OAuth when both exist. The caller passes each secret by name because `secrets: inherit` does not cross organizations.
 3. Turn each agent on with the repository variable `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED` set to `true` (`1`, `yes` and `on` work too). Both agents are **off by default in every repository**: a run starts the agent only when its variable is on **and** its secret from step 2 reaches the workflow; otherwise it stops at routing with the reason in the log. Letter case does not matter; any other value, including empty or whitespace only, is off. Changing a variable does not stop a run already in progress.

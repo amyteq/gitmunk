@@ -10,6 +10,7 @@
   - A beta install sets the stable plugin ids to `false` at the same scope. `dev-hooks` is installed only with `--with-hooks`.
   - `--yes` runs without questions and `--dry-run` only prints the plan; a second run changes nothing.
   - It is a dependency-free `bin` in a root `package.json`; nothing is published to npm. npm 12 needs `--allow-git=root` to run a package from git.
+- Install guide (#36): [`docs/install.md`](docs/install.md) explains the installer, Claude Code scopes, channels and templates, Codex with its `npm ci` step, where the Ask workflows are set up, updating, moving from beta to stable, pinning, uninstalling and troubleshooting. The README's Install section now keeps only the installer one-liner and the shortest manual commands, and the `dev-skills` and Ask agent READMEs link to the guide. Plugins unchanged.
 - `dev-skills` 0.2.1-beta.1 and `dev-hooks` 0.2.1-beta.1: only the description changes, so installed copies show the new one.
 
 ## 0.3.0
