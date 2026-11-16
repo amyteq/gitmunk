@@ -12,6 +12,8 @@ Emitted step outputs (the workflow consumes `enabled`; the rest are for the log)
 
 Per-repository settings arrive as workflow inputs in the environment:
 BASE_BRANCH (empty means the default branch) and PROTECTED_BRANCHES.
+AGENT_SECRET_SET is `true` when the agent's credential secret reached the
+workflow; the workflow computes it, so no secret value is ever passed here.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agent_lib import (  # noqa: E402
+    AGENT_SECRETS,
     EVENT_ROUTES,
     READ_ONLY_COMMANDS,
     WRITE_COMMANDS,
@@ -344,8 +347,11 @@ def main() -> int:
             )
         return 1
 
-    if not config.enabled(repository.get("private") is True):
-        return disable(f"{config.prefix}ENABLED is off (unset means off for public repositories)")
+    if not config.enabled():
+        return disable(f"{config.prefix}ENABLED is not true (unset means off in every repository)")
+    if os.environ.get("AGENT_SECRET_SET") != "true":
+        secrets = " or ".join(AGENT_SECRETS[config.agent])
+        return disable(f"no {secrets} secret reaches this workflow; add it as an Actions secret and pass it from the caller")
 
     try:
         if event_name == "workflow_dispatch":

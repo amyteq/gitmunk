@@ -32,8 +32,8 @@ API_ROOT = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 COMMON_DEFAULTS: dict[str, str] = {
     # Master switch plus one switch per event the workflows listen to, so any
     # single surface can be turned off, e.g. CODEX_ACTION_ISSUE_COMMENT=false.
-    # An unset master switch follows repository visibility; see `enabled()`.
-    "ENABLED": "",
+    # The master switch is off unless set to a truthy value; see `enabled()`.
+    "ENABLED": "false",
     "ISSUE_COMMENT": "true",
     "PR_REVIEW_COMMENT": "true",
     "PR_REVIEW": "true",
@@ -60,6 +60,12 @@ AGENT_DEFAULTS: dict[str, dict[str, str]] = {
         "MODEL": "",
         "EFFORT": "",
     },
+}
+
+# Actions secrets that authenticate each agent; any one of them is enough.
+AGENT_SECRETS: dict[str, tuple[str, ...]] = {
+    "claude": ("CLAUDE_CODE_OAUTH_TOKEN",),
+    "codex": ("CODEX_AUTH_JSON", "OPENAI_API_KEY"),
 }
 
 # `<event_name>` -> (handled actions, config key of its on/off variable).
@@ -118,10 +124,9 @@ class AgentConfig:
     def flag(self, key: str) -> bool:
         return truthy(self.get(key))
 
-    def enabled(self, private: bool) -> bool:
-        """The master switch. Unset means on for private and off for public repositories."""
-        raw = self.get("ENABLED")
-        return truthy(raw) if raw else private
+    def enabled(self) -> bool:
+        """The master switch: on only when `<AGENT>_ACTION_ENABLED` is truthy, in any repository."""
+        return self.flag("ENABLED")
 
     def number(self, key: str) -> int:
         try:

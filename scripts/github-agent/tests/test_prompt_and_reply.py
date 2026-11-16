@@ -195,28 +195,32 @@ class TestLatestComments(unittest.TestCase):
 
 
 class TestRouteSettings(unittest.TestCase):
-    """Repository visibility, the base branch and protected branches, end to end through main()."""
+    """The opt-in gate, the base branch and protected branches, end to end through main()."""
 
-    def route(self, repository, enabled="true", **settings):
+    def route(self, repository, enabled="true", secret="true", agent="codex", **settings):
+        """The routed request, or None when routing skipped; `self.last` keeps the step outputs."""
         payload = {
             "action": "created",
             "repository": repository,
             "sender": {"login": "collaborator"},
             "issue": {"number": 3},
-            "comment": {"id": 9, "body": "@codex plan the setup"},
+            "comment": {"id": 9, "body": f"@{agent} plan the setup"},
         }
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "event.json"
-            env = {"AGENT": "codex", "GITHUB_EVENT_NAME": "issue_comment",
+            env = {"AGENT": agent, "GITHUB_EVENT_NAME": "issue_comment",
                    "GITHUB_REPOSITORY": "example-org/example-repo", "EVENT_FILE": str(output), **settings}
             if enabled is not None:
-                env["CODEX_ACTION_ENABLED"] = enabled
+                env[f"{agent.upper()}_ACTION_ENABLED"] = enabled
+            if secret is not None:
+                env["AGENT_SECRET_SET"] = secret
             outputs = []
             with patch.dict(os.environ, env, clear=True), \
                     patch.object(normalize_event, "read_event", return_value=payload), \
                     patch.object(normalize_event, "set_outputs", side_effect=outputs.append), \
                     redirect_stdout(io.StringIO()):
                 self.assertEqual(normalize_event.main(), 0)
+            self.last = outputs[-1]
             if outputs[-1]["enabled"] != "true":
                 return None
             return json.loads(output.read_text())
@@ -271,11 +275,33 @@ class TestRouteSettings(unittest.TestCase):
         self.assertEqual((result["ref"], result["base_ref"]), ("develop", "develop"))
         self.assertEqual(result["protected_branches"], ["main", "develop", "lovable"])
 
-    def test_an_unset_switch_runs_only_in_private_repositories(self):
-        self.assertIsNotNone(self.route({"default_branch": "main", "private": True}, enabled=None))
-        self.assertIsNone(self.route({"default_branch": "main", "private": False}, enabled=None))
-        self.assertIsNone(self.route({"default_branch": "main"}, enabled=None))
-        self.assertIsNone(self.route({"default_branch": "main", "private": True}, enabled="false"))
+    def test_an_unset_or_false_switch_is_off_in_every_repository(self):
+        for agent in ("claude", "codex"):
+            for private in (True, False, None):
+                repository = {"default_branch": "main"} if private is None else {"default_branch": "main", "private": private}
+                for enabled in (None, "", "false"):
+                    with self.subTest(agent=agent, private=private, enabled=enabled):
+                        self.assertIsNone(self.route(repository, enabled=enabled, agent=agent))
+                        self.assertEqual(self.last["enabled"], "false")
+                        self.assertIn(f"{agent.upper()}_ACTION_ENABLED", self.last["reason"])
+                with self.subTest(agent=agent, private=private, enabled="true"):
+                    self.assertIsNotNone(self.route(repository, agent=agent))
+
+    def test_a_run_needs_the_agents_secret(self):
+        claude, codex = ["CLAUDE_CODE_OAUTH_TOKEN"], ["CODEX_AUTH_JSON", "OPENAI_API_KEY"]
+        for agent, missing in (("claude", claude), ("codex", codex)):
+            for secret in (None, "", "false", "True", "1"):
+                with self.subTest(agent=agent, secret=secret):
+                    self.assertIsNone(self.route({"default_branch": "main", "private": True}, secret=secret, agent=agent))
+                    self.assertEqual(self.last["enabled"], "false")
+                    for name in missing:
+                        self.assertIn(name, self.last["reason"])
+                    for name in set(claude + codex) - set(missing):
+                        self.assertNotIn(name, self.last["reason"])
+
+    def test_a_switched_off_agent_stays_off_with_its_secret(self):
+        self.assertIsNone(self.route({"default_branch": "main", "private": True}, enabled="false", agent="claude"))
+        self.assertIn("CLAUDE_ACTION_ENABLED", self.last["reason"])
 
 
 class TestModelSelection(unittest.TestCase):

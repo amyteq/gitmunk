@@ -174,6 +174,8 @@ jobs:
         id: route
         env:
           GH_TOKEN: ${{ github.token }}
+          # Whether the agent's credential secret reached this workflow, as a boolean: no secret value enters this step.
+          AGENT_SECRET_SET: ${{ (inputs.agent == 'claude' && secrets.CLAUDE_CODE_OAUTH_TOKEN != '') || (inputs.agent == 'codex' && (secrets.CODEX_AUTH_JSON != '' || secrets.OPENAI_API_KEY != '')) }}
           # The caller repository's variables, passed by name and to this step only,
           # after the check above. Never pass the whole `vars` context: Actions renders
           # a step's env in its log. This step records them in the request for every later step.
