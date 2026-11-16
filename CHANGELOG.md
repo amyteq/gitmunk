@@ -5,6 +5,11 @@
 - README (#32): a badge row, Quick start, How it works, a Skills table, FAQ, Documentation, Contributing, Sponsors, Star history and License sections. Numbers, Before / after and Built with gitmunk are marked placeholders until there are facts to show. The Install section is unchanged.
 - 🐿️ starts every plugin description, in both plugin manifests and in both marketplace catalogs.
 - `.github/FUNDING.yml` names the `amyteq` organisation on GitHub Sponsors. The Sponsor button works once that profile is approved.
+- Installer (#33): `npx --allow-git=root github:amyteq/gitmunk` asks for the channel (stable or beta), the scope (user, project or local) and the agents (Claude Code, Codex), prints every step, asks once, and then runs the `claude plugin` and `codex plugin` commands.
+  - For Codex it also runs the `npm ci` step that Codex skips.
+  - A beta install sets the stable plugin ids to `false` at the same scope. `dev-hooks` is installed only with `--with-hooks`.
+  - `--yes` runs without questions and `--dry-run` only prints the plan; a second run changes nothing.
+  - It is a dependency-free `bin` in a root `package.json`; nothing is published to npm. npm 12 needs `--allow-git=root` to run a package from git.
 - `dev-skills` 0.2.1-beta.1 and `dev-hooks` 0.2.1-beta.1: only the description changes, so installed copies show the new one.
 
 ## 0.3.0

@@ -1,0 +1,19 @@
+{
+  "name": "gitmunk",
+  "private": true,
+  "description": "🐿️ Interactive installer for the gitmunk plugins: npx --allow-git=root github:amyteq/gitmunk",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "gitmunk": "bin/gitmunk.mjs"
+  },
+  "files": [
+    "bin/gitmunk.mjs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test bin/gitmunk.test.mjs"
+  }
+}
