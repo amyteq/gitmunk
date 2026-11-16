@@ -47,53 +47,35 @@ GitHub Actions: a reusable "Ask agent" workflow ([`.github/workflows/ask-agent.y
 
 ## Install
 
-Run the installer (Node.js 20 or later). It changes nothing until you confirm:
+Run the installer (Node.js 20 or later). It asks for the channel, the scope and the agents, prints every step and changes nothing until you confirm:
 
 ```bash
 npx --allow-git=root github:amyteq/gitmunk
 ```
 
-npm 12 runs a package straight from a git repository only with `--allow-git=root`; npm 11 accepts the flag too.
+npm 12 runs a package straight from a git repository only with `--allow-git=root`. The [install guide](docs/install.md) covers the installer's questions and flags, scopes, the beta channel, the settings templates, updating, uninstalling and troubleshooting.
 
-It asks three questions, each with a default:
-
-- **channel:** stable `gitmunk` at `main` (default), or beta `gitmunk-beta` at `develop`;
-- **scope:** user (default), project or local, which says where Claude Code records the plugins;
-- **agents:** Claude Code, Codex, or both; the default is every one it finds on `PATH`.
-
-It then prints every command and settings change, asks once, and runs them.
-
-- It installs `dev-skills`. `dev-hooks` is opt-in through `--with-hooks`, because its hooks currently block the Claude Code phases of `dev-review-pr`.
-- A beta install also sets the stable plugin ids to `false` at the same scope, as the [beta template](templates/claude/settings.beta.json) does, so no skill loads twice.
-- Codex installs plugins per user, so the installer sets up Codex only at user scope. It also runs the `npm ci` step that Codex skips.
-- A second run changes nothing. To move Codex to the other channel, run `codex plugin marketplace remove gitmunk` first.
-
-Flags: `--channel stable|beta`, `--scope user|project|local`, `--agents claude,codex`, `--with-hooks`, `--yes` (no questions: flags and defaults, for scripts and CI), `--dry-run` (print the plan only) and `--help`.
-
-To install by hand instead, use the commands below.
+To install by hand instead:
 
 ### Claude Code
 
-Per project (shared with the team): merge [`templates/claude/settings.json`](templates/claude/settings.json) into the project's `.claude/settings.json`. Teammates are prompted to trust the marketplace on first run.
-
-Per user (every project on this machine): run the commands below, or merge the same `extraKnownMarketplaces` and `enabledPlugins` blocks into your user settings (`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR/settings.json` when you set that variable). Project settings win over user settings: a project that declares `gitmunk` itself uses its own entry, and cloud sessions, teammates and CI see only what the repository declares.
-
 ```bash
-claude plugin marketplace add https://github.com/amyteq/gitmunk.git#main
+claude plugin marketplace add amyteq/gitmunk#main
 claude plugin install dev-skills@gitmunk
-claude plugin install dev-hooks@gitmunk
+claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-Skills keep their bare names (`/dev-review-pr`) unless another installed skill has the same name; then use `/dev-skills:dev-review-pr`.
+To share the plugins with a team, merge [`templates/claude/settings.json`](templates/claude/settings.json) into the project's `.claude/settings.json` instead.
 
 ### Codex
 
 ```bash
 codex plugin marketplace add amyteq/gitmunk --ref main
 codex plugin add dev-skills@gitmunk
+npm ci --prefix "${CODEX_HOME:-$HOME/.codex}/plugins/cache/gitmunk/dev-skills/<version>"
 ```
 
-Codex lists plugin skills as `dev-skills:dev-review-pr`. Codex does not install plugin npm dependencies: run `npm ci --prefix "<installed plugin folder>"` once for `dev-skills` (Claude Code does this automatically).
+Codex does not install plugin npm dependencies, so the last command installs the helpers' package; `<version>` is the one `codex plugin list` shows.
 
 ## Versions
 
@@ -147,6 +129,7 @@ To pin a commit, use the full 40-character SHA where each tool accepts one:
 
 | Document | What it covers |
 | --- | --- |
+| [Install guide](docs/install.md) | Installing, updating and removing gitmunk in Claude Code and Codex: the installer, scopes, channels, templates and troubleshooting |
 | [CHANGELOG.md](CHANGELOG.md) | Changes in each release, with migration notes |
 | [AGENTS.md](AGENTS.md) | Rules for working in this repository |
 | [`dev-skills`](plugins/dev-skills/README.md) | The eight skills, their authority and their setup |
@@ -155,8 +138,6 @@ To pin a commit, use the full 40-character SHA where each tool accepts one:
 | [Ask agent](scripts/github-agent/README.md) | Setting up the Ask workflow in a repository |
 | [`templates/claude/`](templates/claude) | Settings templates for the stable and beta channels |
 | [`templates/github/`](templates/github) | The Ask caller workflows |
-
-An install guide (`docs/install.md`) is planned for after the `npx` installer. Until then, see [Install](#install).
 
 ## Develop
 

@@ -21,7 +21,7 @@ Each skill reads the consuming repository's `AGENTS.md` / `CLAUDE.md` for projec
 
 ## Setup
 
-The helper scripts need Node.js 20+ and one locked npm package. Claude Code installs it from the plugin's `package-lock.json` when the plugin is installed. Codex does not; run `npm ci --prefix "<installed plugin folder>"` once after installing or updating.
+To install the plugin in Claude Code or Codex, see the [install guide](../../docs/install.md). The helper scripts need Node.js 20+ and one locked npm package. Claude Code installs it from the plugin's `package-lock.json` when the plugin is installed. Codex does not; run the `npm ci --prefix` step in the install guide's [Codex](../../docs/install.md#codex) section after installing or updating.
 
 The skills also need `gh` (authenticated), and `dev-review-pr` needs the `claude` and/or `codex` CLI for the sessions it launches. `dev-merge` reads `dev-review-pr`'s review reports (or a formal approval) as its merge evidence; `dev-hooks`' `guard_pr_merge` still blocks merging a PR the signed-in account did not author.
 
