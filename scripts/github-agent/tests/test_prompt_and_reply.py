@@ -299,6 +299,17 @@ class TestRouteSettings(unittest.TestCase):
                     for name in set(claude + codex) - set(missing):
                         self.assertNotIn(name, self.last["reason"])
 
+    def test_a_whitespace_switch_skips_cleanly_whatever_the_secret_state(self):
+        # F1 round 1: whitespace is the off case, not a credential-shaped value.
+        for agent in ("claude", "codex"):
+            for enabled in (" ", "\t", " \t\n "):
+                for secret in (None, "false", "true"):
+                    with self.subTest(agent=agent, enabled=repr(enabled), secret=secret):
+                        self.assertIsNone(self.route({"default_branch": "main", "private": True}, enabled=enabled,
+                                                     secret=secret, agent=agent))
+                        self.assertEqual(self.last["enabled"], "false")
+                        self.assertIn(f"{agent.upper()}_ACTION_ENABLED", self.last["reason"])
+
     def test_a_switched_off_agent_stays_off_with_its_secret(self):
         self.assertIsNone(self.route({"default_branch": "main", "private": True}, enabled="false", agent="claude"))
         self.assertIn("CLAUDE_ACTION_ENABLED", self.last["reason"])

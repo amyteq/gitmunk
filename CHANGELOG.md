@@ -4,7 +4,7 @@
 
 Breaking for private repositories that relied on the unset default: the Ask workflows now start an agent only when its variable `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED` is `true` and its secret reaches the workflow. Set the variable to keep an agent answering.
 
-- Ask workflows are off by default in every repository (#26). An unset variable no longer means on in private repositories, and a run whose agent has no `CLAUDE_CODE_OAUTH_TOKEN` (Claude) or no `CODEX_AUTH_JSON` or `OPENAI_API_KEY` (Codex) stops at routing with the reason in the log, before any model job.
+- Ask workflows are off by default in every repository (#26). An unset variable no longer means on in private repositories, and a run whose agent has no `CLAUDE_CODE_OAUTH_TOKEN` (Claude) or no `CODEX_AUTH_JSON` or `OPENAI_API_KEY` (Codex) stops at routing with the reason in the log, before any model job. A switched-off agent, including a variable that is empty or only whitespace, skips cleanly without rendering or checking any variable.
 - This repository ignores `.claude/worktrees/`, where agent sessions keep their worktrees.
 
 ## 0.2.0

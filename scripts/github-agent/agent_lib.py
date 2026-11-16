@@ -186,11 +186,15 @@ def credential_shaped_variables(variables: dict[str, str]) -> list[str]:
     recognises reaches a rendered step: a leading space or control character is refused
     as the gate refuses it, a prefix counts after any whitespace `get` strips (the gate
     matches prefixes anywhere), and a JSON key counts only with its closing quote.
+    A value of whitespace only is never flagged: it is the off case of a switch, and the
+    workflow never renders it, because that gate runs only for a switched-on agent.
     """
     flagged = []
     for name, value in sorted(variables.items()):
         text = value or ""
         stripped = text.lstrip()
+        if not stripped:
+            continue  # whitespace only carries no credential; a master switch so set is off
         if text[:1] == " " or (text and ord(text[0]) < 32) or stripped.startswith(_CREDENTIAL_PREFIXES):
             flagged.append(name)
         elif stripped.startswith("{") and any(f'{key}"' in text.lower() for key in _CREDENTIAL_JSON_KEYS):

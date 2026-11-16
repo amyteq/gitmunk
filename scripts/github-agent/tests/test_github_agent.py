@@ -236,6 +236,13 @@ class TestCredentialShapedVariables(unittest.TestCase):
                 self.assertEqual(credential_shaped_variables({"X_ACTION_EXTRA": padding + "sk-" + "proj-abc"}), ["X_ACTION_EXTRA"])
                 self.assertEqual(credential_shaped_variables({"X_ACTION_EXTRA": padding + '{"id_' + 'token": "t"}'}), ["X_ACTION_EXTRA"])
 
+    def test_a_whitespace_only_value_is_not_credential_shaped(self):
+        for value in (" ", "\t", "\n", " \t\r\n ", "\u3000"):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(credential_shaped_variables({"CODEX_ACTION_ENABLED": value}), [])
+        self.assertEqual(credential_shaped_variables({"CODEX_ACTION_ENABLED": " ", "X_ACTION_EXTRA": " sk-" + "proj-abc"}),
+                         ["X_ACTION_EXTRA"])
+
     def test_ordinary_configuration_is_not_flagged(self):
         self.assertEqual(
             credential_shaped_variables(
