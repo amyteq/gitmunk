@@ -45,7 +45,7 @@ Channels are branches: `main` is stable and `develop` is beta. Each plugin's `ve
 | Stable (default) | `gitmunk` | the head of `main` | `dev-skills@gitmunk`, `dev-hooks@gitmunk` | [`templates/claude/settings.json`](templates/claude/settings.json) |
 | Beta | `gitmunk-beta` ([catalog](channels/beta/.claude-plugin/marketplace.json)) | the head of `develop`, versions like `0.3.0-beta.1` | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](templates/claude/settings.beta.json) |
 
-A project opts into beta by merging the beta template into its `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team). The two marketplaces have different names because Claude Code registers one source per marketplace name for the whole machine; the beta template also sets the stable plugins to `false`, so a user-level stable install does not load the same skills twice in that project. Codex has no second channel: point the project's `[marketplaces.gitmunk]` `ref` in `.codex/config.toml` at `develop` instead of `main`. When a beta becomes a release, its plugins' versions drop the `-beta.N` suffix, `develop` is merged into `main`, and beta projects can drop the beta template.
+A project opts into beta by merging the beta template into its `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team). The two marketplaces have different names because Claude Code registers one source per marketplace name for the whole machine; the beta template also sets the stable plugins to `false`, so a user-level stable install does not load the same skills twice in that project. Codex has no second channel: point the project's `[marketplaces.gitmunk]` `ref` in `.codex/config.toml` at `develop` instead of `main`. When a beta becomes a release, its plugins' versions drop the `-beta.N` suffix, `develop` is merged into `main`, and beta projects can drop the beta template. The [release workflow](.github/workflows/release.yml) fails a PR into `main` unless the top `CHANGELOG.md` section is a plain `## X.Y.Z`, no version carries a pre-release suffix and `vX.Y.Z` is not tagged yet; the merge then tags `vX.Y.Z` and publishes a GitHub release with that section as its notes.
 
 To pin a commit, use the full 40-character SHA where each tool accepts one:
 
@@ -66,6 +66,7 @@ node scripts/sync-shared.mjs --check    # CI: fail on drift
 (cd plugins/dev-skills && npm ci && npm test)
 python3 -m unittest discover -s plugins/dev-hooks/tests
 python3 -m unittest discover -s scripts/github-agent/tests
+python3 -m unittest discover -s scripts/release/tests
 ```
 
 Edit shared helpers in `shared/` only; plugins carry synced copies because each plugin is installed as its own cache.

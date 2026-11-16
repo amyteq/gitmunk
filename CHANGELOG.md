@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+Breaking for private repositories that relied on the unset default: the Ask workflows now start an agent only when its variable `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED` is `true` and its secret reaches the workflow. Set the variable to keep an agent answering.
+
+- Ask workflows are off by default in every repository (#26). An unset variable no longer means on in private repositories, and a run whose agent has no `CLAUDE_CODE_OAUTH_TOKEN` (Claude) or no `CODEX_AUTH_JSON` or `OPENAI_API_KEY` (Codex) stops at routing with the reason in the log, before any model job. A switched-off agent, including a variable that is empty or only whitespace, skips cleanly without rendering or checking any variable.
+- This repository ignores `.claude/worktrees/`, where agent sessions keep their worktrees.
+- Release workflow (#28): a PR into `main` fails its check unless the top `CHANGELOG.md` section is a plain `## X.Y.Z`, no plugin, package or marketplace version carries a pre-release suffix such as `-beta.N`, and the tag `vX.Y.Z` does not exist yet. Each push to `main` then creates the tag `vX.Y.Z` and a GitHub release with that section as its notes; a push whose tag exists changes nothing.
+- Plugins unchanged: `dev-skills` 0.2.0 and `dev-hooks` 0.2.0, so installed copies stay as they are.
+
 ## 0.2.0
 
 Breaking: the repository is renamed to `gitmunk` and every plugin id changes. Replace `dev-skills@dev-lite`, `dev-planning@dev-lite` and `dev-hooks@dev-lite` with `dev-skills@gitmunk` and `dev-hooks@gitmunk`. To migrate, either merge the updated [`templates/claude/settings.json`](templates/claude/settings.json) into the settings file that enabled `dev-lite`, or run all three commands in the README's [Claude Code install](README.md#claude-code) section (`marketplace add` alone enables no plugin). Then, in the settings file that enabled `dev-lite`, delete the three `*@dev-lite` keys from `enabledPlugins` (or set them to `false`) and the `dev-lite` key from `extraKnownMarketplaces`, so only `dev-skills@gitmunk` and `dev-hooks@gitmunk` stay enabled.
