@@ -7,13 +7,13 @@
     {
       "name": "dev-skills",
       "source": { "source": "git-subdir", "url": "https://github.com/amyteq/gitmunk.git", "path": "plugins/dev-skills", "ref": "develop" },
-      "description": "Beta: review PRs, refine issues, explain decisions, compact threads, squash merge with a closeout, track discussion series, plan features and stories.",
+      "description": "🐿️ Beta: review PRs, refine issues, explain decisions, compact threads, squash merge with a closeout, track discussion series, plan features and stories.",
       "category": "development"
     },
     {
       "name": "dev-hooks",
       "source": { "source": "git-subdir", "url": "https://github.com/amyteq/gitmunk.git", "path": "plugins/dev-hooks", "ref": "develop" },
-      "description": "Beta: guardrail and audit hooks.",
+      "description": "🐿️ Beta: guardrail and audit hooks.",
       "category": "security"
     }
   ]
