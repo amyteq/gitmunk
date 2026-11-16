@@ -1,5 +1,5 @@
 # Copy to .github/workflows/ask-codex.yml on the default branch. Settings: see
-# https://github.com/amyteq/dev-lite/blob/v0/scripts/github-agent/README.md
+# https://github.com/amyteq/gitmunk/blob/main/scripts/github-agent/README.md
 name: Ask Codex
 on:
   issue_comment: { types: [created] }
@@ -19,7 +19,7 @@ concurrency:
 jobs:
   codex:
     if: github.event_name == 'workflow_dispatch' || contains(toJSON(github.event), '@codex')
-    uses: amyteq/dev-lite/.github/workflows/ask-agent.yml@v0
+    uses: amyteq/gitmunk/.github/workflows/ask-agent.yml@main
     secrets:
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

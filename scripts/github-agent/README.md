@@ -24,7 +24,7 @@ The scripts use only the Python standard library.
 1. Copy `templates/github/ask-claude.yml` and/or `ask-codex.yml` into `.github/workflows/` and merge them into the **default branch**; issue, comment and discussion events only fire from workflow files there.
 2. Add Actions secrets for the agents you use: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), and `CODEX_AUTH_JSON` (the whole `~/.codex/auth.json` written by `codex login`) or `OPENAI_API_KEY`. Codex prefers OAuth when both exist. The caller passes each secret by name because `secrets: inherit` does not cross organizations.
 3. Optionally set the repository variables `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED`. When unset, an agent is **on in private repositories and off in public ones**; `true` or `false` overrides that. Changing a variable does not stop a run already in progress.
-4. In **Settings → Actions → General**, allow this reusable workflow if the organization restricts actions (for example `amyteq/dev-lite/.github/workflows/ask-agent.yml@*`), and allow GitHub Actions to create pull requests if write commands should publish drafts.
+4. In **Settings → Actions → General**, allow this reusable workflow if the organization restricts actions (for example `amyteq/gitmunk/.github/workflows/ask-agent.yml@*`), and allow GitHub Actions to create pull requests if write commands should publish drafts.
 5. As a maintainer, try a read-only request such as `@claude explain the repository layout` on a test issue and check that exactly one reply with a run link appears.
 
 The requester needs `write`, `maintain` or `admin` permission; it is checked before the model runs and again before publishing. Bots are always ignored. If a ChatGPT Codex connector is installed on the repository it also answers `@codex`, so disable one of the two.
@@ -81,11 +81,11 @@ Residual: the CLI's own process holds the credential, and model-side tools outsi
 
 ## How the workflow finds its own scripts
 
-Inside a called workflow, `github.workflow_ref` and `github.workflow_sha` describe the **caller's** workflow, and the caller's checkout does not contain these scripts. Each job therefore checks out `job.workflow_repository` at `job.workflow_sha`, which GitHub documents as the repository and commit of the workflow file that defines the current job. The scripts are always the exact commit the caller's `@v0` (or `@<sha>`) resolved to, with no second ref to keep in sync. An explicit `tools_ref` input was rejected because it can drift from the workflow version and lets a caller run scripts from an unreviewed ref.
+Inside a called workflow, `github.workflow_ref` and `github.workflow_sha` describe the **caller's** workflow, and the caller's checkout does not contain these scripts. Each job therefore checks out `job.workflow_repository` at `job.workflow_sha`, which GitHub documents as the repository and commit of the workflow file that defines the current job. The scripts are always the exact commit the caller's `@main` (or `@<sha>`) resolved to, with no second ref to keep in sync. An explicit `tools_ref` input was rejected because it can drift from the workflow version and lets a caller run scripts from an unreviewed ref.
 
 These properties need a current hosted runner and are not available on GitHub Enterprise Server; the prepare job fails with an explanation when they are empty. actionlint 1.7.12 does not know them yet; run it with `-ignore 'property "workflow_(repository|sha)" is not defined'`.
 
-`@v0` is a moving major tag. Pin a full commit SHA instead when the consumer must review every update; the scripts follow the pin automatically.
+`@main` follows the stable channel. Pin a full commit SHA instead when the consumer must review every update; the scripts follow the pin automatically.
 
 ## Opting into PR title and description mentions
 

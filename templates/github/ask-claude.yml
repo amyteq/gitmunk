@@ -1,5 +1,5 @@
 # Copy to .github/workflows/ask-claude.yml on the default branch. Settings: see
-# https://github.com/amyteq/dev-lite/blob/v0/scripts/github-agent/README.md
+# https://github.com/amyteq/gitmunk/blob/main/scripts/github-agent/README.md
 name: Ask Claude
 on:
   issue_comment: { types: [created] }
@@ -19,7 +19,7 @@ concurrency:
 jobs:
   claude:
     if: github.event_name == 'workflow_dispatch' || contains(toJSON(github.event), '@claude')
-    uses: amyteq/dev-lite/.github/workflows/ask-agent.yml@v0
+    uses: amyteq/gitmunk/.github/workflows/ask-agent.yml@main
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     with:

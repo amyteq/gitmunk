@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
 const shared = join(root, 'shared');
-const targets = ['dev-skills', 'dev-planning'].map((p) => join(root, 'plugins', p, 'scripts'));
+const targets = ['dev-skills'].map((p) => join(root, 'plugins', p, 'scripts'));
 const check = process.argv.includes('--check');
 
 let drift = 0;
