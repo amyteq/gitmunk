@@ -2,7 +2,7 @@
 
 ## 0.2.0
 
-Breaking: the repository is renamed to `gitmunk` and every plugin id changes. Replace `dev-skills@dev-lite`, `dev-planning@dev-lite` and `dev-hooks@dev-lite` with `dev-skills@gitmunk` and `dev-hooks@gitmunk`, using the updated [`templates/claude/settings.json`](templates/claude/settings.json), or `claude plugin marketplace add https://github.com/amyteq/gitmunk.git#main`.
+Breaking: the repository is renamed to `gitmunk` and every plugin id changes. Replace `dev-skills@dev-lite`, `dev-planning@dev-lite` and `dev-hooks@dev-lite` with `dev-skills@gitmunk` and `dev-hooks@gitmunk`. To migrate, either merge the updated [`templates/claude/settings.json`](templates/claude/settings.json) into the settings file that enabled `dev-lite`, or run all three commands in the README's [Claude Code install](README.md#claude-code) section (`marketplace add` alone enables no plugin). Then, in the settings file that enabled `dev-lite`, delete the three `*@dev-lite` keys from `enabledPlugins` (or set them to `false`) and the `dev-lite` key from `extraKnownMarketplaces`, so only `dev-skills@gitmunk` and `dev-hooks@gitmunk` stay enabled.
 
 - Renamed `dev-lite` to 🐿️ `gitmunk` (#19): the marketplace is `gitmunk`, the beta marketplace `gitmunk-beta`, and every URL, template and Ask caller points at `amyteq/gitmunk`.
 - Channels are branches: stable is the head of `main` and beta the head of `develop`. The settings template, the Ask callers (`ask-agent.yml@main`) and the install commands reference `main`; the `v0` tag they named was never created.
