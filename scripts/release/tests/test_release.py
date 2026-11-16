@@ -77,9 +77,13 @@ class Release(unittest.TestCase):
     def test_heading_that_is_not_plain_fails(self):
         # The mistyped forms must not fall through to the older '## 0.2.0' section.
         for heading in ("## 0.3.0-beta.1", "## v0.3.0", "## 0.3.0 (2026-11-20)", "## 01.2.3", "##  0.3.0",
-                        "##\t0.3.0", "  ## 0.3.0", "### 0.3.0", "##0.3.0"):
+                        "##\t0.3.0", "  ## 0.3.0", "### 0.3.0", "##0.3.0", "# 0.3.0", "# Unreleased", "#0.3.0"):
             with self.subTest(heading=heading):
                 self.write("CHANGELOG.md", f"# Changelog\n\n{heading}\n\n- New.\n\n## 0.2.0\n\n- Old.\n")
+                self.assert_check_fails("not a plain '## X.Y.Z'")
+        for changelog in ("# 0.3.0\n\n- New.\n\n## 0.2.0\n\n- Old.\n", "# Changes\n\n## 0.3.0\n\n- New.\n"):
+            with self.subTest(changelog=changelog):
+                self.write("CHANGELOG.md", changelog)
                 self.assert_check_fails("not a plain '## X.Y.Z'")
 
     # AC1 c
