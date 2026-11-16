@@ -69,7 +69,7 @@ class Routing(unittest.TestCase):
                 event = Path(folder, 'event.json')
                 payload = {'action': 'created', 'repository': {'default_branch': 'main'}, 'sender': {'login': 'maintainer', 'type': 'User'},
                            'issue': {'number': 15}, 'comment': {'body': body}}
-                with patch.dict(os.environ, {'AGENT': 'codex', 'CODEX_ACTION_ENABLED': 'true', 'EVENT_FILE': str(event),
+                with patch.dict(os.environ, {'AGENT': 'codex', 'CODEX_ACTION_ENABLED': 'true', 'AGENT_SECRET_SET': 'true', 'EVENT_FILE': str(event),
                                             'GITHUB_EVENT_NAME': 'issue_comment', 'GITHUB_REPOSITORY': 'example-org/example-repo'}, clear=True), \
                      patch.object(normalize_event, 'read_event', return_value=payload), \
                      patch.object(normalize_event, 'set_outputs'), redirect_stdout(io.StringIO()):
@@ -81,12 +81,13 @@ class Routing(unittest.TestCase):
         payload = {'action': 'created', 'repository': {'default_branch': 'main'}, 'sender': {'login': 'automation', 'type': 'Bot'},
                    'issue': {'number': 15}, 'comment': {'body': '@codex implement this'}}
         outputs = []
-        with patch.dict(os.environ, {'AGENT': 'codex', 'CODEX_ACTION_ENABLED': 'true', 'CODEX_ACTION_ALLOW_BOTS': 'true',
+        with patch.dict(os.environ, {'AGENT': 'codex', 'CODEX_ACTION_ENABLED': 'true', 'CODEX_ACTION_ALLOW_BOTS': 'true', 'AGENT_SECRET_SET': 'true',
                                     'GITHUB_EVENT_NAME': 'issue_comment', 'GITHUB_REPOSITORY': 'example-org/example-repo'}, clear=True), \
              patch.object(normalize_event, 'read_event', return_value=payload), \
              patch.object(normalize_event, 'set_outputs', side_effect=outputs.append), redirect_stdout(io.StringIO()):
             normalize_event.main()
         self.assertEqual(outputs[-1]['enabled'], 'false')
+        self.assertIn('bot', outputs[-1]['reason'])
 
 
 class Publication(unittest.TestCase):
@@ -449,7 +450,32 @@ def gate_stops(variables):
     return any(text in rendered for text in needles) or any(needle.lower() in text.lower() for text, needle in filled)
 
 
+def route_switch(route):
+    """The switch condition of the routing step's `if`, shared verbatim by the gate and the skip step."""
+    return re.search(r"if: >-\n +success\(\) &&\n +(\(.*\))\n", route).group(1)
+
+
+def switch_on(expression, agent, variables):
+    """The switch condition as Actions evaluates it: `==` on strings ignores case, an unset variable is ''."""
+    def equal(left, right):
+        return left.lower() == right.lower()
+    text = re.sub(r"vars\.(\w+) == '([^']*)'", lambda m: f"equal(variables.get({m[1]!r}, ''), {m[2]!r})", expression)
+    text = re.sub(r"inputs\.agent == '([^']*)'", lambda m: f"equal(agent, {m[1]!r})", text)
+    text = text.replace('&&', ' and ').replace('||', ' or ')
+    assert 'vars.' not in text and 'inputs.' not in text and '!' not in text, text
+    return bool(eval(text, {'equal': equal, 'variables': variables, 'agent': agent}))
+
+
 class WorkflowGates(unittest.TestCase):
+    def test_routing_learns_only_whether_the_agents_secret_is_set(self):
+        expected = ("AGENT_SECRET_SET: ${{ (inputs.agent == 'claude' && secrets.CLAUDE_CODE_OAUTH_TOKEN != '') || "
+                    "(inputs.agent == 'codex' && (secrets.CODEX_AUTH_JSON != '' || secrets.OPENAI_API_KEY != '')) }}")
+        route = workflow_step('Route mention')
+        self.assertEqual([line.strip() for line in route.splitlines() if 'secrets.' in line], [expected])
+        # The rest of the prepare job never names a secret.
+        prepare = WORKFLOW[WORKFLOW.index('\n  prepare:\n'):WORKFLOW.index('\n  execute:\n')]
+        self.assertEqual(prepare.replace(route, '').count('secrets.'), 0)
+
     def test_a_credential_shaped_variable_stops_before_the_routing_step_renders_it(self):
         self.assertLess(WORKFLOW.index(GATE), WORKFLOW.index('      - name: Route mention\n'))
         self.assertNotIn('env:', GATE)
@@ -466,6 +492,40 @@ class WorkflowGates(unittest.TestCase):
         for template, names, _ in CONSUMED:
             self.assertEqual([name.strip().removeprefix('vars.') for name in names.split(',')], rendered)
             self.assertEqual(template, ' '.join(f'{{{index}}}' for index in range(len(rendered))))
+
+    def test_a_switched_off_agent_skips_routing_without_rendering_or_gating_a_variable(self):
+        # F1 round 1: a whitespace switch is off, so the run skips cleanly instead of failing at the gate.
+        skip, route = workflow_step('Skip a switched-off agent'), workflow_step('Route mention')
+        switch = route_switch(route)
+        self.assertIn('success() &&\n            ' + switch + '\n', route)
+        self.assertIn('success() && !' + switch + '\n', skip)
+        self.assertIn("runner.debug != '1' &&\n            " + switch + ' && (', GATE)
+        self.assertLess(WORKFLOW.index(GATE), WORKFLOW.index(skip))
+        self.assertLess(WORKFLOW.index(skip), WORKFLOW.index(route))
+        # The skip step renders nothing: no env map, no expression, only the routing script.
+        self.assertNotIn('env:', skip)
+        self.assertNotIn('${{', skip)
+        self.assertIn('run: python3 "$TOOLS/normalize_event.py"', skip)
+        for agent in ('claude', 'codex'):
+            name = f'{agent.upper()}_ACTION_ENABLED'
+            for value in (None, '', ' ', '\t', ' \t ', 'false', '0', 'maybe', ' true', 'true', 'TRUE', '1', 'yes', 'On'):
+                with self.subTest(agent=agent, value=repr(value)):
+                    variables = {} if value is None else {name: value}
+                    on = switch_on(switch, agent, variables)
+                    self.assertEqual(on, value in ('true', 'TRUE', '1', 'yes', 'On'))
+                    if on:
+                        self.assertTrue(AgentConfig(agent, variables).enabled())
+                        continue
+                    # Off: the gate does not run, and routing sees no variable at all.
+                    outputs = []
+                    with patch.dict(os.environ, {'AGENT': agent, 'GITHUB_EVENT_NAME': 'issue_comment'}, clear=True), \
+                         patch.object(normalize_event, 'read_event', return_value={}), \
+                         patch.object(normalize_event, 'set_outputs', side_effect=outputs.append), redirect_stdout(io.StringIO()):
+                        self.assertEqual(normalize_event.main(), 0)
+                    self.assertEqual(outputs[-1]['enabled'], 'false')
+                    self.assertIn(name, outputs[-1]['reason'])
+        # Without that bypass the gate would stop a whitespace switch.
+        self.assertTrue(gate_stops({'CLAUDE_ACTION_ENABLED': ' '}))
 
     def test_the_gate_catches_every_value_the_routing_step_recognises(self):
         from agent_lib import credential_shaped_variables

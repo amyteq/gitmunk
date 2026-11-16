@@ -162,14 +162,14 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config("claude").get("MAX_TURNS"), "100")
         self.assertNotIn("SANDBOX", agent_lib.AGENT_DEFAULTS["codex"])
 
-    def test_an_unset_master_switch_follows_repository_visibility(self):
-        self.assertTrue(config("claude").enabled(private=True))
-        self.assertFalse(config("claude").enabled(private=False))
-
-    def test_an_explicit_master_switch_wins_over_visibility(self):
-        self.assertTrue(config("codex", CODEX_ACTION_ENABLED="true").enabled(private=False))
-        self.assertFalse(config("codex", CODEX_ACTION_ENABLED="false").enabled(private=True))
-        self.assertTrue(config("codex", CODEX_ACTION_ENABLED=" ").enabled(private=True))
+    def test_the_master_switch_is_on_only_when_truthy(self):
+        cases = {None: False, "": False, " ": False, "true": True, "TRUE": True, "1": True, "yes": True, "On": True,
+                 "false": False, "0": False, "maybe": False}
+        for agent in ("claude", "codex"):
+            for value, expected in cases.items():
+                with self.subTest(agent=agent, value=value):
+                    variables = {} if value is None else {f"{agent.upper()}_ACTION_ENABLED": value}
+                    self.assertIs(config(agent, **variables).enabled(), expected)
 
     def test_repository_variables_override_defaults(self):
         cfg = config("codex", CODEX_ACTION_MODEL="configured-codex-model")
@@ -235,6 +235,13 @@ class TestCredentialShapedVariables(unittest.TestCase):
             with self.subTest(padding=repr(padding)):
                 self.assertEqual(credential_shaped_variables({"X_ACTION_EXTRA": padding + "sk-" + "proj-abc"}), ["X_ACTION_EXTRA"])
                 self.assertEqual(credential_shaped_variables({"X_ACTION_EXTRA": padding + '{"id_' + 'token": "t"}'}), ["X_ACTION_EXTRA"])
+
+    def test_a_whitespace_only_value_is_not_credential_shaped(self):
+        for value in (" ", "\t", "\n", " \t\r\n ", "\u3000"):
+            with self.subTest(value=repr(value)):
+                self.assertEqual(credential_shaped_variables({"CODEX_ACTION_ENABLED": value}), [])
+        self.assertEqual(credential_shaped_variables({"CODEX_ACTION_ENABLED": " ", "X_ACTION_EXTRA": " sk-" + "proj-abc"}),
+                         ["X_ACTION_EXTRA"])
 
     def test_ordinary_configuration_is_not_flagged(self):
         self.assertEqual(

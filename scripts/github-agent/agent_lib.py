@@ -32,8 +32,8 @@ API_ROOT = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 COMMON_DEFAULTS: dict[str, str] = {
     # Master switch plus one switch per event the workflows listen to, so any
     # single surface can be turned off, e.g. CODEX_ACTION_ISSUE_COMMENT=false.
-    # An unset master switch follows repository visibility; see `enabled()`.
-    "ENABLED": "",
+    # The master switch is off unless set to a truthy value; see `enabled()`.
+    "ENABLED": "false",
     "ISSUE_COMMENT": "true",
     "PR_REVIEW_COMMENT": "true",
     "PR_REVIEW": "true",
@@ -60,6 +60,12 @@ AGENT_DEFAULTS: dict[str, dict[str, str]] = {
         "MODEL": "",
         "EFFORT": "",
     },
+}
+
+# Actions secrets that authenticate each agent; any one of them is enough.
+AGENT_SECRETS: dict[str, tuple[str, ...]] = {
+    "claude": ("CLAUDE_CODE_OAUTH_TOKEN",),
+    "codex": ("CODEX_AUTH_JSON", "OPENAI_API_KEY"),
 }
 
 # `<event_name>` -> (handled actions, config key of its on/off variable).
@@ -118,10 +124,9 @@ class AgentConfig:
     def flag(self, key: str) -> bool:
         return truthy(self.get(key))
 
-    def enabled(self, private: bool) -> bool:
-        """The master switch. Unset means on for private and off for public repositories."""
-        raw = self.get("ENABLED")
-        return truthy(raw) if raw else private
+    def enabled(self) -> bool:
+        """The master switch: on only when `<AGENT>_ACTION_ENABLED` is truthy, in any repository."""
+        return self.flag("ENABLED")
 
     def number(self, key: str) -> int:
         try:
@@ -181,11 +186,15 @@ def credential_shaped_variables(variables: dict[str, str]) -> list[str]:
     recognises reaches a rendered step: a leading space or control character is refused
     as the gate refuses it, a prefix counts after any whitespace `get` strips (the gate
     matches prefixes anywhere), and a JSON key counts only with its closing quote.
+    A value of whitespace only is never flagged: it is the off case of a switch, and the
+    workflow never renders it, because that gate runs only for a switched-on agent.
     """
     flagged = []
     for name, value in sorted(variables.items()):
         text = value or ""
         stripped = text.lstrip()
+        if not stripped:
+            continue  # whitespace only carries no credential; a master switch so set is off
         if text[:1] == " " or (text and ord(text[0]) < 32) or stripped.startswith(_CREDENTIAL_PREFIXES):
             flagged.append(name)
         elif stripped.startswith("{") and any(f'{key}"' in text.lower() for key in _CREDENTIAL_JSON_KEYS):

@@ -23,7 +23,7 @@ The scripts use only the Python standard library.
 
 1. Copy `templates/github/ask-claude.yml` and/or `ask-codex.yml` into `.github/workflows/` and merge them into the **default branch**; issue, comment and discussion events only fire from workflow files there.
 2. Add Actions secrets for the agents you use: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), and `CODEX_AUTH_JSON` (the whole `~/.codex/auth.json` written by `codex login`) or `OPENAI_API_KEY`. Codex prefers OAuth when both exist. The caller passes each secret by name because `secrets: inherit` does not cross organizations.
-3. Optionally set the repository variables `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED`. When unset, an agent is **on in private repositories and off in public ones**; `true` or `false` overrides that. Changing a variable does not stop a run already in progress.
+3. Turn each agent on with the repository variable `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED` set to `true` (`1`, `yes` and `on` work too). Both agents are **off by default in every repository**: a run starts the agent only when its variable is on **and** its secret from step 2 reaches the workflow; otherwise it stops at routing with the reason in the log. Letter case does not matter; any other value, including empty or whitespace only, is off. Changing a variable does not stop a run already in progress.
 4. In **Settings → Actions → General**, allow this reusable workflow if the organization restricts actions (for example `amyteq/gitmunk/.github/workflows/ask-agent.yml@*`), and allow GitHub Actions to create pull requests if write commands should publish drafts.
 5. As a maintainer, try a read-only request such as `@claude explain the repository layout` on a test issue and check that exactly one reply with a run link appears.
 
@@ -52,7 +52,7 @@ Prefix `CLAUDE_ACTION_` or `CODEX_ACTION_`. Only these names are read; the whole
 
 | Suffix | Default | Meaning |
 | --- | --- | --- |
-| `ENABLED` | by visibility | Master switch, also for manual runs |
+| `ENABLED` | `false` | Master switch, also for manual runs; the agent also needs its secret |
 | `ISSUE_COMMENT`, `PR_REVIEW_COMMENT`, `PR_REVIEW`, `ISSUES`, `PULL_REQUEST`, `DISCUSSION_COMMENT`, `DISCUSSION` | `true` | Per-event switches; `PULL_REQUEST` matters only after opting in below |
 | `MODEL`, `EFFORT` | CLI default | The reply records the observed values, never the requested ones as fact |
 | `TIMEOUT_MINUTES` | `20` | CLI timeout, clamped to 1–25 |

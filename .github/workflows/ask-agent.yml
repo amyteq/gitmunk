@@ -134,9 +134,12 @@ jobs:
       # and `sk_live`, which ordinary words and names contain (task-, TASK_LIVE), are
       # matched anywhere only in the values the routing step renders, listed in its
       # order, so an unrelated variable cannot stop the run.
+      # It runs only when the selected agent's master switch is on: a switched-off run
+      # renders no variable, so any value, whitespace included, skips cleanly below.
       - name: Stop before rendering a credential-shaped variable
         if: >-
-            success() && runner.debug != '1' && (
+            success() && runner.debug != '1' &&
+            ((inputs.agent == 'claude' && (vars.CLAUDE_ACTION_ENABLED == 'true' || vars.CLAUDE_ACTION_ENABLED == '1' || vars.CLAUDE_ACTION_ENABLED == 'yes' || vars.CLAUDE_ACTION_ENABLED == 'on')) || (inputs.agent == 'codex' && (vars.CODEX_ACTION_ENABLED == 'true' || vars.CODEX_ACTION_ENABLED == '1' || vars.CODEX_ACTION_ENABLED == 'yes' || vars.CODEX_ACTION_ENABLED == 'on'))) && (
             contains(toJSON(vars), '": " ') ||
             contains(toJSON(vars), '": "\') ||
             contains(toJSON(vars), '-----BEGIN') ||
@@ -170,10 +173,23 @@ jobs:
         run: |
           echo '::error::A repository variable value looks like a credential or starts with whitespace. Variables are not secret and the routing step prints them: move a credential to an Actions secret, delete the variable or trim the value, and run again.'
           exit 1
+      # Expressions compare strings ignoring case, so `TRUE` or `On` counts as on. Any other
+      # value, unset, empty or whitespace, is off: routing then sees no variable at all and
+      # skips with `<AGENT>_ACTION_ENABLED` as the reason, before any credential check.
+      - name: Skip a switched-off agent
+        id: off
+        if: >-
+            success() && !((inputs.agent == 'claude' && (vars.CLAUDE_ACTION_ENABLED == 'true' || vars.CLAUDE_ACTION_ENABLED == '1' || vars.CLAUDE_ACTION_ENABLED == 'yes' || vars.CLAUDE_ACTION_ENABLED == 'on')) || (inputs.agent == 'codex' && (vars.CODEX_ACTION_ENABLED == 'true' || vars.CODEX_ACTION_ENABLED == '1' || vars.CODEX_ACTION_ENABLED == 'yes' || vars.CODEX_ACTION_ENABLED == 'on')))
+        run: python3 "$TOOLS/normalize_event.py"
       - name: Route mention
         id: route
+        if: >-
+            success() &&
+            ((inputs.agent == 'claude' && (vars.CLAUDE_ACTION_ENABLED == 'true' || vars.CLAUDE_ACTION_ENABLED == '1' || vars.CLAUDE_ACTION_ENABLED == 'yes' || vars.CLAUDE_ACTION_ENABLED == 'on')) || (inputs.agent == 'codex' && (vars.CODEX_ACTION_ENABLED == 'true' || vars.CODEX_ACTION_ENABLED == '1' || vars.CODEX_ACTION_ENABLED == 'yes' || vars.CODEX_ACTION_ENABLED == 'on')))
         env:
           GH_TOKEN: ${{ github.token }}
+          # Whether the agent's credential secret reached this workflow, as a boolean: no secret value enters this step.
+          AGENT_SECRET_SET: ${{ (inputs.agent == 'claude' && secrets.CLAUDE_CODE_OAUTH_TOKEN != '') || (inputs.agent == 'codex' && (secrets.CODEX_AUTH_JSON != '' || secrets.OPENAI_API_KEY != '')) }}
           # The caller repository's variables, passed by name and to this step only,
           # after the check above. Never pass the whole `vars` context: Actions renders
           # a step's env in its log. This step records them in the request for every later step.

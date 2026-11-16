@@ -1,3 +1,4 @@
 node_modules/
 .claude/audit/
 __pycache__/
+.claude/worktrees/
