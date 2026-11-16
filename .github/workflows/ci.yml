@@ -25,3 +25,4 @@ jobs:
           python-version: '3.12'
       - run: python3 -m unittest discover -s plugins/dev-hooks/tests
       - run: python3 -m unittest discover -s scripts/github-agent/tests
+      - run: python3 -m unittest discover -s scripts/release/tests

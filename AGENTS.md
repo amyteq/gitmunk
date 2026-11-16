@@ -19,6 +19,7 @@ node scripts/sync-shared.mjs --check
 (cd plugins/dev-skills && npm ci && npm test)
 python3 -m unittest discover -s plugins/dev-hooks/tests
 python3 -m unittest discover -s scripts/github-agent/tests
+python3 -m unittest discover -s scripts/release/tests
 claude plugin validate .        # when the Claude CLI is available
 ```
 
@@ -26,4 +27,4 @@ Local tests do not prove live agent launches or GitHub Actions runs.
 
 ## GitHub work
 
-Use a task branch and a focused PR. Do not merge or force-push without an explicit request. Release tags (`vX.Y.Z`) are created only by the release process.
+Use a task branch and a focused PR. Do not merge or force-push without an explicit request. Release tags (`vX.Y.Z`) are created only by the release process: `.github/workflows/release.yml` checks each PR into `main` (top `CHANGELOG.md` section a plain `## X.Y.Z`, no pre-release version, tag not yet taken) and tags and publishes the release when it reaches `main`.
