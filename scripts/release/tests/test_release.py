@@ -81,7 +81,10 @@ class Release(unittest.TestCase):
             with self.subTest(heading=heading):
                 self.write("CHANGELOG.md", f"# Changelog\n\n{heading}\n\n- New.\n\n## 0.2.0\n\n- Old.\n")
                 self.assert_check_fails("not a plain '## X.Y.Z'")
-        for changelog in ("# 0.3.0\n\n- New.\n\n## 0.2.0\n\n- Old.\n", "# Changes\n\n## 0.3.0\n\n- New.\n"):
+        for changelog in ("# 0.3.0\n\n- New.\n\n## 0.2.0\n\n- Old.\n", "# Changes\n\n## 0.3.0\n\n- New.\n",
+                          "# Changelog\n\n0.3.0\n-----\n\n- New.\n\n## 0.2.0\n\n- Old.\n",
+                          "# Changelog\n\nUnreleased\n==========\n\n- New.\n\n## 0.2.0\n\n- Old.\n",
+                          "# Changelog\n\nAn intro.\n\n## 0.3.0\n\n- New.\n"):
             with self.subTest(changelog=changelog):
                 self.write("CHANGELOG.md", changelog)
                 self.assert_check_fails("not a plain '## X.Y.Z'")

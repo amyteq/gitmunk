@@ -29,18 +29,16 @@ def changelog_release(root: Path):
         lines = (root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None, None, ["CHANGELOG.md is missing"]
-    # Every line starting with '#' counts as a heading and only the '# Changelog' title may precede the release
-    # heading, so a mistyped release heading fails instead of falling through to an older section.
-    heads = [i for i, line in enumerate(lines) if line.lstrip().startswith("#")]
-    if heads and lines[heads[0]] == "# Changelog":
-        heads = heads[1:]
-    if not heads:
+    if not any(line.startswith("## ") for line in lines):
         return None, None, ["CHANGELOG.md has no '## ' heading"]
-    heading = lines[heads[0]]
+    # Only blank lines and the '# Changelog' title may precede the release heading, so a newer section in any other
+    # form (a mistyped or underlined heading) fails instead of falling through to an older one.
+    top = next(i for i, line in enumerate(lines) if line.strip() and line != "# Changelog")
+    heading = lines[top]
     if not (heading.startswith("## ") and PLAIN.fullmatch(heading[3:])):
-        return None, None, [f"CHANGELOG.md: top section '{heading}' (the first heading after '# Changelog') is not a plain '## X.Y.Z' heading"]
-    end = next((i for i in heads[1:] if lines[i].startswith("## ")), len(lines))
-    notes = "\n".join(lines[heads[0] + 1:end]).strip()
+        return None, None, [f"CHANGELOG.md: top section '{heading}' (the first line after '# Changelog') is not a plain '## X.Y.Z' heading"]
+    end = next((i for i in range(top + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    notes = "\n".join(lines[top + 1:end]).strip()
     if not notes:
         return heading[3:], None, [f"CHANGELOG.md: section '{heading}' is empty"]
     return heading[3:], notes + "\n", []
