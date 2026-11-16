@@ -1,5 +1,5 @@
 {
-  "description": "dev-lite guardrails: deny host-destructive and secret-reading calls, block merging other people's PRs, and keep a redacted audit log.",
+  "description": "gitmunk guardrails: deny host-destructive and secret-reading calls, block merging other people's PRs, and keep a redacted audit log.",
   "hooks": {
     "PreToolUse": [
       {

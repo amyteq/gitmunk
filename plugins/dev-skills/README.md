@@ -1,6 +1,6 @@
 # dev-skills
 
-Six agent skills for GitHub-centred work in Claude Code and Codex.
+Eight agent skills for GitHub-centred work in Claude Code and Codex.
 
 | Skill | Use it to |
 | --- | --- |
@@ -10,6 +10,10 @@ Six agent skills for GitHub-centred work in Claude Code and Codex.
 | `dev-compact` | Compress a long issue, PR or discussion thread into a summary and archive parts, after an explicit request. |
 | `dev-merge` | Squash merge one reviewed PR when the owner explicitly asks: gate on the reviewed head, verify the merged tree, clean up branches and worktrees, post a closeout in the PR's language and update linked issues and trackers. Otherwise it runs as a dry run. |
 | `dev-track` | Register every unprocessed discussion of one category (such as meeting notes) in that category's tracker discussion: digest it in place, merge its TODOs, mark it done and close it. Drafts by default; writes only with `--apply`. |
+| `dev-analyse-rp` | Analyse a requirements programme into a reviewed proposal of feats and stories, then, on explicit authorization, materialize the docs, labels and tracking issues in one docs PR. |
+| `dev-refine-story` | Create the issue for one `STY_<n>` story from its doc, then hand it to `dev-refine-issue`. |
+
+`dev-analyse-rp` and `dev-refine-story` follow the `ft-sty` work model: feats (`docs/feats/FT_<n>_<slug>.md`) and stories (`docs/stories/STY_<n>_<slug>.md`) are source-controlled, and each feat has a GitHub tracking issue with sub-issues and labels. Decisions go in `docs/adrs/`, designs in `docs/specs/`. Paths, labels and key formats are fixed to the `ft-sty` defaults; see [`references/work-model.md`](references/work-model.md).
 
 Each skill reads the consuming repository's `AGENTS.md` / `CLAUDE.md` for project rules.
 

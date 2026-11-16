@@ -1,22 +1,20 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "extraKnownMarketplaces": {
-    "dev-lite-beta": {
+    "gitmunk-beta": {
       "source": {
         "source": "github",
-        "repo": "amyteq/dev-lite",
-        "ref": "main",
+        "repo": "amyteq/gitmunk",
+        "ref": "develop",
         "path": "channels/beta/.claude-plugin/marketplace.json"
       },
       "autoUpdate": true
     }
   },
   "enabledPlugins": {
-    "dev-skills@dev-lite-beta": true,
-    "dev-planning@dev-lite-beta": true,
-    "dev-hooks@dev-lite-beta": true,
-    "dev-skills@dev-lite": false,
-    "dev-planning@dev-lite": false,
-    "dev-hooks@dev-lite": false
+    "dev-skills@gitmunk-beta": true,
+    "dev-hooks@gitmunk-beta": true,
+    "dev-skills@gitmunk": false,
+    "dev-hooks@gitmunk": false
   }
 }
