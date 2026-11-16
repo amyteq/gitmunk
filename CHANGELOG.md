@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- README (#32): a badge row, Quick start, How it works, a Skills table, FAQ, Documentation, Contributing, Sponsors, Star history and License sections. Numbers, Before / after and Built with gitmunk are marked placeholders until there are facts to show. The Install section is unchanged.
+- 🐿️ starts every plugin description, in both plugin manifests and in both marketplace catalogs.
+- `.github/FUNDING.yml` names the `amyteq` organisation on GitHub Sponsors. The Sponsor button works once that profile is approved.
+- `dev-skills` 0.2.1-beta.1 and `dev-hooks` 0.2.1-beta.1: only the description changes, so installed copies show the new one.
+
 ## 0.3.0
 
 Breaking for private repositories that relied on the unset default: the Ask workflows now start an agent only when its variable `CLAUDE_ACTION_ENABLED` / `CODEX_ACTION_ENABLED` is `true` and its secret reaches the workflow. Set the variable to keep an agent answering.
