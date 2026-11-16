@@ -29,16 +29,17 @@ def changelog_release(root: Path):
         lines = (root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None, None, ["CHANGELOG.md is missing"]
-    heads = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    # Any line starting like a level-2+ heading counts, so a mistyped release heading fails instead of falling through to an older section.
+    heads = [i for i, line in enumerate(lines) if line.lstrip().startswith("##")]
     if not heads:
         return None, None, ["CHANGELOG.md has no '## ' heading"]
     heading = lines[heads[0]]
-    if not PLAIN.fullmatch(heading[3:]):
+    if not (heading.startswith("## ") and PLAIN.fullmatch(heading[3:])):
         return None, None, [f"CHANGELOG.md: top section '{heading}' is not a plain '## X.Y.Z' heading"]
-    end = heads[1] if len(heads) > 1 else len(lines)
+    end = next((i for i in heads[1:] if lines[i].startswith("## ")), len(lines))
     notes = "\n".join(lines[heads[0] + 1:end]).strip()
     if not notes:
-        return None, None, [f"CHANGELOG.md: section '{heading}' is empty"]
+        return heading[3:], None, [f"CHANGELOG.md: section '{heading}' is empty"]
     return heading[3:], notes + "\n", []
 
 
@@ -56,6 +57,11 @@ def field_values(data, path, label=""):
         yield from field_values(data[key], rest, f"{label}{part}".lstrip("."))
 
 
+def not_json(constant):
+    """Python's json accepts NaN and Infinity; JSON does not."""
+    raise ValueError(f"{constant} is not JSON")
+
+
 def manifest_problems(root: Path):
     """Problems in the version fields of every tracked manifest."""
     listed = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True)
@@ -64,7 +70,7 @@ def manifest_problems(root: Path):
     problems = []
     for name in sorted(n for n in listed.stdout.split("\0") if Path(n).name in FIELDS):
         try:
-            data = json.loads((root / name).read_text(encoding="utf-8"))
+            data = json.loads((root / name).read_text(encoding="utf-8"), parse_constant=not_json)
         except (OSError, ValueError) as error:
             problems.append(f"{name}: not valid JSON ({error})")
             continue

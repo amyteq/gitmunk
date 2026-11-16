@@ -75,14 +75,16 @@ class Release(unittest.TestCase):
 
     # AC1 b
     def test_heading_that_is_not_plain_fails(self):
-        for heading in ("## 0.3.0-beta.1", "## v0.3.0", "## 0.3.0 (2026-11-20)", "## 01.2.3", "##  0.3.0"):
+        # The mistyped forms must not fall through to the older '## 0.2.0' section.
+        for heading in ("## 0.3.0-beta.1", "## v0.3.0", "## 0.3.0 (2026-11-20)", "## 01.2.3", "##  0.3.0",
+                        "##\t0.3.0", "  ## 0.3.0", "### 0.3.0", "##0.3.0"):
             with self.subTest(heading=heading):
-                self.write("CHANGELOG.md", f"# Changelog\n\n{heading}\n\n- New.\n")
+                self.write("CHANGELOG.md", f"# Changelog\n\n{heading}\n\n- New.\n\n## 0.2.0\n\n- Old.\n")
                 self.assert_check_fails("not a plain '## X.Y.Z'")
 
     # AC1 c
     def test_missing_changelog_or_heading_fails(self):
-        self.write("CHANGELOG.md", "# Changelog\n\n### 0.3.0\n\n- New.\n")
+        self.write("CHANGELOG.md", "# Changelog\n\n- New.\n")
         self.assert_check_fails("no '## ' heading")
         (self.root / "CHANGELOG.md").unlink()
         self.assert_check_fails("CHANGELOG.md is missing")
@@ -92,12 +94,18 @@ class Release(unittest.TestCase):
         self.write("CHANGELOG.md", "# Changelog\n\n## 0.3.0\n\n  \n## 0.2.0\n\n- Old.\n")
         self.assert_check_fails("section '## 0.3.0' is empty")
 
+    def test_empty_section_still_checks_the_tag(self):
+        self.write("CHANGELOG.md", "# Changelog\n\n## 0.3.0\n\n## 0.2.0\n\n- Old.\n")
+        self.tag("v0.3.0")
+        self.assert_check_fails("section '## 0.3.0' is empty", "tag v0.3.0 already exists on origin")
+
     # AC1 e: every listed field, and every problem in one run.
     def test_prerelease_versions_fail_naming_file_and_field(self):
         self.write_json("plugins/a/.claude-plugin/plugin.json", {"version": "0.3.0-beta.1"})
         self.write_json("plugins/a/.codex-plugin/plugin.json", {"version": 3})
         self.write_json("plugins/a/package.json", {"version": "0.3.0+build"})
         self.write_json("plugins/a/package-lock.json", {"version": "0.3.0", "packages": {"": {"version": "0.3.0-beta.1"}}})
+        self.write_json("plugins/b/package-lock.json", {"version": "0.3.0-beta.1", "packages": {"": {"version": "0.3.0"}}})
         self.write_json(".claude-plugin/marketplace.json", {
             "version": "1.0.0-rc.1", "metadata": {"version": "0.3"},
             "plugins": [{"name": "a", "version": "0.3.0"}, {"name": "b", "version": "0.3.0-beta.2"}],
@@ -107,6 +115,7 @@ class Release(unittest.TestCase):
             "plugins/a/.codex-plugin/plugin.json: version is 3",
             "plugins/a/package.json: version is '0.3.0+build'",
             "plugins/a/package-lock.json: packages[\"\"].version is '0.3.0-beta.1'",
+            "plugins/b/package-lock.json: version is '0.3.0-beta.1'",
             ".claude-plugin/marketplace.json: version is '1.0.0-rc.1'",
             ".claude-plugin/marketplace.json: metadata.version is '0.3'",
             ".claude-plugin/marketplace.json: plugins[1].version is '0.3.0-beta.2'",
@@ -120,8 +129,10 @@ class Release(unittest.TestCase):
 
     # AC1 f
     def test_invalid_json_fails(self):
-        self.write("plugins/a/.claude-plugin/plugin.json", "{")
-        self.assert_check_fails("plugins/a/.claude-plugin/plugin.json: not valid JSON")
+        for text in ("{", '{"version": "0.2.1", "x": NaN}', '{"version": "0.2.1", "x": -Infinity}'):
+            with self.subTest(text=text):
+                self.write("plugins/a/.claude-plugin/plugin.json", text)
+                self.assert_check_fails("plugins/a/.claude-plugin/plugin.json: not valid JSON")
 
     # AC1 g
     def test_existing_tag_fails(self):
@@ -138,9 +149,10 @@ class Release(unittest.TestCase):
 
     # AC2 a
     def test_publish_prints_tag_and_writes_notes(self):
+        self.write("CHANGELOG.md", "# Changelog\n\n## 0.3.0\n\n### Added\n\n- A change.\n\n## 0.2.0\n\n- Older.\n")
         notes = self.root.parent / "notes.md"
         self.assertEqual(self.run_cli("publish", "--notes-file", str(notes))[:2], (0, "v0.3.0\n"))
-        self.assertEqual(notes.read_text(encoding="utf-8"), "- A change.\n")
+        self.assertEqual(notes.read_text(encoding="utf-8"), "### Added\n\n- A change.\n")
 
     # AC2 b
     def test_publish_with_existing_tag_changes_nothing(self):
