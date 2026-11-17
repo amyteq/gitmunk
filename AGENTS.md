@@ -11,11 +11,13 @@ This public repository publishes Claude Code / Codex plugins and a reusable GitH
 - A plugin change that consumers should receive bumps that plugin's `version` in `.claude-plugin/plugin.json` and adds a `CHANGELOG.md` entry. Changes land on `develop`, the beta channel, as `X.Y.Z-beta.N`; `main` is the stable channel and receives verified releases from `develop`.
 - A new or renamed plugin goes into both `.claude-plugin/marketplace.json` and `channels/beta/.claude-plugin/marketplace.json`.
 - New prose and status messages in English.
+- `README.md` is the source of the translations in `i18n/`. To update a translation, re-translate it from a newer English commit and change the commit it records under its language bar.
 
 ## Checks
 
 ```bash
 node scripts/sync-shared.mjs --check
+node --test bin/gitmunk.test.mjs
 (cd plugins/dev-skills && npm ci && npm test)
 python3 -m unittest discover -s plugins/dev-hooks/tests
 python3 -m unittest discover -s scripts/github-agent/tests
