@@ -1,5 +1,7 @@
 # 🐿️ gitmunk
 
+**[English](README.md)** · [简体中文](i18n/README.zh-CN.md) · [日本語](i18n/README.ja.md) · [한국어](i18n/README.ko.md) · [Español](i18n/README.es.md) · [Français](i18n/README.fr.md) · [العربية](i18n/README.ar.md) · [Русский](i18n/README.ru.md)
+
 [![CI](https://github.com/amyteq/gitmunk/actions/workflows/ci.yml/badge.svg)](https://github.com/amyteq/gitmunk/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/amyteq/gitmunk?style=flat-square&label=release)](https://github.com/amyteq/gitmunk/releases)
 [![MIT licence](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
