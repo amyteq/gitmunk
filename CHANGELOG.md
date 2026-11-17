@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - README (#32): a badge row, Quick start, How it works, a Skills table, FAQ, Documentation, Contributing, Sponsors, Star history and License sections. Numbers, Before / after and Built with gitmunk are marked placeholders until there are facts to show. The Install section is unchanged.
 - 🐿️ starts every plugin description, in both plugin manifests and in both marketplace catalogs.
@@ -12,7 +12,7 @@
   - It is a dependency-free `bin` in a root `package.json`; nothing is published to npm. npm 12 needs `--allow-git=root` to run a package from git.
 - Install guide (#36): [`docs/install.md`](docs/install.md) explains the installer, Claude Code scopes, channels and templates, Codex with its `npm ci` step, where the Ask workflows are set up, updating, moving from beta to stable, pinning, uninstalling and troubleshooting. The README's Install section now keeps only the installer one-liner and the shortest manual commands, and the `dev-skills` and Ask agent READMEs link to the guide. Plugins unchanged.
 - README translations (#37): [`i18n/`](i18n) holds the README in 简体中文, 日本語, 한국어, Español, Français, العربية and Русский, and a language bar under the title of all eight pages links them. Each translation names the English README commit it was translated from, so drift shows; the Arabic page reads right to left. Plugins unchanged.
-- `dev-skills` 0.2.1-beta.1 and `dev-hooks` 0.2.1-beta.1: only the description changes, so installed copies show the new one.
+- `dev-skills` 0.2.1 and `dev-hooks` 0.2.1: only the description changes, so installed copies show the new one.
 
 ## 0.3.0
 
