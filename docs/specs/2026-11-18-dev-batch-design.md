@@ -1,6 +1,6 @@
 # dev-batch: design
 
-Status: draft for owner review · 18 Nov 2026 · skill `dev-batch` in the `dev-skills` plugin
+Status: draft for owner review · 18 Nov 2026 · skill `dev-batch` in the `dev-skills` plugin · tracked in #44
 
 ## 1. Why
 
@@ -263,7 +263,7 @@ The SKILL.md procedure is host-neutral and the helper is plain Node. Differences
 
 ## 17. Rollout
 
-A task branch from `develop` and one PR into `develop` (the beta channel), tracked by one gitmunk issue. `dev-skills` goes to `0.3.0-beta.1`; `CHANGELOG.md`, the plugin README's skill table and the root README's skill table gain `dev-batch`. Translations under `i18n/` are left to their own update.
+A task branch from `develop` and one PR into `develop` (the beta channel), tracked by #44. `dev-skills` goes to `0.3.0-beta.1`; `CHANGELOG.md`, the plugin README's skill table and the root README's skill table gain `dev-batch`. Translations under `i18n/` are left to their own update.
 
 ## 18. Calls made in this design (for the owner to check)
 
