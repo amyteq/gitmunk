@@ -55,12 +55,17 @@ AGENT_DEFAULTS: dict[str, dict[str, str]] = {
         "MAX_TURNS": "100",
         # Empty keeps every read/edit tool; a list narrows them. It never adds one.
         "ALLOWED_TOOLS": "",
+        "REACTION": "rocket",  # Added to the triggering text when a run is dispatched.
     },
     "codex": {
         "MODEL": "",
         "EFFORT": "",
+        "REACTION": "eyes",
     },
 }
+
+# The reaction names GitHub's REST API accepts; `<AGENT>_ACTION_REACTION` must be one.
+REACTIONS = ("+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes")
 
 # Actions secrets that authenticate each agent; any one of them is enough.
 AGENT_SECRETS: dict[str, tuple[str, ...]] = {
