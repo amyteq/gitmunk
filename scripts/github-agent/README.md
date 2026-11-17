@@ -63,7 +63,7 @@ Prefix `CLAUDE_ACTION_` or `CODEX_ACTION_`. Only these names are read; the whole
 | `CONTEXT_CHARS` | `4000` | Characters per context section, clamped to 100–20000 |
 | `MAX_TURNS` | `100` | Claude only, clamped to 1–100 |
 | `ALLOWED_TOOLS` | empty | Claude only: narrows the bounded `Bash` tool (an empty intersection leaves no tool); it never adds one |
-| `REACTION` | Claude `rocket` 🚀, Codex `eyes` 👀 | Reaction added to the triggering comment, issue, pull request or discussion once a request is authorized; a review body has no reaction of its own, so the pull request gets it. One of `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`, in any letter case; any other value logs a warning and uses the default. Manual runs get none |
+| `REACTION` | Claude `rocket` 🚀, Codex `eyes` 👀 | Reaction added to the triggering comment, issue, pull request or discussion once a request is authorized; a review body has no reaction of its own, so the pull request gets it. One of `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`, in any letter case; any other value logs a warning and uses the default. Like every variable, a value with leading whitespace stops the run at the credential check. Manual runs get none |
 
 ## Commands and routing
 

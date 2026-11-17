@@ -16,9 +16,11 @@ from unittest.mock import patch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+import agent_lib  # noqa: E402
 import react  # noqa: E402
-from agent_lib import REACTIONS, AgentConfig  # noqa: E402
+from agent_lib import REACTIONS, AgentConfig, credential_shaped_variables  # noqa: E402
 from normalize_event import extract, extract_dispatch  # noqa: E402
+from test_security import gate_stops  # noqa: E402
 
 REPO = "example-org/example-repo"
 WORKFLOW = (Path(HERE).parents[2] / ".github/workflows/ask-agent.yml").read_text()
@@ -96,15 +98,26 @@ class Variable(unittest.TestCase):
             chosen = react.reaction(AgentConfig(agent, variables))
         return chosen, out.getvalue()
 
-    def test_unset_or_blank_uses_the_agent_default(self):
-        for value in (None, "", "  "):
+    def test_unset_or_empty_uses_the_agent_default(self):
+        for value in (None, ""):
             self.assertEqual(self.choose("claude", value), ("rocket", ""))
             self.assertEqual(self.choose("codex", value), ("eyes", ""))
 
-    def test_every_accepted_name_in_any_case(self):
+    def test_every_accepted_name_in_any_case_with_trailing_whitespace(self):
         self.assertEqual(REACTIONS, ("+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"))
         for name in REACTIONS:
-            self.assertEqual(self.choose("codex", f" {name.upper()} "), (name, ""))
+            for value in (name, name.upper(), f"{name.upper()} "):
+                variables = {"CODEX_ACTION_REACTION": value}
+                self.assertFalse(gate_stops(variables) or credential_shaped_variables(variables), value)
+                self.assertEqual(self.choose("codex", value), (name, ""))
+
+    def test_leading_whitespace_stops_at_the_credential_gate_like_every_variable(self):
+        # F001 round 1: the existing gate refuses a leading space in any Ask variable, so AC2 revision 2 stops here too.
+        for agent in ("claude", "codex"):
+            for value in (" ", " eyes", " ROCKET ", "\teyes"):
+                variables = {f"{agent.upper()}_ACTION_REACTION": value}
+                self.assertTrue(gate_stops(variables), (agent, value))
+            self.assertTrue(credential_shaped_variables({f"{agent.upper()}_ACTION_REACTION": " eyes"}))
 
     def test_any_other_value_warns_and_uses_the_default(self):
         for agent, default in (("claude", "rocket"), ("codex", "eyes")):
@@ -137,6 +150,21 @@ class NeverBlocks(unittest.TestCase):
         ):
             code, printed, made = self.run_main(context, rest, graphql)
             self.assertEqual((code, printed.count("::warning::"), made), (0, 1, 1))
+
+    def test_a_graphql_errors_response_warns_and_exits_zero(self):
+        # F002 round 1: the real gh_graphql turns an `errors` response into the warning, not a mocked exception.
+        with tempfile.TemporaryDirectory() as folder:
+            event = Path(folder, "event.json")
+            event.write_text(json.dumps({"repo": REPO, "config": {}, "react": {"kind": "node", "node_id": "DC_1"}}))
+            out = io.StringIO()
+            with patch.dict(os.environ, {"AGENT": "claude", "EVENT_FILE": str(event)}, clear=True), \
+                 patch.object(agent_lib, "gh_rest", return_value={"errors": [{"message": "Resource not accessible"}]}) as rest, \
+                 redirect_stdout(out):
+                self.assertEqual(react.main(), 0)
+        self.assertEqual(rest.call_count, 1)
+        self.assertEqual(out.getvalue().count("::warning::"), 1)
+        self.assertIn("Resource not accessible", out.getvalue())
+        self.assertNotIn("reacted with", out.getvalue())
 
     def test_a_missing_target_warns_without_a_call(self):
         for target in ({"kind": "issue_comment", "id": None}, {"kind": "issue"}, {"kind": "node", "node_id": ""}, {}):
