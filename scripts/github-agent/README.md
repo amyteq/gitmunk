@@ -12,6 +12,7 @@ A reusable GitHub Actions pipeline that lets Claude Code and Codex answer mentio
 | `authorize_actor.py` | Requires `write`, `maintain` or `admin`; any lookup failure denies |
 | `snapshot_request.py` | Captures the immutable target revision after authorization |
 | `build_prompt.py` | Authorized request, project rules, and thread context fenced off as data |
+| `react.py` | Reacts on the triggering text once a request is authorized |
 | `run_agent.py` | Launches the pinned CLI without GitHub credentials, with a timeout and observed metadata |
 | `collect_changes.py`, `validate_result.py` | Collect local edits as an untrusted patch; bound the result files |
 | `publish_changes.py` | Validates the patch in a fresh job and opens a draft PR from a generated branch |
@@ -62,6 +63,7 @@ Prefix `CLAUDE_ACTION_` or `CODEX_ACTION_`. Only these names are read; the whole
 | `CONTEXT_CHARS` | `4000` | Characters per context section, clamped to 100–20000 |
 | `MAX_TURNS` | `100` | Claude only, clamped to 1–100 |
 | `ALLOWED_TOOLS` | empty | Claude only: narrows the bounded `Bash` tool (an empty intersection leaves no tool); it never adds one |
+| `REACTION` | Claude `rocket` 🚀, Codex `eyes` 👀 | Reaction added to the triggering comment, issue, pull request or discussion once a request is authorized; a review body has no reaction of its own, so the pull request gets it. One of `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`, in any letter case; any other value logs a warning and uses the default. Manual runs get none |
 
 ## Commands and routing
 
@@ -72,6 +74,7 @@ Read commands are `review`, `audit`, `plan`, `explain`, `triage`, `summarize`, `
 | Job | Token and role |
 | --- | --- |
 | prepare | Read-only token. Routes, authorizes, captures the target SHA, builds the prompt and uploads it as an immutable artifact. No model credentials. |
+| react | `contents: read` plus `issues`, `pull-requests` and `discussions` write, which the caller templates already grant. Runs beside execute after an authorized prepare and adds the `REACTION` to the triggering text. Nothing waits for it, and any failure is a warning that leaves the run green. |
 | execute | `contents: read`, no persisted checkout credentials, and a CLI environment stripped of GitHub tokens. Only the run step gets the selected agent's credential, and that session runs checkout commands only in the bounded worker (below). Produces an untrusted reply, status and patch; a reply or patch with a credential-shaped value, a binary change or a protected path is refused, and only a successful collection is uploaded. |
 | publish | Fresh runner with trusted scripts. Rechecks authorization, validates bounded results and the patch, pushes a new `agent/<agent>/<run>-<attempt>` branch and opens a **draft PR** against the PR's head branch or the base branch, then posts the reply. Never pushes to existing branches, force-pushes, approves or merges. |
 
