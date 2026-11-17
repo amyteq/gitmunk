@@ -154,22 +154,24 @@ jobs:
             contains(toJSON(vars), '_token\"') ||
             contains(toJSON(vars), 'client_secret\"') ||
             contains(toJSON(vars), 'private_key\"') ||
-            contains(format('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20} {21} {22} {23} {24} {25} {26} {27}',
+            contains(format('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20} {21} {22} {23} {24} {25} {26} {27} {28} {29}',
             vars.CLAUDE_ACTION_ENABLED, vars.CODEX_ACTION_ENABLED, vars.CLAUDE_ACTION_ISSUE_COMMENT, vars.CLAUDE_ACTION_PR_REVIEW_COMMENT,
             vars.CLAUDE_ACTION_PR_REVIEW, vars.CLAUDE_ACTION_ISSUES, vars.CLAUDE_ACTION_PULL_REQUEST, vars.CLAUDE_ACTION_DISCUSSION_COMMENT,
             vars.CLAUDE_ACTION_DISCUSSION, vars.CLAUDE_ACTION_MODEL, vars.CLAUDE_ACTION_EFFORT, vars.CLAUDE_ACTION_MAX_TURNS,
             vars.CLAUDE_ACTION_ALLOWED_TOOLS, vars.CLAUDE_ACTION_TIMEOUT_MINUTES, vars.CLAUDE_ACTION_CONTEXT_COMMENTS, vars.CLAUDE_ACTION_CONTEXT_CHARS,
             vars.CODEX_ACTION_ISSUE_COMMENT, vars.CODEX_ACTION_PR_REVIEW_COMMENT, vars.CODEX_ACTION_PR_REVIEW, vars.CODEX_ACTION_ISSUES,
             vars.CODEX_ACTION_PULL_REQUEST, vars.CODEX_ACTION_DISCUSSION_COMMENT, vars.CODEX_ACTION_DISCUSSION, vars.CODEX_ACTION_MODEL,
-            vars.CODEX_ACTION_EFFORT, vars.CODEX_ACTION_TIMEOUT_MINUTES, vars.CODEX_ACTION_CONTEXT_COMMENTS, vars.CODEX_ACTION_CONTEXT_CHARS), 'sk-') ||
-            contains(format('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20} {21} {22} {23} {24} {25} {26} {27}',
+            vars.CODEX_ACTION_EFFORT, vars.CODEX_ACTION_TIMEOUT_MINUTES, vars.CODEX_ACTION_CONTEXT_COMMENTS, vars.CODEX_ACTION_CONTEXT_CHARS,
+            vars.CLAUDE_ACTION_REACTION, vars.CODEX_ACTION_REACTION), 'sk-') ||
+            contains(format('{0} {1} {2} {3} {4} {5} {6} {7} {8} {9} {10} {11} {12} {13} {14} {15} {16} {17} {18} {19} {20} {21} {22} {23} {24} {25} {26} {27} {28} {29}',
             vars.CLAUDE_ACTION_ENABLED, vars.CODEX_ACTION_ENABLED, vars.CLAUDE_ACTION_ISSUE_COMMENT, vars.CLAUDE_ACTION_PR_REVIEW_COMMENT,
             vars.CLAUDE_ACTION_PR_REVIEW, vars.CLAUDE_ACTION_ISSUES, vars.CLAUDE_ACTION_PULL_REQUEST, vars.CLAUDE_ACTION_DISCUSSION_COMMENT,
             vars.CLAUDE_ACTION_DISCUSSION, vars.CLAUDE_ACTION_MODEL, vars.CLAUDE_ACTION_EFFORT, vars.CLAUDE_ACTION_MAX_TURNS,
             vars.CLAUDE_ACTION_ALLOWED_TOOLS, vars.CLAUDE_ACTION_TIMEOUT_MINUTES, vars.CLAUDE_ACTION_CONTEXT_COMMENTS, vars.CLAUDE_ACTION_CONTEXT_CHARS,
             vars.CODEX_ACTION_ISSUE_COMMENT, vars.CODEX_ACTION_PR_REVIEW_COMMENT, vars.CODEX_ACTION_PR_REVIEW, vars.CODEX_ACTION_ISSUES,
             vars.CODEX_ACTION_PULL_REQUEST, vars.CODEX_ACTION_DISCUSSION_COMMENT, vars.CODEX_ACTION_DISCUSSION, vars.CODEX_ACTION_MODEL,
-            vars.CODEX_ACTION_EFFORT, vars.CODEX_ACTION_TIMEOUT_MINUTES, vars.CODEX_ACTION_CONTEXT_COMMENTS, vars.CODEX_ACTION_CONTEXT_CHARS), 'sk_live'))
+            vars.CODEX_ACTION_EFFORT, vars.CODEX_ACTION_TIMEOUT_MINUTES, vars.CODEX_ACTION_CONTEXT_COMMENTS, vars.CODEX_ACTION_CONTEXT_CHARS,
+            vars.CLAUDE_ACTION_REACTION, vars.CODEX_ACTION_REACTION), 'sk_live'))
         run: |
           echo '::error::A repository variable value looks like a credential or starts with whitespace. Variables are not secret and the routing step prints them: move a credential to an Actions secret, delete the variable or trim the value, and run again.'
           exit 1
@@ -221,6 +223,8 @@ jobs:
           CODEX_ACTION_TIMEOUT_MINUTES: ${{ vars.CODEX_ACTION_TIMEOUT_MINUTES }}
           CODEX_ACTION_CONTEXT_COMMENTS: ${{ vars.CODEX_ACTION_CONTEXT_COMMENTS }}
           CODEX_ACTION_CONTEXT_CHARS: ${{ vars.CODEX_ACTION_CONTEXT_CHARS }}
+          CLAUDE_ACTION_REACTION: ${{ vars.CLAUDE_ACTION_REACTION }}
+          CODEX_ACTION_REACTION: ${{ vars.CODEX_ACTION_REACTION }}
         run: python3 "$TOOLS/normalize_event.py"
       - name: Require repository write, maintain, or admin access
         id: authz
@@ -428,3 +432,40 @@ jobs:
       - name: Preserve publication failure status
         if: steps.changes.outcome == 'failure' || steps.validate.outcome == 'failure'
         run: exit 1
+
+  # The dispatch reaction (`<AGENT>_ACTION_REACTION`) on the triggering text. It runs beside
+  # execute, which does not wait for it, and a failure here never fails the run.
+  react:
+    needs: prepare
+    if: needs.prepare.outputs.authorized == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      discussions: write
+    steps:
+      - name: Use the pinned Python helper runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.12.12
+      - name: Check out the pipeline scripts at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .agent-tools
+          sparse-checkout: scripts/github-agent
+          persist-credentials: false
+      - name: Download the immutable authorized request
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.request_artifact }}
+          path: request
+          merge-multiple: true
+      - name: React on the triggering text
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$TOOLS/react.py"
