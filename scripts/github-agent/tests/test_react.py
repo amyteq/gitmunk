@@ -118,6 +118,10 @@ class Variable(unittest.TestCase):
                 variables = {f"{agent.upper()}_ACTION_REACTION": value}
                 self.assertTrue(gate_stops(variables), (agent, value))
             self.assertTrue(credential_shaped_variables({f"{agent.upper()}_ACTION_REACTION": " eyes"}))
+        # F001 round 2: the gate rejects only a leading space or control character; other Unicode spaces pass it and are trimmed.
+        variables = {"CODEX_ACTION_REACTION": " EYES"}
+        self.assertFalse(gate_stops(variables) or credential_shaped_variables(variables))
+        self.assertEqual(self.choose("codex", " EYES"), ("eyes", ""))
 
     def test_any_other_value_warns_and_uses_the_default(self):
         for agent, default in (("claude", "rocket"), ("codex", "eyes")):
