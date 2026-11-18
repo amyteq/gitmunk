@@ -3,7 +3,7 @@ title: "dev-batch: implementation plan"
 skill: dev-batch
 plugin: dev-skills
 version: 0.1.0
-status: in review
+status: approved
 created: 2026-11-18
 updated: 2026-11-18
 design: docs/specs/dev-batch-design.md (0.2.0, approved 2026-11-18)
