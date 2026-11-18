@@ -32,6 +32,7 @@ export function stagePrompt({ stage, issue, pr, goal, settings = {}, authorizati
       return goal;
     case 'review': return `/dev-review-pr pr=${pr} ${settings.rounds} ${settings.reviewer} ${settings.writer}`;
     case 'merge':
+      if (!authorization || !ledgerUrl) throw new Error('a merge prompt needs authorization and ledgerUrl');
       return `/dev-merge pr=${pr} issues=${issue} cleanup=own -- Squash merge PR #${pr} under the owner authorization quoted here: "${authorization}" (${ledgerUrl}). Leave the dev-batch ledger region between its markers unchanged; the batch loop updates it.`;
     default: throw new Error(`unknown stage: ${stage}`);
   }

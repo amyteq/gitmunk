@@ -46,3 +46,8 @@ test('implement prompt is the issue\'s /goal line verbatim', () => {
   assert.throws(() => stagePrompt({ stage: 'implement', goal: 'do it' }));
   assert.throws(() => stagePrompt({ stage: 'implement', goal: null }));
 });
+
+test('merge prompt refuses a missing authorization or ledger link', () => {
+  const ok = { stage: 'merge', pr: 55, issue: 42, authorization: 'merge it', ledgerUrl: 'https://example.test/l' };
+  for (const k of ['authorization', 'ledgerUrl']) for (const v of [undefined, null, '']) assert.throws(() => stagePrompt({ ...ok, [k]: v }), new RegExp(k));
+});
