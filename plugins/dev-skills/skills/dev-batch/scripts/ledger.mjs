@@ -75,8 +75,16 @@ export function parseLedger(regionText, { previous } = {}) {
       if (/^:?-+:?$/.test(c[0]) || c[0] === '#' || c[0] === 'Time (UTC)') continue;
       if (inLog) { ledger.log.push({ time: c[0], event: c.slice(1).join(' | ') }); continue; }
       const n = Number(c[0]);
-      const task = /^#(\d+)\s*(.*)$/.exec(c[1] ?? '');
-      if (!task) { problems.push({ row: n, reason: `unreadable task ${c[1] ?? ''}` }); continue; }
+      // `#42 Title`, `42 Title`, `[#42](…/issues/42) Title` or an issues URL.
+      const cell = c[1] ?? '';
+      const task = /^\[#?(\d+)\]\([^)]*\)\s*(.*)$/.exec(cell) ?? /^https?:\/\/\S*\/issues\/(\d+)\S*\s*(.*)$/.exec(cell) ?? /^#?(\d+)\s*(.*)$/.exec(cell);
+      if (!task) {
+        // Keep the previous row so a typo is never read as a deletion.
+        problems.push({ row: n, reason: 'unreadable task cell' });
+        const was = previous?.rows.find((r) => r.n === n);
+        if (was) ledger.rows.push(structuredClone(was));
+        continue;
+      }
       const issue = Number(task[1]);
       const emoji = bare(c[4] ?? '');
       let status = byEmoji.get(emoji);

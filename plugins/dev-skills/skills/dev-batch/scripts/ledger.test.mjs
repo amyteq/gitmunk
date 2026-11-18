@@ -62,6 +62,33 @@ test('hand-edited table', () => {
   assert.equal(parseLedger(text).ledger.rows[2].status, null);
 });
 
+test('tolerant task cell', () => {
+  const previous = example();
+  const withCell = (cell) => renderLedger(previous, { eol: '\n' }).replace('#41 Export tasks as CSV', cell);
+  for (const cell of ['41 Export tasks as CSV', '[#41](https://example.test/example-org/example-repo/issues/41) Export tasks as CSV', 'https://example.test/example-org/example-repo/issues/41 Export tasks as CSV']) {
+    const { ledger, problems } = parseLedger(withCell(cell), { previous });
+    assert.deepEqual(problems, [], cell);
+    assert.deepEqual([ledger.rows[0].issue, ledger.rows[0].title], [41, 'Export tasks as CSV'], cell);
+  }
+});
+
+test('unreadable task cell keeps the previous row', () => {
+  const previous = example();
+  const text = renderLedger(previous, { eol: '\n' }).replace('#41 Export tasks as CSV', 'Export tasks as CSV');
+  const { ledger, problems } = parseLedger(text, { previous });
+  assert.deepEqual(problems, [{ row: 1, reason: 'unreadable task cell' }]);
+  assert.deepEqual(ledger.rows[0], previous.rows[0]);
+  assert.deepEqual(ownerEdits(previous, ledger), []);
+});
+
+test('unreadable task cell with no previous row is dropped with a problem', () => {
+  const previous = example();
+  const text = renderLedger(previous, { eol: '\n' }).replace('| 3 | #43', '| 9 | oops');
+  const { ledger, problems } = parseLedger(text, { previous });
+  assert.deepEqual(problems, [{ row: 9, reason: 'unreadable task cell' }]);
+  assert.equal(ledger.rows.length, 2);
+});
+
 test('owner edits', () => {
   const last = example();
   last.rows.push(row(4, 44, { status: 'blocked' }), row(5, 45, { status: 'implementing' }));
