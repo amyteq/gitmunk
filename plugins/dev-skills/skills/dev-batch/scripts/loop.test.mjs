@@ -181,6 +181,7 @@ test('no write when nothing changed', () => {
   const again = w.tick(T(10, 5));
   assert.deepEqual([again.wrote, again.launched], [false, []]);
   assert.equal(w.edits.length, 1);
+  assert.equal(w.events().filter((e) => e.type === 'ledger-write').length, 1); // I10: one event per write of the region
 });
 
 test('concurrent body edit survives (Review Focus 2)', () => {

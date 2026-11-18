@@ -270,7 +270,7 @@ Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in 
 
 ## 12. Accounts and usage
 
-- **Validity**: `claude auth status --json` with that `CLAUDE_CONFIG_DIR`, reading only `loggedIn`. Checked at `init`, `handover`, `takeover`, and before an account's first launch each hour.
+- **Validity**: `claude auth status --json` with that `CLAUDE_CONFIG_DIR`, reading only `loggedIn`. Checked at `init`, `handover`, `takeover`, and before an account's first launch each hour. `init` and `takeover` report an account that is not logged in as a warning and the loop skips it; `handover` refuses such a target.
 - **Usage source**: each account's status line runs the standalone `statusline.mjs` that `setup` installs (it is copied into the account, because the plugin cache path changes with every version), which reads the status-line JSON from stdin, writes `<config dir>/dev-batch-usage.json` (`at`, and `used_percentage` and `resets_at` for the 5-hour and 7-day windows), and prints a short usage text. `setup` installs it in each account's user settings after one confirmation, chaining an existing status line; `references/accounts.md` gives the snippet for doing it by hand.
 - **Reading a snapshot**: a window whose `resets_at` has passed counts as 0%. Otherwise the last value stands; it can only have risen since, so it is a lower bound. No snapshot at all is unknown.
 - **Choice before each launch**: the coordinator's own account when its highest window is below `usage_cap`; otherwise the known account with the lowest usage below the cap; otherwise an unknown account, one session at a time until a snapshot appears; otherwise no launch, one `accounts-at-cap` event, and the next attempt at the earliest `resets_at`.
@@ -297,12 +297,13 @@ The skill records enough for a later evaluation skill to measure each batch with
 
 | File | One record per | Content |
 |---|---|---|
-| `events.jsonl` | Event | Time, task, stage, session, account alias, type (launch with its argv, stage done, ledger write, wake, judgment, coordinator decision, owner edit, limit, stop, setting change) and detail |
-| `metrics.jsonl` | Session, written when the loop stops it or it ends | Name, stage, task, PR, account alias, session id, models, effort, autocompact, start and end, active time, API requests; tokens by type (input, output, cache write, cache read; deduplicated by message id, subagents included); Claude Code's own cost figure; peak context; each compaction with the tokens before and after; `/goal` checks met and not met; rate-limit and API errors; permission denials; outcome (fact reached, retried, judgment, removed). Read from the session's transcript. The coordinator's record is written at handover and at the end |
+| `events.jsonl` | Event | Time, task, stage, session, account alias, type (launch with its argv, stage done, ledger write, wake, judgment, owner edit, limit, stop, setting change) and detail |
+| `metrics.jsonl` | Session, written when the loop stops it or it ends | Name, stage, task, PR, account alias, session id, models, effort, autocompact, start and end, active time, API requests; tokens by type (input, output, cache write, cache read; deduplicated by message id, subagents included); Claude Code's own cost figure; peak context; each compaction with the tokens before and after; `/goal` checks met and not met; rate-limit and API errors; permission denials; outcome (fact reached, retried, judgment, removed). Read from the session's transcript. Workers only: the coordinator's own record is later, not in v1 |
 | `summary.json` | Batch, at completion | Stage durations per task, mean and median per stage, cost per merged PR and the measures in §17; the final roll call in the ledger shows the headline numbers |
 
 - **Reviewer phases.** `/dev-review-pr` runs Codex with `--ephemeral`, so its usage is not recorded anywhere. A separate `dev-review-pr` change, tracked in its own issue, should put each phase's Codex usage in its report marker; `dev-batch` copies it into the review session's record when it is there.
 - **Retention.** Claude Code deletes transcripts after `cleanupPeriodDays` (30 days by default); `setup` raises it to 365.
+- **Later, not in v1.** The coordinator's own `metrics.jsonl` record and its decisions as events.
 - **Not included.** OpenTelemetry export, which needs a collector while the transcripts and these files are enough; and analysis, which belongs to the later evaluation skill.
 
 ## 17. What to watch after go-live

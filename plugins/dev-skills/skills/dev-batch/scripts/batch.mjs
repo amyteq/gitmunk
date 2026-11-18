@@ -535,7 +535,10 @@ async function takeover(flags, words) {
     const r = loop.reconcile(loopCtx(dir));
     return { adopted: r.adopted, unknown: r.unknown, tick: brief(r) };
   }, { restart: false, force: !!flags.force });
-  return { ...rebuilt, ...out, loop: startLoop(dir) };
+  // §12: every account is checked here; the loop's hourly check keeps one that is not logged in from launching.
+  const warnings = settingsOf(dir).accounts.filter((a) => !sessions.loggedIn(cli(a)))
+    .map((a) => `account ${a.alias} (${a.dir}) is not logged in: no session launches in it until it is`);
+  return { ...rebuilt, ...out, warnings, loop: startLoop(dir) };
 }
 
 // §14: stop the sessions this batch launched whose stage is finished and that are idle. Never a working or unknown
@@ -605,7 +608,9 @@ function config(dir, flags, words) {
   if (args.merge !== undefined || flags.authorization !== undefined) mergeGate(s);
   if (flags.authorization !== undefined) setAuthorizationLine(s);
   saveSettings(dir, s);
-  return { changed: [...Object.keys(args), ...(extra === undefined ? [] : ['extra']), ...(flags.authorization === undefined ? [] : ['authorization'])], ...show() };
+  const changed = [...Object.keys(args), ...(extra === undefined ? [] : ['extra']), ...(flags.authorization === undefined ? [] : ['authorization'])];
+  events.appendEvent(dir, { type: 'setting-change', detail: `config: ${changed.join(', ')}` });
+  return { changed, ...show() };
 }
 
 function setup(flags, words) {
@@ -673,6 +678,7 @@ async function waitEvents(dir, flags) {
   const timeoutSeconds = flags.timeout === undefined ? Infinity : /^\d+$/.test(flags.timeout) ? Number(flags.timeout) : bad('--timeout must be a whole number of seconds');
   const r = await events.wait(dir, { timeoutSeconds, host: HOST });
   if (r.code === 3) throw new Exit(3, { timeout: true });
+  events.appendEvent(dir, { type: 'wake', detail: r.events.map((e) => e.type).join(', ') });
   return { events: r.events };
 }
 
@@ -687,10 +693,15 @@ const FLAGS = {
 };
 const SETTING_WORDS = [...SETTINGS.map((s) => s.key), 'model_effort'];
 const WORDS = { config: [...SETTING_WORDS, 'extra'], setup: SETTING_WORDS, takeover: SETTING_WORDS };
+function setPaused(dir, paused) {
+  saveSettings(dir, { ...settingsOf(dir), paused });
+  events.appendEvent(dir, { type: 'setting-change', detail: paused ? 'paused' : 'resumed' });
+  return { paused };
+}
 const HANDLERS = {
   add, rm, launch: launchStage, handover, takeover, clear, status, config, start, stop, run: runLoop, wait: waitEvents,
-  pause: (dir) => { saveSettings(dir, { ...settingsOf(dir), paused: true }); return { paused: true }; },
-  resume: (dir) => { saveSettings(dir, { ...settingsOf(dir), paused: false }); return { paused: false }; },
+  pause: (dir) => setPaused(dir, true),
+  resume: (dir) => setPaused(dir, false),
   tick: (dir) => underLease(dir, () => loop.tick(loopCtx(dir))),
 };
 

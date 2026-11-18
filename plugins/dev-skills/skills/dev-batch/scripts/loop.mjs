@@ -393,6 +393,7 @@ export function tick(ctx) {
       rmSync(at('ledger.next.md'), { force: true });
       rmSync(at('ledger.seen.md'), { force: true });
       out.wrote = true;
+      out.events.push(appendEvent(dir, { type: 'ledger-write' }, now));
     }
   }
   // §10: the batch ends only once its final roll call is written; until then the next tick retries the write.

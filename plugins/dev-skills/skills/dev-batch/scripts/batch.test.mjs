@@ -16,6 +16,7 @@ const ISSUE = `repos/${REPO}/issues/40`;
 const PLAIN = { body: 'Plain issue.', comments: { totalCount: 0, nodes: [] }, closedByPullRequestsReferences: { nodes: [] }, timelineItems: { nodes: [] } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const lines = (path) => (existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
 // gh answers from the world file (STUB_FIXTURE) and writes source edits and new comments back into it.
 const GH = `
@@ -223,6 +224,35 @@ test('config prints sources', () => {
   assert.equal(w.cli('config', '--authorization', 'merge everything').code, 2);
 });
 
+test('config, pause and resume record a setting-change event; showing the settings records none (I10)', () => {
+  const w = world();
+  w.init();
+  const changes = () => lines(w.file('events.jsonl')).filter((e) => e.type === 'setting-change').map((e) => e.detail);
+  w.cli('config');
+  assert.deepEqual(changes(), []);
+  assert.equal(w.cli('config', 'cap=3', 'extra=be brief').code, 0);
+  assert.equal(w.cli('pause').code, 0);
+  assert.equal(w.cli('resume').code, 0);
+  assert.deepEqual(changes(), ['config: cap, extra', 'paused', 'resumed']);
+});
+
+test('wait through the CLI wakes on a judgment a tick queues, and records the wake (I10, M14)', async () => {
+  const w = world();
+  w.init();
+  const waiting = spawn(process.execPath, [BATCH, 'wait', '--timeout', '60'], { cwd: w.root, env: w.env });
+  let out = '';
+  waiting.stdout.on('data', (d) => { out += d; });
+  const exited = new Promise((done) => waiting.on('exit', done));
+  await sleep(300);
+  w.set((v) => { v.sources[ISSUE].body = 'The region is gone.\n'; }); // the next tick raises ledger-region
+  assert.equal(w.cli('tick').code, 0);
+  assert.equal(await exited, 0);
+  assert.deepEqual(JSON.parse(out).events.map((e) => e.type), ['ledger-region']);
+  const wakes = lines(w.file('events.jsonl')).filter((e) => e.type === 'wake');
+  assert.deepEqual(wakes.map((e) => e.detail), ['ledger-region']);
+  assert.deepEqual([w.cli('wait', '--timeout', '0').code, lines(w.file('events.jsonl')).filter((e) => e.type === 'wake').length], [3, 1]);
+});
+
 test('merge=auto needs the merge clause in the authorization line: init, config and launch refuse it (I1)', () => {
   const w = world();
   const line = AUTH.replace(', and squash merge each approval-eligible PR.', '.');
@@ -305,7 +335,7 @@ test('start runs the loop detached and stop ends it between ticks, releasing the
 });
 
 test("takeover refuses while the loop lives here, needs --force for another host's lease, then reconciles and starts", async (t) => {
-  const w = world();
+  const w = world({ accounts: ['A1', 'A2'] });
   w.init();
   w.cli('pause');
   writeFileSync(w.file('lease.json'), JSON.stringify({ pid: process.pid, host: hostname(), nonce: 'n1' }));
@@ -314,10 +344,13 @@ test("takeover refuses while the loop lives here, needs --force for another host
   assert.deepEqual([w.cli('takeover').code, w.cli('takeover').out.error], [1, 'lease-foreign']);
   assert.equal(json(w.file('lease.json')).nonce, 'n2');
 
+  w.set((v) => { v.loggedOut = [w.accts[1].dir]; });
   const r = w.cli('takeover', '--force');
   assert.equal(r.code, 0, r.text);
   t.after(() => { try { process.kill(r.out.loop.pid); } catch { /* already gone */ } });
   assert.deepEqual([r.out.adopted, r.out.unknown, r.out.loop.started], [[], [], true]);
+  // I10: every configured account is checked; the loop skips one that is not logged in.
+  assert.deepEqual(r.out.warnings, [`account A2 (${w.accts[1].dir}) is not logged in: no session launches in it until it is`]);
   const holder = () => (existsSync(w.file('lease.json')) ? json(w.file('lease.json')).pid : null);
   for (let i = 0; i < 100 && holder() !== r.out.loop.pid; i++) await sleep(100);
   assert.equal(holder(), r.out.loop.pid);
