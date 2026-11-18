@@ -105,3 +105,17 @@ test('test helpers: a stub on PATH logs argv and answers from its fixture', () =
   assert.equal(out.stdout, '{"ok":1}');
   assert.deepEqual(JSON.parse(readFileSync(log, 'utf8')).argv, ['issue', 'list']);
 });
+
+test('reviewer and writer model/effort settings default to null and follow the precedence', () => {
+  const keys = ['reviewer_model', 'reviewer_effort', 'writer_model', 'writer_effort'];
+  const { values, sources } = resolveSettings({}, {});
+  for (const key of keys) { assert.equal(values[key], null); assert.equal(sources[key], 'default'); }
+  const r = resolveSettings({ writer_effort: 'high' }, { DEV_BATCH_WRITER_EFFORT: 'low', DEV_BATCH_REVIEWER_MODEL: 'gpt-x', DEV_BATCH_REVIEWER_EFFORT: 'medium', DEV_BATCH_WRITER_MODEL: 'sonnet' });
+  assert.deepEqual(pick(r.values, keys.join(' ')), { reviewer_model: 'gpt-x', reviewer_effort: 'medium', writer_model: 'sonnet', writer_effort: 'high' });
+  assert.deepEqual(keys.map((k) => r.sources[k]), ['environment', 'environment', 'environment', 'argument']);
+  assert.throws(() => resolveSettings({ reviewer_effort: ' ' }, {}), InputError);
+  assert.throws(() => resolveSettings({ writer_model: '' }, {}), InputError);
+  assert.deepEqual(parseInvocation('config reviewer_model=x writer_effort=high').args, { reviewer_model: 'x', writer_effort: 'high' });
+  assert.ok(!ask('init').some((q) => keys.includes(q.key)));
+  assert.ok(!ask('config').some((q) => keys.includes(q.key)));
+});
