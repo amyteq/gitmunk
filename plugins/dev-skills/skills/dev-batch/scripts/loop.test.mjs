@@ -479,6 +479,20 @@ test('a complete batch whose final roll call fails to write is not complete unti
   assert.deepEqual(w.pending().map((e) => e.type), ['batch-complete']); // raised once
 });
 
+test('the loop stops idle sessions of merged and removed rows, never a working one (I8)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'removed', session: 'er-i43a' }),
+    row(3, 44, { status: 'removed', session: 'er-i44r' }), row(4, 45)] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true, merged: true } };
+  w.agent('er-pr50m', { state: 'working', stage: 'merge', issue: 41, pr: 50 }); // still in its closeout when the merge is seen
+  w.agent('er-i43a', { stage: 'implement', issue: 43 });
+  w.agent('er-i44r', { state: 'working', stage: 'refine', issue: 44 });
+  assert.deepEqual(w.tick(T(10)).stopped, ['er-i43a']);
+  w.set('er-pr50m', 'done');
+  assert.deepEqual(w.tick(T(10, 5)).stopped, ['er-pr50m']);
+  assert.equal(w.sessions().find((x) => x.name === 'er-i44r').state, 'working');
+  assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => `${m.name} ${m.outcome}`), ['er-i43a removed', 'er-pr50m fact reached']);
+});
+
 test('a session launched under 120 s ago and not yet listed stays working', () => {
   const w = world({ rows: [row(1, 41)] });
   w.hideLaunches = true; // `claude agents` has not registered the new session yet

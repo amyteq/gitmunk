@@ -22,6 +22,7 @@ const STAGE_OF = Object.fromEntries(Object.entries(STATUS_OF).map(([stage, statu
 const PIPELINE = ['refining', 'implementing', 'reviewing', 'merging', 'merged'];
 const RUNNING = new Set(['working', 'blocked', 'unknown']); // holds a cap slot; a limited session is being replaced
 const ENDED = new Set(['stopped', 'failed']);
+const IDLE = new Set(['done', 'blocked', 'limited']); // stoppable; never working or unknown
 const FINISHED = new Set(['merged', 'removed']);
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -234,6 +235,11 @@ export function tick(ctx) {
       const rec = a.type === 'stop' && records.findLast((x) => x.name === a.session);
       if (rec) stopSession(rec, 'fact reached', d.next);
     }
+  }
+  // §14, I8: a finished row's sessions stop once idle, such as a merge session still in its closeout when the merge
+  // was seen, or the session of a removed row. `advance` decides only for active rows.
+  for (const d of decided) {
+    if (FINISHED.has(d.next.status)) for (const rec of records) if (rec.issue === d.row.issue && IDLE.has(rec.state)) stopSession(rec, outcomeOf(rec, d.next.status), d.next);
   }
   for (const rec of ended) {
     const row = decided.find((d) => d.row.issue === rec.issue)?.next ?? { issue: rec.issue };

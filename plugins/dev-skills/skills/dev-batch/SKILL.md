@@ -36,7 +36,7 @@ Every sub-command takes `extra="…"`: free-text rules for this batch. Keep them
 | `status` | `B status`: the roll call, rows, live sessions, pending events and the loop's health. Read-only |
 | `init src= label= milestone= merge= <setting>=…` | [Init](#init) |
 | `add src= pos= deps=` | `B add --tasks <file> [--pos <row>]`. Here `src=` names the issues to add (`12,15`, or an issue, discussion or comment that lists them), not the batch. `--pos` inserts before that row, so "after row K" is `--pos K+1`; `top` and `end` (the default) also work. `deps=analyse` analyses the new rows only |
-| `rm task=<N> stop=yes` | `B rm --task <N> [--stop]`. The row turns ⏭️; without `--stop` its running session finishes |
+| `rm task=<N> stop=yes` | `B rm --task <N> [--stop]`. The row turns ⏭️; without `--stop` its running session finishes, and the loop stops it once idle |
 | `pause`, `resume` | `B pause`, `B resume`: stop or restart new launches; running sessions go on |
 | `config key=value…` | `B config key=value…`. With no keys, print what `B config` shows (each setting and its source), then ask. Pass the `model_effort` answer as one word (`model_effort=opus high`); `keep` changes nothing. The loop applies a change within 15 s |
 | `clear` | `B clear`: stops this batch's idle sessions whose stage is finished and returns `{ stopped }`, a count only |
