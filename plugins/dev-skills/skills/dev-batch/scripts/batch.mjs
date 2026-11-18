@@ -349,6 +349,9 @@ function add(dir, flags) {
   const tasks = readTasks(flags.tasks);
   if (flags.pos !== undefined && !/^(end|top|\d+)$/.test(flags.pos)) bad('--pos must be end, top or a row number');
   if (!tasks.length) refuse('no-tasks', { detail: 'no tasks to add' });
+  const { repository } = fetchFacts({ repo: settingsOf(dir).repo, issues: tasks.map((t) => t.issue), gh });
+  const closed = tasks.filter((t) => repository[`issue_${t.issue}`].state === 'CLOSED').map((t) => t.issue);
+  if (closed.length) refuse('issue-closed', { issues: closed, detail: 'already closed: drop them from the tasks' });
   return underLease(dir, () => {
     const { rows } = ledgerOf(dir);
     const twice = tasks.filter((t) => rows.some((r) => r.issue === t.issue)).map((t) => t.issue);

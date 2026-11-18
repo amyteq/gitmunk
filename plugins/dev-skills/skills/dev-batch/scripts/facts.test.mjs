@@ -111,6 +111,29 @@ test('C1: a closing PR merged before the row\'s first launch is never taken; the
   assert.equal(facts(later, { sessions: LAUNCHED, pr: 57 }).pr.number, 50);
 });
 
+test('NB1: a closed issue keeps its own merged closing PR, whenever it merged; otherwise it has no PR', () => {
+  const closedBy = (over = {}) => build((n) => {
+    Object.assign(n, { state: 'CLOSED', stateReason: 'COMPLETED' });
+    Object.assign(pr(n), { state: 'MERGED', merged: true, mergedAt: '2025-12-31T00:00:00Z', ...over });
+  });
+  const hand = facts(closedBy()); // never launched: the owner merged it by hand
+  assert.deepEqual([hand.pr?.number, hand.pr?.merged, hand.closedAs], [50, true, 'completed']);
+  assert.equal(facts(closedBy(), { sessions: LAUNCHED }).pr?.number, 50); // merged before the first launch
+  assert.equal(facts(closedBy({ author: { login: 'someone-else' } })).pr, null); // closed by another login's PR
+  assert.equal(facts(closedBy({ baseRepository: { nameWithOwner: 'other-org/example-repo' } })).pr, null);
+  const notPlanned = facts(build((n) => { Object.assign(n, { state: 'CLOSED', stateReason: 'NOT_PLANNED' }); n.closedByPullRequestsReferences.nodes = []; }));
+  assert.deepEqual([notPlanned.pr, notPlanned.closedAs], [null, 'not planned']);
+  // The launch-time floor stays for cross-references, closed issue or not.
+  const mention = build((n) => {
+    Object.assign(n, { state: 'CLOSED', stateReason: 'COMPLETED' });
+    n.closedByPullRequestsReferences.nodes = [];
+    n.timelineItems.nodes = [xref(prNode(30, { state: 'MERGED', merged: true, createdAt: '2025-12-01T00:00:00Z', mergedAt: '2025-12-02T00:00:00Z' }))];
+  });
+  assert.equal(facts(mention).pr, null);
+  // An open issue: a never-launched row still takes no merged PR.
+  assert.deepEqual([facts(build((n) => { Object.assign(pr(n), { state: 'MERGED', merged: true, mergedAt: '2026-01-03T00:00:00Z' }); })).pr, facts(build()).closedAs], [null, null]);
+});
+
 test('approval-eligible at head, stale after a new push', () => {
   const raw = build((n) => { pr(n).comments.nodes.push(report(1, 'final-review', 'approval-eligible')); });
   assert.equal(facts(raw).pr.evidence.ok, true);
@@ -167,6 +190,7 @@ test('factsQuery aliases every issue and carries owner and name as variables', (
   assert.match(query, /committedDate/);
   assert.match(query, /baseRepository \{ nameWithOwner \}/);
   assert.match(query, /willCloseTarget/);
+  assert.match(query, /\{ body state stateReason /); // NB1
   assert.deepEqual(variables, { owner: 'example-org', name: 'example-repo' });
 });
 

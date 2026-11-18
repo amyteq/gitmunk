@@ -35,7 +35,7 @@ Every sub-command takes `extra="…"`: free-text rules for this batch. Keep them
 |---|---|
 | `status` | `B status`: the roll call, rows, live sessions, pending events and the loop's health. Read-only |
 | `init src= label= milestone= merge= <setting>=…` | [Init](#init) |
-| `add src= pos= deps=` | `B add --tasks <file> [--pos <row>]`. Here `src=` names the issues to add (`12,15`, or an issue, discussion or comment that lists them), not the batch. `--pos` inserts before that row, so "after row K" is `--pos K+1`; `top` and `end` (the default) also work. `deps=analyse` analyses the new rows only |
+| `add src= pos= deps=` | `B add --tasks <file> [--pos <row>]`. Here `src=` names the issues to add (`12,15`, or an issue, discussion or comment that lists them), not the batch. `--pos` inserts before that row, so "after row K" is `--pos K+1`; `top` and `end` (the default) also work. `deps=analyse` analyses the new rows only. An issue that is already closed is refused (`issue-closed`, nothing written): drop it |
 | `rm task=<N> stop=yes` | `B rm --task <N> [--stop]`. The row turns ⏭️; without `--stop` its running session finishes, and the loop stops it once idle |
 | `pause`, `resume` | `B pause`, `B resume`: stop or restart new launches; running sessions go on |
 | `config key=value…` | `B config key=value…`. With no keys, print what `B config` shows (each setting and its source), then ask. Pass the `model_effort` answer as one word (`model_effort=opus high`); `keep` changes nothing. The loop applies a change within 15 s |
@@ -101,6 +101,7 @@ Each event names its `type`, `task` and `detail`. ⛔ rows wait for you: nothing
 | `session-blocked` | A session waits for input (not a usage limit) | Read its log. If the owner answers it through Remote Control, ask them to set the row to 🆕 afterwards, or it stays ⛔. Otherwise stop it and `launch` the stage |
 | `stage-failed` | A stage failed twice, or a ready verdict has no usable `/goal` line (missing, not naming the current task comment, or in a body an untrusted login edited last: [prompts.md](references/prompts.md#stages)) | Read the last session's log and the issue. Fix the cause within the policy (no `/goal` line: `launch --stage refine`); otherwise ask the owner |
 | `launch-refused` | The stage prompt could not be built (usually no `/goal` line) | As `stage-failed` |
+| `issue-closed` | The row's issue is closed with no merged closing PR of the signed-in account (closed as not planned, or by someone else's PR); the row is ⛔ and never relaunched | Ask the owner: `rm` the row, or reopen the issue and set the row to 🆕 |
 | `merge-stopped` | `/dev-merge` ended without merging; never retried without a new fact | Read its closeout or handover comment. A defect: `launch --stage review`. A `hold` label or a gate stop: tell the owner. Once the cause is gone: `launch --stage merge` |
 | `session-unknown` | After takeover, a session the ledger names that no configured account lists | Leave it while it may still run on another machine. Once it is gone, `launch` its stage |
 | `accounts-at-cap` | Every account is at `usage_cap`, cooling or logged out | Nothing: launches resume at the earliest reset. Tell the owner about a logged-out account |

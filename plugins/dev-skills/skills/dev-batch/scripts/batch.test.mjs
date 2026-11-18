@@ -526,6 +526,16 @@ test('add puts rows where asked and holds follow-ups; rm removes a row; both wri
   assert.equal(existsSync(w.file('lease.json')), false);
 });
 
+test('add refuses an issue that is already closed and writes nothing (NB1)', () => {
+  const w = world();
+  w.init();
+  const [body, ledger] = [w.body(), readFileSync(w.file('ledger.last.md'), 'utf8')];
+  w.set((v) => { v.node = { ...v.node, state: 'CLOSED' }; });
+  const r = w.cli('add', '--tasks', w.tasks([{ issue: 43, title: 'Done already', deps: [] }]));
+  assert.deepEqual([r.code, r.out?.error, r.out?.issues], [1, 'issue-closed', [43]], r.text);
+  assert.deepEqual([w.body(), readFileSync(w.file('ledger.last.md'), 'utf8')], [body, ledger]);
+});
+
 test('launch replaces a stuck unknown session record and relaunches the stage', () => {
   const w = world();
   w.init();

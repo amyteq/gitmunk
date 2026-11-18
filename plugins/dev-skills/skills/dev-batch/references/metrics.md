@@ -41,7 +41,7 @@ Fields that do not apply are absent.
 | `ledger-write` | The tick wrote the ledger region to the source |
 | `setting-change` | `config` (detail `config: <changed keys>`), `pause` (`paused`) or `resume` (`resumed`) changed the settings |
 | `wake` | `wait` returned events; the detail lists their types |
-| Judgment types | `refine-not-ready`, `owner-reply`, `review-blocked`, `review-budget-exhausted`, `stall`, `stage-failed`, `session-blocked`, `merge-stopped`, `launch-refused`, `session-unknown`, `accounts-at-cap`, `batch-paused`, `ledger-region`, `loop-error`, `loop-not-running`, `batch-complete` (handling in SKILL.md) |
+| Judgment types | `refine-not-ready`, `owner-reply`, `review-blocked`, `review-budget-exhausted`, `stall`, `stage-failed`, `session-blocked`, `merge-stopped`, `issue-closed`, `launch-refused`, `session-unknown`, `accounts-at-cap`, `batch-paused`, `ledger-region`, `loop-error`, `loop-not-running`, `batch-complete` (handling in SKILL.md) |
 
 Coordinator decisions are not recorded as events in v1.
 

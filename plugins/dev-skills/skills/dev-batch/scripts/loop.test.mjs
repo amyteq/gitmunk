@@ -21,7 +21,7 @@ const lines = (path) => (existsSync(path) ? readFileSync(path, 'utf8').trim().sp
 const row = (n, issue, over = {}) => ({ n, issue, title: `Task ${issue}`, deps: [], batch: 1, status: 'queued', pr: null, head: null, session: null, next: '', ...over });
 
 // The issue as GitHub's facts query returns it: plain, or refined (task comment + verdict), with an optional PR.
-function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention = null, comments = [] } = {}) {
+function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention = null, comments = [], closed = null } = {}) {
   const node = JSON.parse(FIXTURE.replaceAll('issues/41', `issues/${n}`).replaceAll('issue=41', `issue=${n}`)).data.repository.issue_41;
   if (!refined) Object.assign(node, { body: 'Plain issue.', comments: { totalCount: 0, nodes: [] } });
   node.comments.nodes[1] &&= { ...node.comments.nodes[1], body: node.comments.nodes[1].body.replace('state=ready', `state=${verdict}`) };
@@ -38,6 +38,7 @@ function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention =
   });
   node.closedByPullRequestsReferences.nodes = pr ? [prNode(pr)] : [];
   node.timelineItems.nodes = mention ? [{ willCloseTarget: false, source: prNode(mention) }] : []; // a PR that only mentions #n
+  if (closed) Object.assign(node, { state: 'CLOSED', stateReason: closed });
   return node;
 }
 
@@ -173,6 +174,24 @@ test('a merged PR that only mentions the issue never marks its row merged (C1)',
   const r = w.tick(T(11));
   assert.deepEqual([w.status()[41], w.ledger().rows[0].pr], ['implementing', null]);
   assert.deepEqual(r.launched, ['er-i41a2']); // the session ended without its PR: the stage is retried, not marked done
+});
+
+test('a never-launched row whose issue our merged PR closed turns merged without a launch, and its dependent dispatches (NB1)', () => {
+  const w = world({ rows: [row(1, 41), row(2, 42, { deps: [41], batch: 2 })] });
+  w.issues[41] = { closed: 'COMPLETED', pr: { number: 50, merged: true, mergedAt: '2026-11-18T09:00:00Z' } };
+  const r = w.tick(T(10));
+  assert.deepEqual([w.status(), w.ledger().rows[0].pr], [{ 41: 'merged', 42: 'refining' }, 50]);
+  assert.deepEqual(r.launched, ['er-i42r']);
+});
+
+test('a closed issue without a merged PR of ours raises issue-closed once and launches nothing (NB1)', () => {
+  const w = world({ rows: [row(1, 41)] });
+  w.issues[41] = { refined: true, closed: 'NOT_PLANNED' };
+  const r = w.tick(T(10));
+  assert.deepEqual([r.launched, w.status()[41]], [[], 'blocked']);
+  assert.deepEqual(w.pending().map((e) => [e.type, e.task]), [['issue-closed', 41]]);
+  assert.deepEqual(w.tick(T(10, 5)).launched, []);
+  assert.equal(w.pending().length, 1);
 });
 
 test('no write when nothing changed', () => {

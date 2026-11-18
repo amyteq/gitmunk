@@ -21,7 +21,7 @@ const PR_FIELDS = `fragment pr on PullRequest {
   reviews(last: 50) { nodes { state submittedAt authorAssociation url author { login } commit { oid } } }
 }`;
 
-const ISSUE_FIELDS = `body authorAssociation editor { login }
+const ISSUE_FIELDS = `body state stateReason authorAssociation editor { login }
   comments(last: 100) { totalCount nodes { databaseId body authorAssociation createdAt url author { login } } }
   closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { ...pr } }
   timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20) { nodes { ... on CrossReferencedEvent { willCloseTarget source { ... on PullRequest { ...pr } } } } }`;
@@ -238,12 +238,13 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
   // C1: the task's own PR, by the signed-in login into this repository. The row's PR stays unless it was closed
   // unmerged, or it only mentions the issue and a closing PR now exists; otherwise a closing PR, else a cross-reference
   // that will close the issue or came after the implement session started. A PR merged before the row's first launch
-  // is never this batch's work.
+  // is never this batch's work, except a closing PR of a closed issue (NB1: a hand merge, or an issue added closed).
   const since = (list) => list.map((x) => x.startedAt).filter(Boolean).sort()[0] ?? null;
   const after = (t, from) => !!from && Date.parse(t) >= Date.parse(from);
   const ours = (p) => !!p?.number && p.author?.login === login && p.baseRepository?.nameWithOwner?.toLowerCase() === repo.toLowerCase();
   const live = (p) => p.state === 'OPEN' || (p.merged && after(p.mergedAt, since(sessions)));
-  const closing = node.closedByPullRequestsReferences.nodes.filter((p) => ours(p) && live(p));
+  const closedAs = node.state === 'CLOSED' ? (node.stateReason ?? 'closed').toLowerCase().replace(/_/g, ' ') : null;
+  const closing = node.closedByPullRequestsReferences.nodes.filter((p) => ours(p) && (live(p) || (closedAs && p.merged)));
   const refs = node.timelineItems.nodes.filter(({ source: p, willCloseTarget }) => ours(p) && live(p)
     && ((p.state === 'OPEN' && willCloseTarget) || after(p.createdAt, since(sessions.filter((x) => x.stage === 'implement'))))).map((t) => t.source);
   const kept = rowPr && [...node.closedByPullRequestsReferences.nodes, ...(closing.length ? [] : node.timelineItems.nodes.map((t) => t.source))]
@@ -260,7 +261,7 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
   const goal = line && [...line.matchAll(/https:\/\/github\.com\/\S+?#issuecomment-\d+/g)].some((m) => m[0] === taskUrl) ? line : null;
 
   return {
-    task, goal, verdict, ownerQuestion, ownerAnswer, pr,
+    task, goal, verdict, ownerQuestion, ownerAnswer, pr, closedAs,
     lastActivity: newest([...comments.map((c) => c.createdAt), pr?.lastActivity]),
   };
 }

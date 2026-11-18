@@ -37,7 +37,7 @@ const STAGE_OF = Object.fromEntries(Object.entries(STATUS_OF).map(([stage, statu
 const RANK = { refine: 0, implement: 1, 'no-goal': 1, owner: 1, 'not-ready': 1, review: 2, checks: 3, merge: 3, merged: 4 };
 const LIVE = new Set(['working', 'blocked', 'limited', 'unknown']);
 const IDLE = new Set(['done', 'blocked', 'limited']); // stoppable once the stage's fact is in; never working or unknown
-const JUDGMENT = new Set(['refine-not-ready', 'owner-reply', 'review-blocked', 'review-budget-exhausted', 'stall', 'stage-failed', 'merge-stopped', 'session-blocked']);
+const JUDGMENT = new Set(['refine-not-ready', 'owner-reply', 'review-blocked', 'review-budget-exhausted', 'stall', 'stage-failed', 'merge-stopped', 'session-blocked', 'issue-closed']);
 const ATTEMPTS = 2;
 const STALL_MS = 4 * 60 * 60 * 1000;
 
@@ -49,10 +49,12 @@ const WAITING = {
   checks: 'waiting for checks to finish',
 };
 
-// The step GitHub's facts ask for, sessions aside: merged, merge, checks (approved, checks running), review,
-// implement, no-goal (ready, but no /goal line to launch with), owner or not-ready (the verdict stops it), else refine.
+// The step GitHub's facts ask for, sessions aside: merged, closed (the issue closed without a merged PR of ours), merge,
+// checks (approved, checks running), review, implement, no-goal (ready, but no /goal line to launch with), owner or
+// not-ready (the verdict stops it), else refine.
 function wanted(f) {
   if (f.pr?.merged) return 'merged';
+  if (f.closedAs) return 'closed';
   if (f.pr) return !f.pr.evidence.ok ? 'review' : f.pr.checks === 'pending' ? 'checks' : 'merge';
   const state = f.task?.action === 'use-current' && f.verdict?.revision === f.task.revision ? f.verdict.state : null;
   if (state === 'ready') return f.goal ? 'implement' : 'no-goal'; // the implement prompt is the /goal line verbatim
@@ -117,6 +119,7 @@ export function advance({ row, facts, sessions, settings, authorized, mergeLock,
   let out;
   if (want === 'merged') out = to('merged');
   else if (row.status === 'merged' || row.status === 'blocked') out = to(row.status, row.next); // ⛔ waits for the coordinator
+  else if (want === 'closed') out = halt('blocked', `issue closed (${facts.closedAs}) without a merged PR of this batch`, 'issue-closed');
   else if (row.status === 'owner' && row.next !== WAITING.authorization && row.next !== WAITING.merge) {
     out = facts.ownerAnswer ? halt('owner', `owner replied: ${decision}`, 'owner-reply') : to('owner', row.next);
   } else if (STAGE_OF[row.status] && row.next !== WAITING.checks && row.next !== WAITING.lock) {
