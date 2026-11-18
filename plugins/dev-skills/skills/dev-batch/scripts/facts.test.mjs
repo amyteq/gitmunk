@@ -14,7 +14,7 @@ const build = (edit = () => {}) => {
   edit(res.data.repository.issue_41);
   return { repo: REPO, repository: res.data.repository, extra: {} };
 };
-const facts = (raw, opts = {}) => issueFacts(raw, 41, { repo: REPO, login: LOGIN, rounds: 10, sessionWindows: [], ...opts });
+const facts = (raw, opts = {}) => issueFacts(raw, 41, { repo: REPO, login: LOGIN, sessions: [], ...opts });
 const comment = (body, over = {}) => ({ databaseId: 9, body, authorAssociation: 'OWNER', createdAt: '2026-01-03T00:00:00Z', url: 'https://github.com/example-org/example-repo/issues/41#issuecomment-9', author: { login: LOGIN }, ...over });
 const report = (round, phase, verdict, head = SHA1, at = '2026-01-03T00:00:00Z') => ({
   body: `<!-- dev-review-pr: RUN1 round=${round} phase=${phase} -->\nReviewed head: [x](https://github.com/example-org/example-repo/commit/${head})\nBase: [y](https://github.com/example-org/example-repo/commit/${SHA2})\nVerdict: ${verdict}`,
@@ -46,6 +46,52 @@ test('goal line', () => {
 test('PR by another login is not the task\'s PR', () => {
   assert.equal(facts(build((n) => { pr(n).author.login = 'someone-else'; })).pr, null);
   assert.equal(facts(build()).pr.number, 50);
+});
+
+// ---- PR linkage (C1): the task's own PR, never one that only mentions the issue ----
+
+const LAUNCHED = [{ stage: 'refine', startedAt: '2026-01-01T09:00:00Z', endedAt: '2026-01-01T09:30:00Z' }, { stage: 'implement', startedAt: '2026-01-02T00:00:00Z', endedAt: null }];
+const prNode = (number, over = {}) => ({ ...pr(base().data.repository.issue_41), number, ...over });
+const xref = (source, willCloseTarget = false) => ({ willCloseTarget, source });
+
+test('C1: a PR that only mentions the issue is not its PR', () => {
+  // An old merged PR by the same login that mentions #41: no PR, so the row never turns merged unworked.
+  const old = facts(build((n) => {
+    n.closedByPullRequestsReferences.nodes = [];
+    n.timelineItems.nodes = [xref(prNode(30, { state: 'MERGED', merged: true, createdAt: '2025-12-01T00:00:00Z', mergedAt: '2025-12-02T00:00:00Z' }))];
+  }), { sessions: LAUNCHED });
+  assert.equal(old.pr, null);
+  // An open sibling PR that mentions #41 never replaces #41's own closing PR #50.
+  const sibling = facts(build((n) => { n.timelineItems.nodes = [xref(prNode(57, { createdAt: '2026-01-02T10:00:00Z' }))]; }), { sessions: LAUNCHED });
+  assert.equal(sibling.pr.number, 50);
+  // A PR into another repository is not the task's PR.
+  assert.equal(facts(build((n) => { pr(n).baseRepository.nameWithOwner = 'other-org/example-repo'; })).pr, null);
+});
+
+test('C1: a cross-referenced PR counts when it will close the issue, or with no closing PR when it came after the implement session started', () => {
+  const only = (ref) => build((n) => { n.closedByPullRequestsReferences.nodes = []; n.timelineItems.nodes = [ref]; });
+  assert.equal(facts(only(xref(prNode(60), true))).pr.number, 60); // open, and merging it closes #41
+  assert.equal(facts(only(xref(prNode(61, { createdAt: '2026-01-02T01:00:00Z' }))), { sessions: LAUNCHED }).pr.number, 61);
+  assert.equal(facts(only(xref(prNode(62, { createdAt: '2026-01-01T23:00:00Z' }))), { sessions: LAUNCHED }).pr, null); // before the implement session
+  assert.equal(facts(only(xref(prNode(63, { createdAt: '2026-01-02T01:00:00Z' })))).pr, null); // no implement session at all
+});
+
+test('C1: a closing PR merged before the row\'s first launch is never taken; the row\'s PR is kept unless closed unmerged', () => {
+  const merged = (mergedAt) => build((n) => { Object.assign(pr(n), { state: 'MERGED', merged: true, mergedAt }); });
+  assert.equal(facts(merged('2025-12-31T00:00:00Z'), { sessions: LAUNCHED }).pr, null);
+  assert.equal(facts(merged('2026-01-03T00:00:00Z')).pr, null); // never launched: any merge came before its first launch
+  assert.equal(facts(merged('2026-01-03T00:00:00Z'), { sessions: LAUNCHED }).pr.merged, true);
+  // The row already names #50: a newer closing PR does not replace it, and an old merge of #50 is still #50's.
+  const newer = build((n) => { n.closedByPullRequestsReferences.nodes.push(prNode(70)); });
+  assert.equal(facts(newer, { sessions: LAUNCHED }).pr.number, 70);
+  assert.equal(facts(newer, { sessions: LAUNCHED, pr: 50 }).pr.number, 50);
+  assert.equal(facts(merged('2025-12-31T00:00:00Z'), { sessions: LAUNCHED, pr: 50 }).pr.number, 50);
+  // …unless #50 was closed unmerged.
+  const closed = build((n) => { pr(n).state = 'CLOSED'; n.closedByPullRequestsReferences.nodes.push(prNode(70)); });
+  assert.equal(facts(closed, { sessions: LAUNCHED, pr: 50 }).pr.number, 70);
+  // A mention-only PR the row took while no closing PR existed gives way once the issue's own closing PR appears.
+  const later = build((n) => { n.timelineItems.nodes = [xref(prNode(57, { createdAt: '2026-01-02T01:00:00Z' }))]; });
+  assert.equal(facts(later, { sessions: LAUNCHED, pr: 57 }).pr.number, 50);
 });
 
 test('approval-eligible at head, stale after a new push', () => {
@@ -81,9 +127,9 @@ test('owner answer: only an unmarked comment outside every session window counts
   const f = facts(raw);
   assert.equal(f.ownerQuestion.at, '2026-01-02T00:00:00Z');
   assert.deepEqual(f.ownerAnswer, { at: '2026-01-02T05:00:00Z' });
-  const during = facts(raw, { sessionWindows: [{ from: '2026-01-02T04:00:00Z', to: '2026-01-02T06:00:00Z' }] });
+  const during = facts(raw, { sessions: [{ stage: 'implement', startedAt: '2026-01-02T04:00:00Z', endedAt: '2026-01-02T06:00:00Z' }] });
   assert.equal(during.ownerAnswer, null);
-  const open = facts(raw, { sessionWindows: [{ from: '2026-01-02T04:00:00Z', to: null }] });
+  const open = facts(raw, { sessions: [{ stage: 'implement', startedAt: '2026-01-02T04:00:00Z', endedAt: null }] });
   assert.equal(open.ownerAnswer, null);
 });
 
@@ -99,6 +145,8 @@ test('factsQuery aliases every issue and carries owner and name as variables', (
   assert.match(query, /issue_41: issue\(number: 41\)/);
   assert.match(query, /issue_42: issue\(number: 42\)/);
   assert.match(query, /committedDate/);
+  assert.match(query, /baseRepository \{ nameWithOwner \}/);
+  assert.match(query, /willCloseTarget/);
   assert.deepEqual(variables, { owner: 'example-org', name: 'example-repo' });
 });
 

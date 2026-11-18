@@ -198,8 +198,8 @@ export function tick(ctx) {
   const liveRow = (issue) => rows.some((r) => r.issue === issue && !FINISHED.has(r.status));
   if (holder && (holder.key === key ? !liveRow(holder.issue) : holder.key && batchGone(dir, holder.key, ctx.host))) { releaseLock(dir); holder = null; }
   const byIssue = new Map(rows.map((r) => [r.issue, r]));
-  const facts = new Map(active.map((r) => [r.issue, issueFacts(fetched.value, r.issue, { repo: s.repo, login: s.login,
-    sessionWindows: records.filter((x) => x.issue === r.issue).map((x) => ({ from: x.startedAt, to: x.endedAt })) })]));
+  const facts = new Map(active.map((r) => [r.issue, issueFacts(fetched.value, r.issue, { repo: s.repo, login: s.login, pr: r.pr,
+    sessions: records.filter((x) => x.issue === r.issue) })]));
   const merged = new Set(rows.filter((r) => r.status === 'merged' || facts.get(r.issue)?.pr?.merged).map((r) => r.issue));
   const decided = rows.map((row) => {
     const f = facts.get(row.issue);

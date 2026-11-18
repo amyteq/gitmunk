@@ -14,7 +14,7 @@ const TRUSTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 export class GithubUnavailable extends Error {}
 
 const PR_FIELDS = `fragment pr on PullRequest {
-  number state merged headRefOid author { login }
+  number state merged createdAt mergedAt headRefOid author { login } baseRepository { nameWithOwner }
   commits(last: 1) { nodes { commit { committedDate } } }
   statusCheckRollup { state }
   comments(last: 100) { nodes { body authorAssociation createdAt url author { login } } }
@@ -24,7 +24,7 @@ const PR_FIELDS = `fragment pr on PullRequest {
 const ISSUE_FIELDS = `body
   comments(last: 100) { totalCount nodes { databaseId body authorAssociation createdAt url author { login } } }
   closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { ...pr } }
-  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20) { nodes { ... on CrossReferencedEvent { source { ... on PullRequest { ...pr } } } } }`;
+  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20) { nodes { ... on CrossReferencedEvent { willCloseTarget source { ... on PullRequest { ...pr } } } } }`;
 
 export function factsQuery(repo, issues) {
   const [owner, name] = repo.split('/');
@@ -208,8 +208,8 @@ function prFacts(pr, login) {
   };
 }
 
-/** IssueFacts for one issue of `raw`. `rounds` is accepted for the caller's settings and unused here. */
-export function issueFacts(raw, issue, { repo, login, sessionWindows = [] }) {
+/** IssueFacts for one issue of `raw`. `sessions` are the row's session records, `pr` the PR its ledger row names. */
+export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr = null }) {
   const node = raw.repository[`issue_${issue}`];
   const rest = raw.extra?.[issue];
   const comments = rest ? rest.map(normalizeRest) : node.comments.nodes.map(normalizeGql);
@@ -227,15 +227,24 @@ export function issueFacts(raw, issue, { repo, login, sessionWindows = [] }) {
   const q = mine.filter((c) => firstLine(c.body) === `<!-- dev-batch:owner issue=${issue} -->`).at(-1);
   const ownerQuestion = q ? { url: q.url, at: q.createdAt } : null;
   // §11: after the question, no agent marker, posted while no session of the row ran (an open window has to: null).
-  const during = (t) => sessionWindows.some(({ from, to }) => Date.parse(t) >= Date.parse(from) && (!to || Date.parse(t) <= Date.parse(to)));
+  const during = (t) => sessions.some(({ startedAt: from, endedAt: to }) => Date.parse(t) >= Date.parse(from) && (!to || Date.parse(t) <= Date.parse(to)));
   const a = q && mine.find((c) => time(c.createdAt) > time(q.createdAt) && !/<!-- dev-[a-z-]+/.test(c.body) && !during(c.createdAt));
   const ownerAnswer = a ? { at: a.createdAt } : null;
 
-  const prs = new Map();
-  for (const n of [...node.closedByPullRequestsReferences.nodes, ...node.timelineItems.nodes.map((t) => t.source)]) {
-    if (n?.number && n.author?.login === login && (n.state === 'OPEN' || n.merged)) prs.set(n.number, n);
-  }
-  const best = [...prs.values()].sort((x, y) => y.number - x.number)[0];
+  // C1: the task's own PR, by the signed-in login into this repository. The row's PR stays unless it was closed
+  // unmerged, or it only mentions the issue and a closing PR now exists; otherwise a closing PR, else a cross-reference
+  // that will close the issue or came after the implement session started. A PR merged before the row's first launch
+  // is never this batch's work.
+  const since = (list) => list.map((x) => x.startedAt).filter(Boolean).sort()[0] ?? null;
+  const after = (t, from) => !!from && Date.parse(t) >= Date.parse(from);
+  const ours = (p) => !!p?.number && p.author?.login === login && p.baseRepository?.nameWithOwner?.toLowerCase() === repo.toLowerCase();
+  const live = (p) => p.state === 'OPEN' || (p.merged && after(p.mergedAt, since(sessions)));
+  const closing = node.closedByPullRequestsReferences.nodes.filter((p) => ours(p) && live(p));
+  const refs = node.timelineItems.nodes.filter(({ source: p, willCloseTarget }) => ours(p) && live(p)
+    && ((p.state === 'OPEN' && willCloseTarget) || after(p.createdAt, since(sessions.filter((x) => x.stage === 'implement'))))).map((t) => t.source);
+  const kept = rowPr && [...node.closedByPullRequestsReferences.nodes, ...(closing.length ? [] : node.timelineItems.nodes.map((t) => t.source))]
+    .find((p) => ours(p) && p.number === rowPr && p.state !== 'CLOSED');
+  const best = kept || (closing.length ? closing : refs).sort((x, y) => y.number - x.number)[0];
   const pr = best ? prFacts(best, login) : null;
 
   return {

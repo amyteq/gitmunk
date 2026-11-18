@@ -384,7 +384,7 @@ function launchStage(dir, flags) {
     if (!s.authorization || parseLedger(body.slice(found.start, found.end)).ledger.authorization?.trim() !== s.authorization.trim()) {
       refuse('not-authorized', { detail: "the region's authorization line is not the one the owner recorded (§11)" });
     }
-    const facts = issueFacts(fetchFacts({ repo: s.repo, issues: [issue], gh }), issue, { repo: s.repo, login: s.login });
+    const facts = issueFacts(fetchFacts({ repo: s.repo, issues: [issue], gh }), issue, { repo: s.repo, login: s.login, pr: row.pr, sessions: records.filter((r) => r.issue === issue) });
     const pr = facts.pr?.number ?? row.pr;
     if (!pr && (stage === 'review' || stage === 'merge')) refuse('no-pr', { detail: `#${issue} has no pull request to ${stage}` });
     let prompt;

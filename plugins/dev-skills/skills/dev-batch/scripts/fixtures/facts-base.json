@@ -14,6 +14,7 @@
           "nodes": [
             {
               "number": 50, "state": "OPEN", "merged": false, "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "author": { "login": "bot-user" },
+              "createdAt": "2026-01-02T08:00:00Z", "mergedAt": null, "baseRepository": { "nameWithOwner": "example-org/example-repo" },
               "commits": { "nodes": [{ "commit": { "committedDate": "2026-01-02T09:00:00Z" } }] },
               "statusCheckRollup": { "state": "SUCCESS" },
               "comments": { "nodes": [] },

@@ -21,18 +21,21 @@ const lines = (path) => (existsSync(path) ? readFileSync(path, 'utf8').trim().sp
 const row = (n, issue, over = {}) => ({ n, issue, title: `Task ${issue}`, deps: [], batch: 1, status: 'queued', pr: null, head: null, session: null, next: '', ...over });
 
 // The issue as GitHub's facts query returns it: plain, or refined (task comment + verdict), with an optional PR.
-function issueNode(n, { refined = false, verdict = 'ready', pr = null } = {}) {
+function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention = null } = {}) {
   const node = JSON.parse(FIXTURE.replaceAll('issues/41', `issues/${n}`).replaceAll('issue=41', `issue=${n}`)).data.repository.issue_41;
   if (!refined) Object.assign(node, { body: 'Plain issue.', comments: { totalCount: 0, nodes: [] } });
   node.comments.nodes[1] &&= { ...node.comments.nodes[1], body: node.comments.nodes[1].body.replace('state=ready', `state=${verdict}`) };
-  node.closedByPullRequestsReferences.nodes = pr ? [{
-    number: pr.number, state: pr.merged ? 'MERGED' : 'OPEN', merged: !!pr.merged, headRefOid: HEAD, author: { login: LOGIN },
+  const prNode = (p) => ({
+    number: p.number, state: p.merged ? 'MERGED' : 'OPEN', merged: !!p.merged, headRefOid: HEAD, author: { login: LOGIN },
+    createdAt: p.createdAt ?? '2026-11-19T10:05:00Z', mergedAt: p.merged ? (p.mergedAt ?? '2026-11-19T10:19:00Z') : null, baseRepository: { nameWithOwner: REPO },
     commits: { nodes: [{ commit: { committedDate: '2026-11-19T10:00:00Z' } }] }, statusCheckRollup: { state: 'SUCCESS' }, reviews: { nodes: [] },
-    comments: { nodes: pr.approved ? [{
+    comments: { nodes: p.approved ? [{
       body: `<!-- dev-review-pr: RUN1 round=1 phase=final-review -->\nReviewed head: [x](https://github.com/${REPO}/commit/${HEAD})\nBase: [y](https://github.com/${REPO}/commit/${BASE})\nVerdict: approval-eligible`,
-      authorAssociation: 'OWNER', createdAt: '2026-11-19T10:00:00Z', url: `https://github.com/${REPO}/pull/${pr.number}#issuecomment-1`, author: { login: LOGIN },
+      authorAssociation: 'OWNER', createdAt: '2026-11-19T10:00:00Z', url: `https://github.com/${REPO}/pull/${p.number}#issuecomment-1`, author: { login: LOGIN },
     }] : [] },
-  }] : [];
+  });
+  node.closedByPullRequestsReferences.nodes = pr ? [prNode(pr)] : [];
+  node.timelineItems.nodes = mention ? [{ willCloseTarget: false, source: prNode(mention) }] : []; // a PR that only mentions #n
   return node;
 }
 
@@ -159,6 +162,15 @@ test('two dependent issues run to merge', () => {
   assert.equal(existsSync(w.lock), false);
   assert.deepEqual(w.events().filter((e) => e.type === 'stage-done').map((e) => `${e.task} ${e.stage}`), ['41 refine', '41 implement', '41 review', '41 merge']);
   assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => `${m.name} ${m.outcome}`), ['er-i41r fact reached', 'er-i41a fact reached', 'er-pr50 fact reached', 'er-pr50m fact reached']);
+});
+
+test('a merged PR that only mentions the issue never marks its row merged (C1)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' })] });
+  w.issues[41] = { refined: true, mention: { number: 30, merged: true, createdAt: '2026-11-18T08:00:00Z', mergedAt: '2026-11-18T09:00:00Z' } };
+  w.agent('er-i41a', { stage: 'implement', issue: 41 });
+  const r = w.tick(T(11));
+  assert.deepEqual([w.status()[41], w.ledger().rows[0].pr], ['implementing', null]);
+  assert.deepEqual(r.launched, ['er-i41a2']); // the session ended without its PR: the stage is retried, not marked done
 });
 
 test('no write when nothing changed', () => {
