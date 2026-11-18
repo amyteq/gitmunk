@@ -1,5 +1,6 @@
 // The batch's file-based event log, the judgment queue `wait` drains, and the lease of the one detached loop.
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -51,19 +52,25 @@ export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-// shortcut: read-then-rename is not an exclusive create, so two simultaneous takers could both win; the
-// loop is started by one coordinator, upgrade to link()/O_EXCL if that stops holding.
-export function takeLease(dir, { pid, host, alias, coordinator, now = Date.now(), force = false }) {
+// Last writer wins: after the rename the lease is re-read and only the taker whose nonce is on disk proceeds.
+// afterWrite is a test hook between the rename and the re-read.
+export function takeLease(dir, { pid, host, alias, coordinator, now = Date.now(), force = false, afterWrite }) {
   let held = null;
   try { held = JSON.parse(readFileSync(leasePath(dir), 'utf8')); } catch { /* absent or unreadable: free */ }
   if (held) {
     if (held.host === host ? pidAlive(held.pid) : !force) return { held };
   }
   mkdirSync(dir, { recursive: true });
-  const tmp = `${leasePath(dir)}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ pid, host, alias, coordinator, startedAt: new Date(now).toISOString() }));
+  const nonce = randomUUID();
+  const tmp = `${leasePath(dir)}.${process.pid}.${nonce}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ pid, host, alias, coordinator, nonce, startedAt: new Date(now).toISOString() }));
   renameSync(tmp, leasePath(dir));
-  return { ok: true };
+  afterWrite?.();
+  const now_ = JSON.parse(readFileSync(leasePath(dir), 'utf8'));
+  return now_.nonce === nonce ? { ok: true, nonce } : { held: now_ };
 }
 
-export const releaseLease = (dir) => rmSync(leasePath(dir), { force: true });
+// Removes the lease only while it is still ours.
+export function releaseLease(dir, nonce) {
+  try { if (JSON.parse(readFileSync(leasePath(dir), 'utf8')).nonce === nonce) rmSync(leasePath(dir), { force: true }); } catch { /* none */ }
+}

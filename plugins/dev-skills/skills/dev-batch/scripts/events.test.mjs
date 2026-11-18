@@ -52,13 +52,35 @@ const dead = () => { const r = spawnSync(process.execPath, ['-e', '']); return r
 test('lease: a live pid refuses, a dead pid on the same host is reclaimed, another host needs force', () => {
   const dir = tempDir();
   const me = { pid: process.pid, host: 'h1', alias: 'A1', coordinator: 'x-i1c' };
-  assert.deepEqual(takeLease(dir, me), { ok: true });
+  assert.equal(takeLease(dir, me).ok, true);
   assert.equal(takeLease(dir, { ...me, pid: 1 }).held.pid, process.pid);
   writeFileSync(join(dir, 'lease.json'), JSON.stringify({ ...me, pid: dead() }));
-  assert.deepEqual(takeLease(dir, me), { ok: true });
+  assert.equal(takeLease(dir, me).ok, true);
   assert.equal(takeLease(dir, { ...me, host: 'h2' }).held.host, 'h1');
-  assert.deepEqual(takeLease(dir, { ...me, host: 'h2', force: true }), { ok: true });
+  const forced = takeLease(dir, { ...me, host: 'h2', force: true });
+  assert.equal(forced.ok, true);
   assert.equal(JSON.parse(readFileSync(join(dir, 'lease.json'), 'utf8')).host, 'h2');
-  releaseLease(dir);
+  releaseLease(dir, forced.nonce);
+  assert.equal(existsSync(join(dir, 'lease.json')), false);
+});
+
+test('lease race: the taker whose lease was overwritten before its re-read gets held', () => {
+  const dir = tempDir();
+  const base = { host: 'h1', alias: 'A1', coordinator: 'x-i1c' };
+  writeFileSync(join(dir, 'lease.json'), JSON.stringify({ ...base, pid: dead() }));
+  let b;
+  // A's pid is dead, so B treats A's fresh lease as reclaimable and writes over it before A re-reads.
+  const a = takeLease(dir, { ...base, pid: dead(), afterWrite: () => { b = takeLease(dir, { ...base, pid: process.pid }); } });
+  assert.equal(b.ok, true);
+  assert.equal(a.held.pid, process.pid);
+  assert.equal(a.ok, undefined);
+});
+
+test('releaseLease by a non-holder leaves the lease', () => {
+  const dir = tempDir();
+  const first = takeLease(dir, { pid: process.pid, host: 'h1', alias: 'A1', coordinator: 'c' });
+  releaseLease(dir, 'someone-else');
+  assert.equal(existsSync(join(dir, 'lease.json')), true);
+  releaseLease(dir, first.nonce);
   assert.equal(existsSync(join(dir, 'lease.json')), false);
 });
