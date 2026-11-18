@@ -536,6 +536,15 @@ test('add refuses an issue that is already closed and writes nothing (NB1)', () 
   assert.deepEqual([w.body(), readFileSync(w.file('ledger.last.md'), 'utf8')], [body, ledger]);
 });
 
+test('launch refuses a closed issue and launches nothing (NB1 follow-up)', () => {
+  const w = world();
+  w.init();
+  w.set((v) => { v.node = { ...v.node, state: 'CLOSED', stateReason: 'NOT_PLANNED' }; });
+  const r = w.cli('launch', '--task', '41', '--stage', 'refine');
+  assert.deepEqual([r.code, r.out?.error], [1, 'issue-closed'], r.text);
+  assert.deepEqual(w.calls('claude', '--bg'), []);
+});
+
 test('launch replaces a stuck unknown session record and relaunches the stage', () => {
   const w = world();
   w.init();

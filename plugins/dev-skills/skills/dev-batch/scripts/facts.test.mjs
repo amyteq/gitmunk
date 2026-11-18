@@ -134,6 +134,25 @@ test('NB1: a closed issue keeps its own merged closing PR, whenever it merged; o
   assert.deepEqual([facts(build((n) => { Object.assign(pr(n), { state: 'MERGED', merged: true, mergedAt: '2026-01-03T00:00:00Z' }); })).pr, facts(build()).closedAs], [null, null]);
 });
 
+test('NB1 follow-up: a closed issue prefers its merged closing PR over a kept or newer open one', () => {
+  const closed = (fn) => build((n) => { Object.assign(n, { state: 'CLOSED', stateReason: 'COMPLETED' }); fn(n); });
+  // A: the row reviews open #60 (kept); the owner merges #61 by hand, which closes the issue.
+  const a = closed((n) => { n.closedByPullRequestsReferences.nodes = [prNode(60), prNode(61, { state: 'MERGED', merged: true, mergedAt: '2026-01-03T00:00:00Z' })]; });
+  assert.deepEqual([facts(a, { sessions: LAUNCHED, pr: 60 }).pr?.number, facts(a, { sessions: LAUNCHED, pr: 60 }).pr?.merged], [61, true]);
+  // B: a row never launched, with merged #50 and a newer open #55 of ours.
+  const b = closed((n) => { Object.assign(pr(n), { state: 'MERGED', merged: true, mergedAt: '2025-12-31T00:00:00Z' }); n.closedByPullRequestsReferences.nodes.push(prNode(55)); });
+  assert.deepEqual([facts(b).pr?.number, facts(b).pr?.merged], [50, true]);
+});
+
+test('NB1 follow-up: only an issue closed as completed (or with no reason) keeps an old merged closing PR', () => {
+  const reclosed = (stateReason) => build((n) => {
+    Object.assign(n, { state: 'CLOSED', stateReason });
+    Object.assign(pr(n), { state: 'MERGED', merged: true, mergedAt: '2025-12-31T00:00:00Z' });
+  });
+  for (const reason of ['NOT_PLANNED', 'DUPLICATE']) assert.equal(facts(reclosed(reason)).pr, null, reason);
+  assert.deepEqual([facts(reclosed('NOT_PLANNED')).closedAs, facts(reclosed(null)).pr?.number, facts(reclosed(null)).closedAs], ['not planned', 50, 'closed']);
+});
+
 test('approval-eligible at head, stale after a new push', () => {
   const raw = build((n) => { pr(n).comments.nodes.push(report(1, 'final-review', 'approval-eligible')); });
   assert.equal(facts(raw).pr.evidence.ok, true);
