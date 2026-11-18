@@ -3,9 +3,9 @@ title: "dev-batch: implementation plan"
 skill: dev-batch
 plugin: dev-skills
 version: 0.1.0
-status: approved
+status: implemented
 created: 2026-11-18
-updated: 2026-11-18
+updated: 2026-11-19
 design: docs/specs/dev-batch-design.md (0.2.0, approved 2026-11-18)
 issue: 44
 pr: 45
@@ -171,7 +171,7 @@ test('CLAUDE_CODE_AUTO_COMPACT_WINDOW in the environment gives a warning');
 - Consumes: `Row` (Task 2).
 - Produces:
   - `layers(tasks: [{ issue, deps }]) → { batches: Map<issue, number> } | { cycle: number[] }`: B1 = no deps inside the batch; dependencies outside the batch count as met.
-  - `dispatchable(row, rowsByIssue, mergedIssues: Set<number>) → boolean`: status `queued` or `waiting`, every dep merged.
+  - `dispatchable(row, rowsByIssue, mergedIssues: Set<number>) → boolean`: status `queued` or `waiting`, every dependency that is a row of this ledger is merged (a dependency outside the ledger counts as met).
   - `dispatchOrder(rows) → Row[]`: sorted by `(batch, row order)`.
 
 - [ ] **Step 1: Failing tests.**

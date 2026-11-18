@@ -3,9 +3,9 @@ title: "dev-batch: design"
 skill: dev-batch
 plugin: dev-skills
 version: 0.2.0
-status: approved
+status: implemented
 created: 2026-11-18
-updated: 2026-11-18
+updated: 2026-11-19
 issue: 44
 pr: 45
 history:
@@ -110,8 +110,9 @@ All paths are inside `plugins/dev-skills/skills/dev-batch/`.
 | `references/prompts.md` | The launch prompt and appended scope for each stage, and the marker comments workers write |
 | `references/accounts.md` | Accounts, usage snapshots, the status-line snippet, account choice, what `setup` writes |
 | `references/metrics.md` | The `events.jsonl` and `metrics.jsonl` record formats (§16), for the later evaluation skill |
-| `scripts/batch.mjs` | CLI entry: `args`, `start`, `run`, `tick`, `wait`, `stop`, `status`, `config`, `launch`, `clear`, `setup`, `usage-statusline` |
-| `scripts/*.mjs` | Modules: `config`, `ledger`, `facts` (GitHub), `sessions` (CLI adapters), `advance` (state machine), `accounts`, `events`, `metrics` (transcript summary) |
+| `scripts/batch.mjs` | CLI entry: `ask`, `init`, `setup`, `add`, `rm`, `launch`, `handover`, `takeover`, `pause`, `resume`, `config`, `status`, `clear`, `start`, `stop`, `run`, `tick`, `wait` |
+| `scripts/statusline.mjs` | The standalone usage status line that `setup` copies into each account, because the plugin cache path changes with every version |
+| `scripts/*.mjs` | Modules: `config`, `ledger`, `facts` (GitHub), `sessions` (CLI adapters), `advance` (state machine), `loop`, `prompts`, `accounts`, `events`, `metrics` (transcript summary), `setup` |
 | `scripts/*.test.mjs` | `node --test` suites; fixtures and stub `gh`/`claude` executables, no network |
 
 Node 20+, no new npm dependency. Commands are spawned with argument arrays, never through a shell string; GitHub text never reaches a command line except as a separate argv element of a prompt.
@@ -141,7 +142,7 @@ Usage: `/dev-batch <sub> [key=value…]` in Claude Code, `$dev-batch …` in Cod
 | `handover` | `acct=` (an alias like `A2` or a config directory), `src=` or `session=` | Validate the account, stop this loop, start a coordinator session in that account that runs `takeover` |
 | `takeover` | `src=` or `session=`, `force=yes` | Reconcile the ledger with GitHub facts, take the lease, start the loop, arm `wait` |
 | `pause` / `resume` | `src=` | Stop or restart new launches; running sessions continue |
-| `clear` | `src=` | Stop every session this batch launched whose stage is finished; report the count and the memory freed |
+| `clear` | `src=` | Stop every session this batch launched whose stage is finished; report how many it stopped |
 | `config` | `key=value…` | Change settings; the loop applies them on its next step (within 15 s). With no keys, print each setting and where it came from |
 | `status` | `src=` | Print the roll call, active sessions, pending events and the loop's health. Read-only |
 | `setup` | `acct=` (default: every configured account), `apply=no` | For each account's user settings: install the usage status line (chaining an existing one), add the `DEV_BATCH_*` values the owner chose, and raise `cleanupPeriodDays` to 365 when it is lower or unset, so transcripts survive for evaluation. Shows the change per account, writes after the ask round with a backup beside the file, and changes nothing that is already in place |
@@ -186,8 +187,8 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 <!-- /dev-batch:ledger -->
 ```
 
-- **Dispatch order.** When a slot frees, the loop takes the eligible row with the lowest Batch, then the earliest row order. Batch is a priority, not a barrier: only Deps hold a task back, so a B2 row whose dependencies are merged can start while an unrelated B1 row is still in review. Strict order comes from adding a dependency or putting rows on ⏸️ hold.
-- **Owner edits that count**, read at every tick: row order, Deps, Batch, setting a row to ⏸️ (hold), setting 👤 or ⛔ back to 🆕 (answered or unblocked: the loop re-checks the GitHub facts and redoes only the missing step, never restarting from refine), deleting a row (same as `rm`), and editing or deleting the authorization line (see §11). The loop owns Status for every other transition, and PR · head, Session and Next. Any other change inside the region — by anyone, including `/dev-merge` editing ledger rows of a tracker — is overwritten by the next write. The owner and the workers usually share one GitHub login, so the loop recognises owner edits by what changed, not by who changed it.
+- **Dispatch order.** When a slot frees, the loop takes the eligible row with the lowest Batch, then the earliest row order. Batch is a priority, not a barrier: only Deps hold a task back, so a B2 row whose dependencies (those that are rows of this ledger; one outside it counts as met) are merged can start while an unrelated B1 row is still in review. Strict order comes from adding a dependency or putting rows on ⏸️ hold.
+- **Owner edits that count**, read at every tick: row order, Deps, Batch, setting a row to ⏸️ (hold), setting a ⏸️ row to 🆕 (release), setting 👤 or ⛔ back to 🆕 (answered or unblocked: the loop re-checks the GitHub facts and redoes only the missing step, never restarting from refine), deleting a row (same as `rm`), and editing or deleting the authorization line (see §11). The loop owns Status for every other transition, and PR · head, Session and Next. Any other change inside the region — by anyone, including `/dev-merge` editing ledger rows of a tracker — is overwritten by the next write. The owner and the workers usually share one GitHub login, so the loop recognises owner edits by what changed, not by who changed it.
 - **Write only on change.** The loop edits the source only when the region's content changes; `changed` records that time. Each edit fires `issues: edited` / `discussion: edited` workflows, so there is no heartbeat write. The loop's liveness is its local lease (§10).
 - **Machine fields stay local.** Account paths, session ids and the event log live in the state directory; the ledger shows only aliases (A1, A2), session names and GitHub links. That keeps machine paths and account identities off GitHub.
 - **The Log** keeps the last 20 events, folded. The full history is the local event log.
@@ -231,9 +232,9 @@ Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in 
 
 | Stage | Status | Session name | Launch prompt | Done when (GitHub fact) | Next |
 |---|---|---|---|---|---|
-| queued | 🆕 / ⏳ | — | — | All Deps merged, row not on hold, a slot free, and no eligible row ahead of it in (Batch, row order) | refine, or implement when the issue already has a current task comment and a ready verdict |
+| queued | 🆕 / ⏳ | — | — | Every dependency that is a row of this ledger is merged (a dependency outside the ledger counts as met), row not on hold, a slot free, and no eligible row ahead of it in (Batch, row order) | refine, or implement when the issue already has a current task comment and a ready verdict |
 | refine | 🔍 | `<abbr>-i<N>r` | `/dev-refine-issue <N>` plus the decision policy (§11) | The issue's `## Execution` points to a current task comment **and** a `dev-batch:verdict` comment for that revision exists | `ready` → implement; `owner` → 👤; `not-ready` → judgment |
-| implement | 🛠️ | `<abbr>-i<N>a` (then `b`, `c` …) | The `/goal` line from the issue's `## Execution` section, verbatim | An open PR whose body closes or references #N, by the signed-in account, and the session is idle or ended | review |
+| implement | 🛠️ | `<abbr>-i<N>a` (then `2`, `3` …) | The `/goal` line from the issue's `## Execution` section, verbatim | An open PR whose body closes or references #N, by the signed-in account, and the session is idle or ended | review |
 | review | 🔄 | `<abbr>-pr<M>` | `/dev-review-pr pr=<M> <rounds> <reviewer> <writer>`; the phase model/effort settings go in the appended scope as the owner's choice, because `/dev-review-pr` accepts no extra arguments | The latest trusted `dev-review-pr` report on #M has `Verdict: approval-eligible` and its `Reviewed head` is the PR's head, or a formal approval is bound to that head | merge; `blocked` or `budget-exhausted` → judgment |
 | merge | 🔀 | `<abbr>-pr<M>m` | `/dev-merge pr=<M> issues=<N> cleanup=own -- Squash merge PR #<M> under the owner authorization quoted here: "<the authorization line>" (<link to the ledger>). Leave the dev-batch ledger region between its markers unchanged; the batch loop updates it.` | The PR is merged | ✅ |
 
@@ -269,7 +270,7 @@ Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in 
 ## 12. Accounts and usage
 
 - **Validity**: `claude auth status --json` with that `CLAUDE_CONFIG_DIR`, reading only `loggedIn`. Checked at `init`, `handover`, `takeover`, and before an account's first launch each hour.
-- **Usage source**: each account's status line runs `batch.mjs usage-statusline`, which reads the status-line JSON from stdin, writes `<config dir>/dev-batch-usage.json` (`at`, and `used_percentage` and `resets_at` for the 5-hour and 7-day windows), and prints a short usage text. `setup` installs it in each account's user settings after one confirmation, chaining an existing status line; `references/accounts.md` gives the snippet for doing it by hand.
+- **Usage source**: each account's status line runs the standalone `statusline.mjs` that `setup` installs (it is copied into the account, because the plugin cache path changes with every version), which reads the status-line JSON from stdin, writes `<config dir>/dev-batch-usage.json` (`at`, and `used_percentage` and `resets_at` for the 5-hour and 7-day windows), and prints a short usage text. `setup` installs it in each account's user settings after one confirmation, chaining an existing status line; `references/accounts.md` gives the snippet for doing it by hand.
 - **Reading a snapshot**: a window whose `resets_at` has passed counts as 0%. Otherwise the last value stands; it can only have risen since, so it is a lower bound. No snapshot at all is unknown.
 - **Choice before each launch**: the coordinator's own account when its highest window is below `usage_cap`; otherwise the known account with the lowest usage below the cap; otherwise an unknown account, one session at a time until a snapshot appears; otherwise no launch, one `accounts-at-cap` event, and the next attempt at the earliest `resets_at`.
 - **Hitting a limit anyway**: a session whose job turns `blocked` with a usage-limit message in `claude logs` marks its account cooling until the reset time it states (or one hour), and the task's stage is relaunched in another account under the next session name, continuing from the pushed branch.
@@ -278,7 +279,8 @@ Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in 
 
 - `handover acct=<x>`: an empty, unknown, logged-out or current account warns and changes nothing. Otherwise: pause launches, stop this loop, log the handover in the ledger, then start `<abbr>-<i|d><src>c<k>` in that account with `/dev-batch takeover src=<src>` and Remote Control. Worker sessions keep running in their own accounts; the new loop still sees them through the account list.
 - `takeover`: refuse while the lease holder's pid is alive on this host. A lease from another host cannot be checked, so taking it over needs `force=yes` (several machines running one batch is a non-goal). Then, for each row, compare the ledger with GitHub facts and session states and redo only the missing step: a PR with no review gets a review; an approval with no merge gets a merge; a finished session with no fact becomes an event. Nothing already done is relaunched. Then take the lease, start the loop and arm `wait`.
-- Across machines, `takeover` works from the ledger and GitHub alone; session ids from the other machine are unknown and shown as such.
+- Across machines, `takeover` works from the ledger and GitHub alone; session ids from the other machine are unknown and shown as such. On a machine without the batch's local state, `takeover src=` rebuilds it from the ledger and GitHub and records no authorization: merges wait until the owner runs `config` with the authorization again (§11). It also needs `force=yes`, because the last loop ran on another host.
+- `stop` gives the lease up only after the loop has exited; while a tick is still running it reports `loop-busy`, and the loop stops after that tick.
 
 ## 14. `clear` and memory
 
