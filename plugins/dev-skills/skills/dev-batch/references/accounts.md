@@ -34,7 +34,7 @@ Codex usage is not read in v1. A review blocked by a Codex limit surfaces as a j
 
 - A session whose job turns `blocked` with a usage-limit message in `claude logs` becomes `limited`. Its account cools until the reset time the message states, or for one hour, and a `limit` event is logged.
 - A limited session resumes by itself after its reset. So the loop launches a replacement in another account under the next session name, continuing from the pushed branch, and then stops the limited session. The relaunch keeps the attempt number: a usage limit is not a failed attempt.
-- The loop recognises a message by "hit your … limit" and reads the cooling end from "resets [<D>, ]<T> (<TZ>)". A message with no reset time, or with an unknown time zone, cools for one hour.
+- The loop recognises a message by "hit your … limit" and reads the cooling end from "resets [<D>, ]<T> (<TZ>)". Only the last 20 lines of the log count, and the last reset stated in them: a limited session resumes by itself, so an older limit line is history, and a session blocked on anything else is `session-blocked`. A message with no reset time, or with an unknown time zone, cools for one hour.
 
 The shapes seen in real transcripts, normalized: `<T>` is a clock time such as `4:50pm` or `4pm`, `<TZ>` an IANA time zone, and `<D>` a month and day such as `Nov 20`.
 

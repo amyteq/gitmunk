@@ -60,9 +60,12 @@ function zonedMs(y, mo, d, h, mi, tz) {
 }
 
 // Usage-limit message → ms until which the account is cooling (stated reset, else one hour); null for any other text.
+// Only the log's last 20 lines count, and the last stated reset in them: a limited session resumes by itself, so an
+// older limit line is history (I5).
 export function limitCooling(logText, now) {
-  if (!/hit your [^\n]*limit/i.test(logText)) return null;
-  const m = /resets (?:([A-Za-z]{3})[a-z]* (\d{1,2}), )?(\d{1,2})(?::(\d{2}))?\s*([ap])m \(([^)]+)\)/i.exec(logText);
+  const tail = logText.trimEnd().split(/\r\n|\n|\r/).slice(-20).join('\n');
+  if (!/hit your [^\n]*limit/i.test(tail)) return null;
+  const m = [...tail.matchAll(/resets (?:([A-Za-z]{3})[a-z]* (\d{1,2}), )?(\d{1,2})(?::(\d{2}))?\s*([ap])m \(([^)]+)\)/gi)].at(-1);
   if (m) {
     try {
       const [, mon, day, hh, mm = '0', ap, tz] = m;

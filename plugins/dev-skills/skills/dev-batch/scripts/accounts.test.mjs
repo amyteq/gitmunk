@@ -57,3 +57,12 @@ test('limitCooling falls back to one hour, and ignores other text', () => {
   assert.equal(limitCooling("You've hit your session limit · resets 4pm (Not/AZone)", now), now + 3600_000);
   assert.equal(limitCooling('tests failed', now), null);
 });
+test('limitCooling takes the last stated reset, and only a limit message in the last 20 lines of the log (I5)', () => {
+  const evening = Date.parse('2026-11-19T20:00:00Z');
+  const limit = (at) => `You've hit your session limit · resets ${at} (UTC)`;
+  assert.equal(limitCooling(`${limit('3pm')}\nresumed\n${limit('9pm')}\n`, evening), Date.parse('2026-11-19T21:00:00Z'));
+  // A limited session resumes by itself: an old limit line followed by other work is history, not a limit now.
+  const later = Array.from({ length: 20 }, (_, i) => `step ${i}`).join('\n');
+  assert.equal(limitCooling(`${limit('9pm')}\n${later}\nDo you want to allow this command?\n`, evening), null);
+  assert.equal(limitCooling(`${later}\n${limit('9pm')}\n\n`, evening), Date.parse('2026-11-19T21:00:00Z'));
+});
