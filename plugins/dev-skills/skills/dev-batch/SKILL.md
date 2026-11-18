@@ -126,7 +126,7 @@ Post one comment on the task's issue whose first line is `<!-- dev-batch:owner i
 **Handover** moves the coordinator to another Claude account; in Codex too the target is a Claude account.
 
 1. `B handover --batch <dir> --acct <alias or config directory>`. An empty, unknown, logged-out or current account exits `1` with a `warning` and changes nothing. Otherwise it pauses launches, stops the loop, logs the handover in the ledger, and launches `<abbr>-<i|d><N>c<k>` in that account with `/dev-batch takeover src=<url>` and Remote Control. Worker sessions keep running in their own accounts.
-2. On `loop-busy`, run `handover` again and nothing else. Never `start` after a handover, even when the result's detail suggests it: the target's `takeover` owns the loop now.
+2. On `loop-busy`, run `handover` again; the target's `takeover` starts the loop.
 3. Stop your armed `wait` (in Claude Code, stop the background command) and arm none again. Report the new coordinator's name.
 4. On `launch-failed`, the batch is paused and its loop stopped: run `B takeover` here to continue in this session, and report.
 

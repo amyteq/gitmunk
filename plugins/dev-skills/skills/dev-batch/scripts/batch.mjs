@@ -191,7 +191,7 @@ async function underLease(dir, work, { restart = true, force = false } = {}) {
   const was = busyCommand(leaseOf(dir));
   const running = loopHere(was, dir);
   if (running && !(await stopLoop(was, 60_000))) {
-    refuse('loop-busy', { detail: `the loop (pid ${was.pid}) stops after its current tick and keeps the lease until then: run this command again, then start` });
+    refuse('loop-busy', { detail: `the loop (pid ${was.pid}) stops after its current tick and keeps the lease until then: run this command again${restart ? ', then start' : ''}` });
   }
   const { alias, coordinator } = ledgerOf(dir).header;
   let lease;
