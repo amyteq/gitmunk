@@ -305,7 +305,15 @@ function init(flags) {
     authorization, rows: tasks.map((t, i) => ({ ...newRow(t, batches.get(t.issue)), n: i + 1 })), log: [],
   };
 
-  // GitHub first: a refused or failed write leaves no state directory.
+  // I6: a host sandbox may block the state directory; find that out before the first GitHub write.
+  const root = repoStateDir({ owner, repo: name }, env);
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, `.probe-${process.pid}`), '');
+    rmSync(join(root, `.probe-${process.pid}`));
+  } catch (e) { refuse('state-unwritable', { detail: `${e.message}: run the helper outside the host's sandbox` }); }
+
+  // GitHub first: a refused or failed write leaves no batch directory.
   const source = readSource({ repo, src, gh });
   let movedToComment;
   if (TRUSTED.has(source.association)) {

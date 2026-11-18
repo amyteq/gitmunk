@@ -64,9 +64,9 @@ function world({ association = 'OWNER', body = 'Intro text.\n', accounts = ['A1'
     PATH: withPath(bin), HOME: root, XDG_STATE_HOME: join(root, 'state'), CLAUDE_CONFIG_DIR: accts[0].dir,
     DEV_BATCH_ACCOUNTS: JSON.stringify(accts.map((a) => a.dir)), STUB_FIXTURE: file, STUB_LOG: log };
   const w = {
-    root, accts, dir: join(root, 'state', 'dev-batch', 'example-org', 'example-repo', 'i40'),
+    root, accts, env, dir: join(root, 'state', 'dev-batch', 'example-org', 'example-repo', 'i40'),
     cli: (...args) => {
-      const r = spawnSync(process.execPath, [BATCH, ...args], { cwd: root, env, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [BATCH, ...args], { cwd: root, env: w.env, encoding: 'utf8' });
       let out = null;
       try { out = JSON.parse(r.stdout); } catch { /* checked by the caller */ }
       return { code: r.status, out, text: r.stdout + r.stderr };
@@ -134,6 +134,16 @@ test("init on an untrusted author's issue writes a comment", () => {
   assert.deepEqual(json(join(dir, 'settings.json')).src, { kind: 'comment', id: 900, parent: { kind: 'issue', number: 40 } });
   assert.equal(existsSync(w.dir), false);
   assert.equal(w.cli('status', 'src=40').out.dir, dir); // the issue still names the batch
+});
+
+test('init refuses state-unwritable before any GitHub write when the state directory cannot be written (I6)', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'not-a-dir'), '');
+  w.env = { ...w.env, XDG_STATE_HOME: join(w.root, 'not-a-dir') };
+  const r = w.init();
+  assert.deepEqual([r.code, r.out?.error], [1, 'state-unwritable'], r.text);
+  assert.equal(w.body(), 'Intro text.\n');
+  assert.deepEqual([w.calls('gh').filter((c) => c.argv.includes('PATCH') || c.argv.includes('POST')), w.get().comments], [[], []]);
 });
 
 test('init with no tasks writes nothing', () => {

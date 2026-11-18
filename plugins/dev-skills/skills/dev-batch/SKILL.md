@@ -49,7 +49,7 @@ Your own calls: `B start` and `B stop [--force]` for the loop, `B wait` for even
 
 **`loop-busy`.** `add`, `rm`, `launch` and `tick` stop the loop for a moment and restart it. When one exits `1` with `loop-busy`, the loop stops after its current tick and nothing restarts it: run the command again, then `B start`. `B stop` answers `loop-busy` while the loop is mid-tick: the loop still exits after that tick and only then releases its lease, so no second loop starts beside it.
 
-**Host sandbox.** Commands that start or stop the loop or sessions (`start`, `launch`, `stop`, `clear`, `handover`, `takeover`) may need the host's normal escalation. Request it once, and report a refusal instead of working around it.
+**Host sandbox.** Run every `B` call except `ask` outside the host's sandbox, with its normal escalation: the state directory is outside the workspace, the lease needs the host's process table, and the loop and the workers are launched from there. Request it once, and report a refusal instead of working around it. `init` refuses with `state-unwritable` before it writes to GitHub when it cannot write the state directory.
 
 ## Authority
 
