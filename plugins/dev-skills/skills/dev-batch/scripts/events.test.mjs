@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
@@ -64,16 +64,32 @@ test('lease: a live pid refuses, a dead pid on the same host is reclaimed, anoth
   assert.equal(existsSync(join(dir, 'lease.json')), false);
 });
 
-test('lease race: the taker whose lease was overwritten before its re-read gets held', () => {
+test('lease: a second taker arriving inside the first one\'s critical section is busy, then sees the holder', () => {
   const dir = tempDir();
   const base = { host: 'h1', alias: 'A1', coordinator: 'x-i1c' };
-  writeFileSync(join(dir, 'lease.json'), JSON.stringify({ ...base, pid: dead() }));
   let b;
-  // A's pid is dead, so B treats A's fresh lease as reclaimable and writes over it before A re-reads.
-  const a = takeLease(dir, { ...base, pid: dead(), afterWrite: () => { b = takeLease(dir, { ...base, pid: process.pid }); } });
-  assert.equal(b.ok, true);
-  assert.equal(a.held.pid, process.pid);
-  assert.equal(a.ok, undefined);
+  const a = takeLease(dir, { ...base, pid: process.pid, insideLock: () => { b = takeLease(dir, { ...base, pid: dead() }); } });
+  assert.equal(a.ok, true);
+  assert.deepEqual(b, { busy: true });
+  assert.equal(takeLease(dir, { ...base, pid: dead() }).held.nonce, a.nonce);
+});
+
+test('lease: a stale lock directory left by a crashed taker is removed', () => {
+  const dir = tempDir();
+  mkdirSync(join(dir, 'lease.lock'));
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(join(dir, 'lease.lock'), old, old);
+  assert.equal(takeLease(dir, { pid: process.pid, host: 'h1', alias: 'A1', coordinator: 'c' }).ok, true);
+  assert.equal(existsSync(join(dir, 'lease.lock')), false);
+});
+
+test('wait skips an unreadable pending file and still delivers the others', async () => {
+  const dir = tempDir();
+  mkdirSync(join(dir, 'pending'));
+  writeFileSync(join(dir, 'pending', '0000000000000-00000000.json'), '{"ty');
+  queueJudgment(dir, { type: 'stall', task: 'i1' });
+  const r = await wait(dir, { timeoutSeconds: 1, pollMs: 10 });
+  assert.deepEqual(r.events.map((e) => e.task), ['i1']);
 });
 
 test('releaseLease by a non-holder leaves the lease', () => {
