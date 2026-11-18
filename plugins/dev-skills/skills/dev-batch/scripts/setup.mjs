@@ -14,7 +14,7 @@ export function planSetup({ settings, configDir, env = {} }) {
   let chain;
   if (next.statusLine?.command !== command) {
     if (typeof next.statusLine?.command === 'string' && !next.statusLine.command.includes(MARK)) chain = next.statusLine.command;
-    next.statusLine = { type: 'command', command };
+    next.statusLine = { ...next.statusLine, type: 'command', command };
     changes.push(chain ? `statusLine: dev-batch usage status line, chaining "${chain}"` : 'statusLine: dev-batch usage status line');
   }
   for (const [k, v] of Object.entries(env)) {

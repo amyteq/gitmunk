@@ -53,3 +53,9 @@ test('no key is removed and key order is kept', () => {
   assert.deepEqual(Object.keys(next), ['b', 'env', 'a', 'statusLine', 'cleanupPeriodDays']);
   assert.deepEqual(Object.keys(next.env), ['X', 'DEV_BATCH_MODEL']);
 });
+
+test('extra statusLine keys survive', () => {
+  const { next } = planSetup({ settings: { statusLine: { type: 'command', command: 'echo hi', padding: 2 } }, configDir: '/c', env: {} });
+  assert.equal(next.statusLine.padding, 2);
+  assert.equal(next.statusLine.command, 'node "/c/dev-batch-statusline.mjs"');
+});
