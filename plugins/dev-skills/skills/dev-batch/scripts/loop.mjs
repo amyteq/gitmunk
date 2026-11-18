@@ -10,7 +10,7 @@ import { appendEvent, pendingCount, pidAlive, queueJudgment, releaseLease, takeL
 import { GithubUnavailable, fetchFacts, issueFacts, readSource, sourceUrl, writeSource } from './facts.mjs';
 import { findRegion, ownerEdits, parseLedger, renderLedger, spliceLedger } from './ledger.mjs';
 import { batchSummary, sessionRecord, summarizeTranscript } from './metrics.mjs';
-import { appendedScope, nextFreeName, sessionName, stagePrompt } from './prompts.mjs';
+import { appendedScope, grantsMerge, nextFreeName, sessionName, stagePrompt } from './prompts.mjs';
 import * as sessions from './sessions.mjs';
 
 const TICK_MS = 300_000; // §8: the loop interval
@@ -149,6 +149,7 @@ export function tick(ctx) {
   // 2. Owner edits, and the authorization line as recorded at init or config (§11).
   const rows = applyOwnerEdits(base.rows, ownerEdits(seen, current), current, ev);
   const authorized = !!s.authorization && current.authorization?.trim() === s.authorization.trim();
+  const decide = grantsMerge(s.authorization) ? s : { ...s, merge: 'off' }; // I1: merge=auto only under the line's merge clause
 
   // 3. Facts of every active row, one query.
   const active = rows.filter((r) => !FINISHED.has(r.status) && r.status !== 'hold');
@@ -205,7 +206,7 @@ export function tick(ctx) {
     const f = facts.get(row.issue);
     if (!f) return { row, batch: row.batch, actions: [], next: row };
     const mergeLock = !holder ? 'free' : holder.key === key && holder.issue === row.issue ? 'mine' : 'held';
-    let r = advance({ row, facts: f, sessions: records.filter((x) => x.issue === row.issue), settings: s, authorized, mergeLock, now: iso(now) });
+    let r = advance({ row, facts: f, sessions: records.filter((x) => x.issue === row.issue), settings: decide, authorized, mergeLock, now: iso(now) });
     // Deps unmet: nothing launches, but facts such as a hand merge still apply.
     if ((row.status === 'queued' || row.status === 'waiting') && !dispatchable(row, byIssue, merged) && r.status !== 'merged'
       && r.actions.some((a) => a.type === 'launch' || a.kind === 'authorization-missing')) {

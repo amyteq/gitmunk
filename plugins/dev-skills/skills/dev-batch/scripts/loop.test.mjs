@@ -13,7 +13,7 @@ const LOGIN = 'bot-user';
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
 const T = (h, m = 0) => Date.parse(`2026-11-19T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00Z`);
-const AUTH = "Owner authorization (2026-11-19 09:00 UTC, coordinator session `er-i40c`, owner's invocation `/dev-batch init src=40`): for every task in this ledger, refine, implement, review and merge.";
+const AUTH = "Owner authorization (2026-11-19 09:00 UTC, coordinator session `er-i40c`, owner's invocation `/dev-batch init src=40`): for every task in this ledger, refine, implement, review, and squash merge each approval-eligible PR.";
 const FIXTURE = readFileSync(new URL('./fixtures/facts-base.json', import.meta.url), 'utf8');
 const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
 const lines = (path) => (existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
@@ -373,6 +373,18 @@ test('owner revokes the authorization line', () => {
   assert.ok(!w.body.includes('Owner authorization')); // the loop never writes a revoked line back
   w.body = w.body.replace('Roll call:', `${AUTH}\nRoll call:`); // restored
   assert.deepEqual(w.tick(T(10, 10)).launched, ['er-i41a']);
+});
+
+test('merge=auto under a line without the merge clause waits for merge authorization (I1)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50' })] });
+  const line = AUTH.replace(', and squash merge each approval-eligible PR.', '.');
+  writeFileSync(join(w.dir, 'settings.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(w.dir, 'settings.json'), 'utf8')), authorization: line }));
+  w.body = w.body.replace(AUTH, line);
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true } };
+  w.agent('er-pr50', { stage: 'review', issue: 41, pr: 50 });
+  const r = w.tick(T(10));
+  assert.deepEqual([r.launched, existsSync(w.lock)], [[], false]);
+  assert.deepEqual(w.ledger().rows.map((x) => [x.status, x.next]), [['owner', 'waiting for merge authorization']]);
 });
 
 test('owner edits: order, hold and a deleted row', () => {

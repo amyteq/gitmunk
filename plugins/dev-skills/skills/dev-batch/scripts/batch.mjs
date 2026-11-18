@@ -16,7 +16,7 @@ import * as events from './events.mjs';
 import { GithubUnavailable, createComment, discussionCommentNode, fetchFacts, issueFacts, readSource, sourceKind, sourceUrl, writeSource } from './facts.mjs';
 import { findRegion, foldEarlierList, parseLedger, renderLedger, spliceLedger } from './ledger.mjs';
 import * as loop from './loop.mjs';
-import { appendedScope, coordinatorName, nextFreeName, sessionName, stagePrompt } from './prompts.mjs';
+import { appendedScope, coordinatorName, grantsMerge, nextFreeName, sessionName, stagePrompt } from './prompts.mjs';
 import * as sessions from './sessions.mjs';
 import { applySetup, planSetup } from './setup.mjs';
 
@@ -230,6 +230,12 @@ function settingArgs(args) {
   return out;
 }
 const authLine = (text) => (text.startsWith('Owner authorization') && !/[\r\n]/.test(text) ? text : bad('--authorization must be one line that starts with "Owner authorization"'));
+// I1: merge=auto only under a line with the merge clause; with no line at all nothing launches anyway.
+function mergeGate({ merge, authorization }) {
+  if (merge === 'auto' && authorization && !grantsMerge(authorization)) {
+    refuse('merge-not-authorized', { detail: 'merge=auto needs the merge clause ("squash merge each PR that …") in the owner\'s authorization line: record a line with it, or use merge=off' });
+  }
+}
 const taskFlag = (value) => (/^\d+$/.test(value ?? '') && Number(value) > 0 ? Number(value) : bad('--task must be an issue number'));
 
 // ---- Sub-commands ----
@@ -281,6 +287,7 @@ function init(flags) {
   const { values, sources, warnings } = resolveSettings(settingArgs(args), env);
   const extra = args.extra ? String(args.extra) : null;
   const authorization = flags.authorization === undefined ? null : authLine(flags.authorization);
+  mergeGate({ merge: values.merge, authorization });
   if (!tasks.length) refuse('no-tasks', { detail: 'no tasks: nothing was written' });
   const batches = batchesOf(tasks);
 
@@ -375,6 +382,7 @@ function launchStage(dir, flags) {
     const base = ledgerOf(dir);
     const row = base.rows.find((r) => r.issue === issue) ?? refuse('no-such-task', { detail: `#${issue} is not a row of this ledger` });
     if (stage === 'merge' && s.merge !== 'auto') refuse('merge-off', { detail: 'merge=off: the owner merges by hand' });
+    if (stage === 'merge') mergeGate(s);
     const records = readJson(join(dir, 'sessions.json'), []);
     const old = records.filter((r) => r.issue === issue && r.stage === stage);
     if (old.some((r) => r.state === 'working')) refuse('session-working', { detail: `${old.findLast((r) => r.state === 'working').name} is still working` });
@@ -564,10 +572,9 @@ function config(dir, flags, words) {
     s.sources[k] = 'config';
   }
   if (extra !== undefined) s.extra = extra || null;
-  if (flags.authorization !== undefined) {
-    s.authorization = authLine(flags.authorization);
-    setAuthorizationLine(s);
-  }
+  if (flags.authorization !== undefined) s.authorization = authLine(flags.authorization);
+  if (args.merge !== undefined || flags.authorization !== undefined) mergeGate(s);
+  if (flags.authorization !== undefined) setAuthorizationLine(s);
   saveSettings(dir, s);
   return { changed: [...Object.keys(args), ...(extra === undefined ? [] : ['extra']), ...(flags.authorization === undefined ? [] : ['authorization'])], ...show() };
 }

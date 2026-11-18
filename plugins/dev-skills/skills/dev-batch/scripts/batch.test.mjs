@@ -11,7 +11,7 @@ import { stubBin, tempDir, withPath } from './test-helpers.mjs';
 const BATCH = fileURLToPath(new URL('./batch.mjs', import.meta.url));
 const REPO = 'example-org/example-repo';
 const LOGIN = 'bot-user';
-const AUTH = "Owner authorization (2026-11-19 09:00 UTC, coordinator session `er-i40c`, owner's invocation `/dev-batch init src=40`): for every task in this ledger, refine, implement, review and merge.";
+const AUTH = "Owner authorization (2026-11-19 09:00 UTC, coordinator session `er-i40c`, owner's invocation `/dev-batch init src=40`): for every task in this ledger, refine, implement, review, and squash merge each approval-eligible PR.";
 const ISSUE = `repos/${REPO}/issues/40`;
 const PLAIN = { body: 'Plain issue.', comments: { totalCount: 0, nodes: [] }, closedByPullRequestsReferences: { nodes: [] }, timelineItems: { nodes: [] } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -200,6 +200,30 @@ test('config prints sources', () => {
   assert.equal(w.ledger().authorization, again);
   assert.equal(json(w.file('settings.json')).authorization, again);
   assert.equal(w.cli('config', '--authorization', 'merge everything').code, 2);
+});
+
+test('merge=auto needs the merge clause in the authorization line: init, config and launch refuse it (I1)', () => {
+  const w = world();
+  const line = AUTH.replace(', and squash merge each approval-eligible PR.', '.');
+  const init = (settings) => w.cli('init', '--src', '40', '--tasks', w.tasks([{ issue: 41, title: 'Export', deps: [] }]), '--settings', settings, '--authorization', line);
+  const refused = init('{}');
+  assert.deepEqual([refused.code, refused.out.error], [1, 'merge-not-authorized'], refused.text);
+  assert.equal(w.body(), 'Intro text.\n');
+  assert.equal(existsSync(join(w.root, 'state')), false);
+
+  assert.equal(init('{"merge":"off"}').code, 0);
+  assert.equal(w.cli('config', 'merge=auto').out.error, 'merge-not-authorized');
+  assert.equal(json(w.file('settings.json')).merge, 'off');
+  assert.equal(w.cli('config', 'merge=auto', '--authorization', AUTH).code, 0); // granted with the clause in one call
+  assert.equal(w.cli('config', '--authorization', line).out.error, 'merge-not-authorized');
+  assert.deepEqual([json(w.file('settings.json')).authorization, w.ledger().authorization], [AUTH, AUTH]);
+
+  // A batch whose recorded line lacks the clause (edited by hand) never launches a merge.
+  w.set((x) => { x.sources[ISSUE].body = x.sources[ISSUE].body.replace(AUTH, line); });
+  writeFileSync(w.file('settings.json'), JSON.stringify({ ...json(w.file('settings.json')), authorization: line }));
+  const launch = w.cli('launch', '--task', '41', '--stage', 'merge');
+  assert.deepEqual([launch.code, launch.out.error], [1, 'merge-not-authorized'], launch.text);
+  assert.deepEqual(w.calls('claude', '--bg'), []);
 });
 
 test('start refuses while the lease is held', () => {

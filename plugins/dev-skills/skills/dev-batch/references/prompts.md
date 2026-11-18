@@ -59,7 +59,7 @@ One line, starting with `Owner authorization`; the helper refuses anything else:
 Owner authorization (<YYYY-MM-DD HH:MM> UTC, coordinator session `<coordinator name>`, owner's invocation `<the owner's /dev-batch invocation, verbatim>`): for every task in this ledger, refine the issue and post its task and verdict comments; implement on a task branch, commit, push it and open a PR; run `/dev-review-pr` with its review comments and fix pushes to that PR; squash merge each PR that `/dev-review-pr` leaves approval-eligible at its head, with `/dev-merge`'s closeout and `cleanup=own`.
 ```
 
-With `merge=off`, end the line after "fix pushes to that PR." Record it with `init --authorization` or `config --authorization`, and only when the owner's own message invoked that sub-command. Every worker's scope and every merge prompt quote it, so each action traces to one owner instruction.
+With `merge=off`, end the line after "fix pushes to that PR." A merge needs the clause "squash merge each PR …": under a line without it the loop leaves an approval-eligible row at 👤 "waiting for merge authorization" even with `merge=auto`, and `init`, `config` and `launch --stage merge` refuse `merge=auto` with `merge-not-authorized`. Record it with `init --authorization` or `config --authorization`, and only when the owner's own message invoked that sub-command. Every worker's scope and every merge prompt quote it, so each action traces to one owner instruction.
 
 ## Markers
 

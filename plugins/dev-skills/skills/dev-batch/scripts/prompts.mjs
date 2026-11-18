@@ -24,6 +24,9 @@ export function nextFreeName(base, takenNames) {
 export const DECISION_POLICY =
   'Decision policy: for a decision that can be reversed and stays inside the issue\'s scope, take the recommended option, record it on the issue as "default in use until the owner changes it", and continue. Stop with state=owner for a decision that deletes data, spends money, touches security or credentials, deploys, or widens the scope.';
 
+// §11: the authorization line's merge clause ("squash merge each PR that …"); a line without it never merges.
+export const grantsMerge = (line) => /\bsquash merge\b/i.test(line ?? '');
+
 export function stagePrompt({ stage, issue, pr, goal, settings = {}, authorization, ledgerUrl }) {
   switch (stage) {
     case 'refine': return `/dev-refine-issue ${issue}\n\n${DECISION_POLICY}`;
