@@ -145,10 +145,13 @@ export function tick(ctx) {
   // ledger.next.md holds rows decided but not yet written, so a failed write is never decided (and raised) twice.
   const nextText = read(at('ledger.next.md'));
   const base = nextText ? parseLedger(nextText).ledger : last || current;
+  // ledger.seen.md is the region those rows were decided from: diffing against it applies each owner edit once.
+  const seenText = nextText && read(at('ledger.seen.md'));
+  const seen = seenText ? parseLedger(seenText, last ? { previous: last } : {}).ledger : last || current;
   for (const p of problems) ev({ type: 'ledger-unreadable-row', detail: `row ${p.row}: ${p.reason}` });
 
   // 2. Owner edits, and the authorization line as recorded at init or config (§11).
-  const rows = applyOwnerEdits(base.rows, ownerEdits(last || current, current), current, ev);
+  const rows = applyOwnerEdits(base.rows, ownerEdits(seen, current), current, ev);
   const authorized = !!s.authorization && current.authorization?.trim() === s.authorization.trim();
 
   // 3. Facts of every active row, one query.
@@ -365,10 +368,11 @@ export function tick(ctx) {
     rows: newRows,
     log: [...base.log, ...logLines.map((event) => ({ time: iso(now).slice(5, 16).replace('T', ' '), event }))].slice(-20),
   };
-  const changed = renderLedger(ledger) !== lastText || problems.length > 0;
+  const changed = !!nextText || renderLedger(ledger) !== lastText || problems.length > 0; // decisions not yet written are always written
   if (changed) {
     ledger.header.changed = `${iso(now).slice(0, 16).replace('T', ' ')} UTC`;
     const text = renderLedger(ledger);
+    writeAtomic(at('ledger.seen.md'), body.slice(found.start, found.end));
     writeAtomic(at('ledger.next.md'), text);
     const written = guard(() => {
       const fresh = readSource({ repo: s.repo, src: s.src, gh }).body;
@@ -383,6 +387,7 @@ export function tick(ctx) {
     if (written.value) {
       writeAtomic(at('ledger.last.md'), text);
       rmSync(at('ledger.next.md'), { force: true });
+      rmSync(at('ledger.seen.md'), { force: true });
       out.wrote = true;
     }
   }

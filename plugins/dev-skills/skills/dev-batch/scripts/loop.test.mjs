@@ -103,6 +103,8 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
   w.ctx = (now) => ({ dir, settings: JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')), gh: w.gh, claude: w.claude, now, host: 'test-host', pid: process.pid });
   w.tick = (now) => tick(w.ctx(now));
   w.ledger = () => { const r = findRegion(w.body); return parseLedger(w.body.slice(r.start, r.end)).ledger; };
+  // The owner edits the region in the body: `fn` changes the parsed ledger, which is rendered back in place.
+  w.edit = (fn) => { const { start, end } = findRegion(w.body); const l = w.ledger(); fn(l); w.body = w.body.slice(0, start) + renderLedger(l, { eol: '\n' }) + w.body.slice(end); };
   w.status = () => Object.fromEntries(w.ledger().rows.map((r) => [r.issue, r.status]));
   w.sessions = () => JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf8'));
   w.events = () => lines(join(dir, 'events.jsonl'));
@@ -180,13 +182,7 @@ test('concurrent body edit survives (Review Focus 2)', () => {
 
 test('an owner edit inside the region during the tick is applied next tick, not overwritten', () => {
   const w = world({ rows: [row(1, 41), row(2, 43)], cap: 1 });
-  w.onRead = (n) => {
-    if (n !== 2) return;
-    const { start, end } = findRegion(w.body);
-    const held = w.ledger();
-    held.rows[1].status = 'hold'; // the owner holds #43 between the tick's two reads
-    w.body = w.body.slice(0, start) + renderLedger(held, { eol: '\n' }) + w.body.slice(end);
-  };
+  w.onRead = (n) => { if (n === 2) w.edit((l) => { l.rows[1].status = 'hold'; }); }; // the owner holds #43 between the tick's two reads
   const r = w.tick(T(10));
   assert.deepEqual([r.launched, r.wrote, w.edits.length], [['er-i41r'], false, 0]);
   assert.equal(w.status()[43], 'hold');
@@ -196,6 +192,43 @@ test('an owner edit inside the region during the tick is applied next tick, not 
   assert.deepEqual(w.status(), { 41: 'refining', 43: 'hold' });
   assert.equal(w.ledger().rows[0].session, 'er-i41r');
   assert.deepEqual(w.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail), ['hold #43']);
+});
+
+test('an owner edit seen at read 1 and reverted before read 2 ends as the owner left it', () => {
+  const w = world({ rows: [row(1, 41, { status: 'refining', session: 'er-i41r' }), row(2, 43)], cap: 1 });
+  w.agent('er-i41r', { state: 'working', stage: 'refine', issue: 41 });
+  w.edit((l) => { l.rows[1].status = 'hold'; });
+  w.onRead = (n) => { if (n === 2) w.edit((l) => { l.rows[1].status = 'queued'; }); };
+  assert.equal(w.tick(T(9)).wrote, false);
+  // Same minute and no Log line: the result renders exactly as ledger.last.md, and is still written to clear the saved decisions.
+  assert.equal(w.tick(T(9)).wrote, true);
+  assert.equal(existsSync(join(w.dir, 'ledger.next.md')), false);
+  w.tick(T(9, 5));
+  assert.deepEqual(w.status(), { 41: 'refining', 43: 'queued' });
+  assert.deepEqual(w.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail), ['hold #43', 'release #43']);
+});
+
+test('an owner edit seen at read 1 is applied once across a skipped write', () => {
+  const skipped = world({ rows: [row(1, 41, { status: 'blocked', next: 'refine: not ready' }), row(2, 43)], cap: 1 });
+  skipped.edit((l) => { l.rows[0].status = 'queued'; }); // the owner answers #41 before the tick
+  skipped.onRead = (n) => { if (n === 2) skipped.edit((l) => { l.rows[1].status = 'hold'; }); };
+  skipped.tick(T(10));
+  assert.equal(skipped.tick(T(10, 5)).wrote, true);
+  assert.deepEqual(skipped.status(), { 41: 'refining', 43: 'hold' });
+  assert.deepEqual(skipped.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail), ['answered #41', 'hold #43']);
+  assert.deepEqual(skipped.pending().map((e) => e.type), ['owner-reply']);
+});
+
+test('an owner edit seen before a failed write is applied once', () => {
+  const failed = world({ rows: [row(1, 41, { status: 'blocked', next: 'refine: not ready' })] });
+  failed.edit((l) => { l.rows[0].status = 'queued'; });
+  failed.writeFails = true;
+  failed.tick(T(10));
+  failed.writeFails = false;
+  assert.equal(failed.tick(T(10, 5)).wrote, true);
+  assert.equal(failed.status()[41], 'refining');
+  assert.deepEqual(failed.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail), ['answered #41']);
+  assert.deepEqual(failed.pending().map((e) => e.type), ['owner-reply']);
 });
 
 test('an unreadable account (Review Focus 3)', () => {
