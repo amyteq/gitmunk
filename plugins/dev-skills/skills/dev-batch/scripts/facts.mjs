@@ -1,6 +1,9 @@
 // GitHub facts per task (§9): one GraphQL query per tick, turned into the per-issue facts `advance` reads.
 // Reuses selectTask (refine) and reviewEvidence (merge); GitHub text is data and never reaches a command line
-// except as a GraphQL variable.
+// except as a GraphQL variable. Also reads and writes the body the ledger lives in.
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { findAutoRegions, selectTask } from '../../dev-refine-issue/scripts/check-refinement.mjs';
 import { reviewEvidence } from '../../dev-merge/scripts/check-merge.mjs';
 
@@ -36,6 +39,39 @@ const run = (gh, args) => {
   if (r.code !== 0) throw new GithubUnavailable(`gh ${args.slice(0, 2).join(' ')} exited ${r.code}: ${String(r.stderr).trim()}`);
   try { return JSON.parse(r.stdout); } catch { throw new GithubUnavailable('gh returned unreadable JSON'); }
 };
+const graphql = (gh, args) => {
+  const res = run(gh, ['api', 'graphql', ...args]);
+  if (res.errors?.length) throw new GithubUnavailable(`GraphQL error: ${JSON.stringify(res.errors).slice(0, 300)}`);
+  return res.data;
+};
+
+// ---- The source the ledger lives in (§6): an issue body, a discussion body, or an issue comment ----
+
+const restPath = (repo, src) => (src.kind === 'comment' ? `repos/${repo}/issues/comments/${src.id}` : `repos/${repo}/issues/${src.number}`);
+const READ_DISCUSSION = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { id body } } }';
+const UPDATE_DISCUSSION = 'mutation($id: ID!, $body: String!) { updateDiscussion(input: { discussionId: $id, body: $body }) { discussion { id } } }';
+
+/** → { body } for an issue or comment, { body, id } for a discussion (id is its node id). Throws GithubUnavailable. */
+export function readSource({ repo, src, gh }) {
+  if (src.kind !== 'discussion') return { body: run(gh, ['api', restPath(repo, src)]).body ?? '' };
+  const [owner, name] = repo.split('/');
+  const d = graphql(gh, ['-f', `query=${READ_DISCUSSION}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${src.number}`])?.repository?.discussion;
+  if (!d) throw new GithubUnavailable(`discussion #${src.number} not found`);
+  return { body: d.body ?? '', id: d.id };
+}
+
+/** Replaces the whole body. It reaches gh as `body=@<file>` from a private temporary directory, never as argv text. */
+export function writeSource({ repo, src, body, gh }) {
+  const tmp = mkdtempSync(join(tmpdir(), 'dev-batch-body-'));
+  const file = join(tmp, 'body.md');
+  try {
+    writeFileSync(file, body);
+    if (src.kind !== 'discussion') run(gh, ['api', '-X', 'PATCH', restPath(repo, src), '-F', `body=@${file}`]);
+    else graphql(gh, ['-f', `query=${UPDATE_DISCUSSION}`, '-f', `id=${readSource({ repo, src, gh }).id}`, '-F', `body=@${file}`]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 /** raw = { repo, repository: { issue_<N>: node }, extra: { <N>: REST comments } }; throws GithubUnavailable. */
 export function fetchFacts({ repo, issues, gh }) {

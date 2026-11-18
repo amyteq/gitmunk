@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { factsQuery, fetchFacts, issueFacts, GithubUnavailable } from './facts.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { factsQuery, fetchFacts, issueFacts, readSource, writeSource, GithubUnavailable } from './facts.mjs';
 
 const REPO = 'example-org/example-repo';
 const LOGIN = 'bot-user';
@@ -117,4 +117,68 @@ test('fetchFacts passes variables with -f, paginates an overflowing comment list
   assert.equal(raw.extra[41][0].id, 7);
   assert.throws(() => fetchFacts({ repo: REPO, issues: [41], gh: () => ({ code: 1, stdout: '', stderr: 'rate limit' }) }), GithubUnavailable);
   assert.throws(() => fetchFacts({ repo: REPO, issues: [41], gh: () => ({ code: 0, stdout: '{"errors":[{"message":"boom"}]}', stderr: '' }) }), GithubUnavailable);
+});
+
+// ---- The ledger's source (R8): issue body, discussion body or issue comment ----
+
+const BODY = 'Intro `x` $(rm -rf /) "quoted"\n<!-- dev-batch:ledger v=1 -->\n…\n<!-- /dev-batch:ledger -->\n';
+const ok = (value) => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
+// A gh stub that records each call, and the file content of every `body=@<file>` field at call time.
+function recorder(reply) {
+  const calls = [];
+  const gh = (args) => {
+    const field = args.find((a) => a.startsWith('body=@'));
+    const file = field?.slice('body=@'.length);
+    calls.push({ args, file, content: file ? readFileSync(file, 'utf8') : null });
+    return reply(args);
+  };
+  return { gh, calls };
+}
+
+test('readSource reads an issue body, an issue comment and a discussion', () => {
+  const issue = recorder(() => ok({ body: 'issue text' }));
+  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'issue', number: 40 }, gh: issue.gh }), { body: 'issue text' });
+  assert.deepEqual(issue.calls[0].args, ['api', `repos/${REPO}/issues/40`]);
+
+  const comment = recorder(() => ok({ body: 'comment text' }));
+  assert.equal(readSource({ repo: REPO, src: { kind: 'comment', id: 77, parent: { kind: 'issue', number: 40 } }, gh: comment.gh }).body, 'comment text');
+  assert.deepEqual(comment.calls[0].args, ['api', `repos/${REPO}/issues/comments/77`]);
+
+  const disc = recorder(() => ok({ data: { repository: { discussion: { id: 'D_1', body: 'discussion text' } } } }));
+  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'discussion', number: 9 }, gh: disc.gh }), { body: 'discussion text', id: 'D_1' });
+  assert.deepEqual(disc.calls[0].args.slice(-6), ['-f', 'owner=example-org', '-f', 'name=example-repo', '-F', 'number=9']);
+});
+
+test('writeSource passes the body through a temporary file, never as argv text', () => {
+  const issue = recorder(() => ok({}));
+  writeSource({ repo: REPO, src: { kind: 'issue', number: 40 }, body: BODY, gh: issue.gh });
+  assert.deepEqual(issue.calls[0].args.slice(0, 5), ['api', '-X', 'PATCH', `repos/${REPO}/issues/40`, '-F']);
+  assert.equal(issue.calls[0].content, BODY);
+  assert.ok(!issue.calls[0].args.some((a) => a.includes('Intro')));
+  assert.equal(existsSync(issue.calls[0].file), false); // removed after the call
+
+  const comment = recorder(() => ok({}));
+  writeSource({ repo: REPO, src: { kind: 'comment', id: 77 }, body: BODY, gh: comment.gh });
+  assert.equal(comment.calls[0].args[3], `repos/${REPO}/issues/comments/77`);
+  assert.equal(comment.calls[0].content, BODY);
+});
+
+test('writeSource updates a discussion with updateDiscussion and its node id', () => {
+  const disc = recorder((args) => (args.some((a) => a.includes('updateDiscussion')) ? ok({ data: { updateDiscussion: { discussion: { id: 'D_1' } } } })
+    : ok({ data: { repository: { discussion: { id: 'D_1', body: 'old' } } } })));
+  writeSource({ repo: REPO, src: { kind: 'discussion', number: 9 }, body: BODY, gh: disc.gh });
+  const write = disc.calls.at(-1);
+  assert.match(write.args.find((a) => a.startsWith('query=')), /updateDiscussion\(input: \{ discussionId: \$id, body: \$body \}\)/);
+  assert.ok(write.args.includes('id=D_1'));
+  assert.equal(write.content, BODY);
+  assert.ok(!write.args.some((a) => a.includes('Intro')));
+});
+
+test('a gh failure or a GraphQL error reading or writing the source throws GithubUnavailable', () => {
+  const down = () => ({ code: 1, stdout: '', stderr: 'HTTP 502' });
+  const errors = () => ok({ errors: [{ message: 'boom' }] });
+  assert.throws(() => readSource({ repo: REPO, src: { kind: 'issue', number: 40 }, gh: down }), GithubUnavailable);
+  assert.throws(() => readSource({ repo: REPO, src: { kind: 'discussion', number: 9 }, gh: errors }), GithubUnavailable);
+  assert.throws(() => writeSource({ repo: REPO, src: { kind: 'issue', number: 40 }, body: BODY, gh: down }), GithubUnavailable);
+  assert.throws(() => writeSource({ repo: REPO, src: { kind: 'discussion', number: 9 }, body: BODY, gh: errors }), GithubUnavailable);
 });
