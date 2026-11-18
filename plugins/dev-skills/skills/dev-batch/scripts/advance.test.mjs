@@ -43,7 +43,8 @@ const URL = 'https://github.com/example-org/example-repo/issues/41#issuecomment-
 const DECISION = `[decision on #41](${URL})`;
 const QUESTION = { ownerQuestion: { url: URL, at: T(10, 30) } };
 const verdict = (state) => ({ task: { action: 'use-current', revision: 2 }, verdict: { revision: 2, state, at: T(10, 30) } });
-const READY = verdict('ready');
+const GOAL = '/goal Execute from https://github.com/example-org/example-repo/issues/41#issuecomment-1.';
+const READY = { ...verdict('ready'), goal: GOAL };
 const prFacts = (over = {}) => ({ ...READY, pr: { number: 55, state: 'OPEN', merged: false, head: `9b0e7d3${'a'.repeat(33)}`, checks: 'done',
   evidence: { ok: false }, round: null, phase: null, reviewEnded: null, lastActivity: T(11), ...over } });
 const APPROVED = prFacts({ evidence: { ok: true } });
@@ -71,6 +72,13 @@ const cases = [
     { status: 'owner', next: DECISION, actions: [stop('er-i41r'), event('owner-question', false)] }],
   ['refine done, verdict not-ready → ⛔, judgment', { row: at('refining'), facts: verdict('not-ready'), sessions: [ses('er-i41r', 'refine', 'done')] },
     { status: 'blocked', next: 'refine: not ready', actions: [stop('er-i41r'), event('refine-not-ready', true)] }],
+  ['queued, ready verdict but no /goal line → ⛔, judgment, no implement launch', { row: at('queued'), facts: verdict('ready') },
+    { status: 'blocked', next: 'ready verdict without a /goal line', actions: [event('stage-failed', true)] }],
+  ['refine done, ready verdict but no /goal line → stop it, ⛔, judgment', { row: at('refining'), facts: verdict('ready'), sessions: [ses('er-i41r', 'refine', 'done')] },
+    { status: 'blocked', next: 'ready verdict without a /goal line', actions: [stop('er-i41r'), event('stage-failed', true)] }],
+  ['a limited implement session whose /goal line is gone → ⛔, no relaunch', { row: at('implementing'), facts: verdict('ready'), sessions: [ses('er-i41a', 'implement', 'limited')] },
+    { status: 'blocked', next: 'ready verdict without a /goal line', actions: [event('stage-failed', true)] }],
+  ['… raised once', { row: at('blocked', 'ready verdict without a /goal line'), facts: verdict('ready') }, { status: 'blocked', next: 'ready verdict without a /goal line' }],
   // implement
   ['implement: open PR by the login and the session done → stop it, review',
     { row: at('implementing'), facts: prFacts(), sessions: [ses('er-i41r', 'refine', 'stopped'), ses('er-i41a', 'implement', 'done')] },

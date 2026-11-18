@@ -34,7 +34,7 @@ export const dispatchOrder = (rows) => [...rows].sort((a, b) => a.batch - b.batc
 const STATUS_OF = { refine: 'refining', implement: 'implementing', review: 'reviewing', merge: 'merging' };
 const STAGE_OF = Object.fromEntries(Object.entries(STATUS_OF).map(([stage, status]) => [status, stage]));
 // How far GitHub's facts have got (see `wanted`); a session's stage is finished once this rank is past it.
-const RANK = { refine: 0, implement: 1, owner: 1, 'not-ready': 1, review: 2, checks: 3, merge: 3, merged: 4 };
+const RANK = { refine: 0, implement: 1, 'no-goal': 1, owner: 1, 'not-ready': 1, review: 2, checks: 3, merge: 3, merged: 4 };
 const LIVE = new Set(['working', 'blocked', 'limited', 'unknown']);
 const IDLE = new Set(['done', 'blocked', 'limited']); // stoppable once the stage's fact is in; never working or unknown
 const JUDGMENT = new Set(['refine-not-ready', 'owner-reply', 'review-blocked', 'review-budget-exhausted', 'stall', 'stage-failed', 'merge-stopped', 'session-blocked']);
@@ -50,12 +50,13 @@ const WAITING = {
 };
 
 // The step GitHub's facts ask for, sessions aside: merged, merge, checks (approved, checks running), review,
-// implement, owner or not-ready (refined, but the verdict stops it), else refine.
+// implement, no-goal (ready, but no /goal line to launch with), owner or not-ready (the verdict stops it), else refine.
 function wanted(f) {
   if (f.pr?.merged) return 'merged';
   if (f.pr) return !f.pr.evidence.ok ? 'review' : f.pr.checks === 'pending' ? 'checks' : 'merge';
   const state = f.task?.action === 'use-current' && f.verdict?.revision === f.task.revision ? f.verdict.state : null;
-  return state === 'ready' ? 'implement' : state ?? 'refine';
+  if (state === 'ready') return f.goal ? 'implement' : 'no-goal'; // the implement prompt is the /goal line verbatim
+  return state ?? 'refine';
 }
 
 const keep = (row) => ({ status: row.status, pr: row.pr, head: row.head, next: row.next, actions: [] });
@@ -84,6 +85,7 @@ export function advance({ row, facts, sessions, settings, authorized, mergeLock,
     if (step === 'checks') return to('reviewing', WAITING.checks);
     if (step === 'owner') return halt('owner', decision, 'owner-question');
     if (step === 'not-ready') return halt('blocked', 'refine: not ready', 'refine-not-ready');
+    if (step === 'no-goal') return halt('blocked', 'ready verdict without a /goal line', 'stage-failed');
     const s = latest(step);
     if (s && LIVE.has(s.state)) return inStage(step, s);
     if (step !== 'merge') return launch(step, 1);
