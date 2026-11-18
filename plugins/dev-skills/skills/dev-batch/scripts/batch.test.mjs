@@ -481,6 +481,29 @@ test('handover pauses, records the new coordinator in the region and launches it
   assert.equal(launch.argv.at(-1), `/dev-batch takeover src=https://github.com/${REPO}/issues/40`);
 });
 
+test('handover then the target account\'s takeover lifts the handover pause and starts the loop there; an owner\'s pause stays (M14)', async (t) => {
+  const w = world({ accounts: ['A1', 'A2'] });
+  w.init();
+  assert.equal(w.cli('handover', '--acct', 'A2').code, 0);
+  w.env = { ...w.env, CLAUDE_CONFIG_DIR: w.accts[1].dir }; // the new coordinator runs in A2
+  const r = w.cli('takeover');
+  assert.equal(r.code, 0, r.text);
+  t.after(() => { try { process.kill(r.out.loop.pid); } catch { /* already gone */ } });
+  assert.equal(json(w.file('settings.json')).paused, false);
+  assert.deepEqual([w.ledger().header.alias, w.ledger().header.coordinator], ['A2', 'er-i40c2']);
+  await stopLoopOf(w, w.dir, r);
+
+  assert.equal(w.cli('pause').code, 0); // the owner's pause survives the next handover and takeover
+  w.env = { ...w.env, CLAUDE_CONFIG_DIR: w.accts[1].dir };
+  assert.equal(w.cli('handover', '--acct', 'A1').code, 0);
+  w.env = { ...w.env, CLAUDE_CONFIG_DIR: w.accts[0].dir };
+  const back = w.cli('takeover');
+  assert.equal(back.code, 0, back.text);
+  t.after(() => { try { process.kill(back.out.loop.pid); } catch { /* already gone */ } });
+  assert.equal(json(w.file('settings.json')).paused, true);
+  await stopLoopOf(w, w.dir, back);
+});
+
 test('add puts rows where asked and holds follow-ups; rm removes a row; both write the region', () => {
   const w = world();
   w.init();
