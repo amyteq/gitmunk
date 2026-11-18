@@ -58,7 +58,8 @@ export function pidAlive(pid) {
 
 // Serialised by a short mutex (mkdir lease.lock is exclusive). Returns { ok, nonce }, { held: lease }, or
 // { busy: true } when another taker is inside its critical section (retry shortly). insideLock is a test hook.
-export function takeLease(dir, { pid, host, alias, coordinator, now = Date.now(), force = false, insideLock }) {
+// `holder: 'cli'` marks a short-lived batch.mjs command, which is never signalled to stop like the loop.
+export function takeLease(dir, { pid, host, alias, coordinator, holder, now = Date.now(), force = false, insideLock }) {
   mkdirSync(dir, { recursive: true });
   const lock = join(dir, 'lease.lock');
   for (let tries = 0; ; tries++) {
@@ -79,7 +80,7 @@ export function takeLease(dir, { pid, host, alias, coordinator, now = Date.now()
     insideLock?.();
     const nonce = randomUUID();
     const tmp = `${leasePath(dir)}.${nonce}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ pid, host, alias, coordinator, nonce, startedAt: new Date(now).toISOString() }));
+    writeFileSync(tmp, JSON.stringify({ pid, host, alias, coordinator, holder, nonce, startedAt: new Date(now).toISOString() }));
     renameSync(tmp, leasePath(dir));
     return { ok: true, nonce };
   } finally { rmSync(lock, { recursive: true, force: true }); }
