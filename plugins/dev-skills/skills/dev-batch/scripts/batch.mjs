@@ -493,6 +493,8 @@ async function takeover(flags, words) {
   const { src, session, ...settingWords } = words;
   try { dir = locate(flags, words); } catch (e) {
     if (!(e instanceof Exit) || e.out.error !== 'no-batch' || !src || flags.batch) throw e;
+    // §13: no local state means the last loop ran on another host, which cannot be checked from here.
+    if (!flags.force) refuse('lease-foreign', { detail: 'this machine has no state for the batch, so its last loop ran on another host: pass --force to rebuild it here and take it over' });
     rebuilt = rebuild(src, settingWords);
     dir = rebuilt.rebuilt;
   }

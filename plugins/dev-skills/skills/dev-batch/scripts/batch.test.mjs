@@ -306,10 +306,20 @@ async function stopLoopOf(w, dir, r) {
   assert.equal(w.cli('stop', '--batch', dir).out.exited, true);
 }
 
+test('takeover src= without --force refuses lease-foreign before it rebuilds anything (I2)', () => {
+  const w = elsewhere();
+  const reads = () => w.calls('gh').filter((c) => c.argv[0] === 'api' && c.argv[1] === ISSUE).length;
+  const before = reads();
+  const r = w.cli('takeover', 'src=40');
+  assert.deepEqual([r.code, r.out.error], [1, 'lease-foreign'], r.text);
+  assert.equal(existsSync(join(w.root, 'state')), false);
+  assert.equal(reads(), before); // the source was not even read
+});
+
 test('takeover src= on a machine without the state directory rebuilds it from the region and starts the loop', async (t) => {
   const w = elsewhere({ body: 'Intro text.\r\n' });
   const region = w.body().slice(findRegion(w.body()).start, findRegion(w.body()).end);
-  const r = w.cli('takeover', `src=https://github.com/${REPO}/issues/40`, 'merge=off');
+  const r = w.cli('takeover', `src=https://github.com/${REPO}/issues/40`, 'merge=off', '--force');
   assert.equal(r.code, 0, r.text);
   t.after(() => { try { process.kill(r.out.loop.pid); } catch { /* already gone */ } });
   assert.deepEqual([r.out.rebuilt, r.out.authorization, r.out.extra, r.out.loop.started], [w.dir, 'needs-owner', 'unrecovered', true]);
@@ -330,10 +340,11 @@ test('takeover src= rebuilds only from a trusted source with a valid region, els
   const w = elsewhere();
   const state = join(w.root, 'state');
   const original = w.body();
+  const take = (...words) => w.cli('takeover', ...words, '--force');
   w.set((v) => { v.sources[ISSUE].author_association = 'NONE'; });
-  assert.deepEqual([w.cli('takeover', 'src=40').code, w.cli('takeover', 'src=40').out.error], [1, 'untrusted-source']);
+  assert.deepEqual([take('src=40').code, take('src=40').out.error], [1, 'untrusted-source']);
   w.set((v) => { v.sources[ISSUE].author_association = 'OWNER'; v.sources[ISSUE].body = 'No region here.\n'; });
-  assert.deepEqual([w.cli('takeover', 'src=40').code, w.cli('takeover', 'src=40').out.error], [1, 'ledger-region']);
+  assert.deepEqual([take('src=40').code, take('src=40').out.error], [1, 'ledger-region']);
   assert.equal(existsSync(state), false);
 
   // A comment: trusted when its author is the signed-in account, whatever its association.
@@ -341,10 +352,10 @@ test('takeover src= rebuilds only from a trusted source with a valid region, els
   const { start, end } = findRegion(original);
   w.set((v) => { v.sources[COMMENT] = { body: `Notes.\n${original.slice(start, end)}\n`, user: { login: 'someone' }, author_association: 'NONE' }; });
   const url = `src=https://github.com/${REPO}/issues/40#issuecomment-900`;
-  assert.deepEqual([w.cli('takeover', url).code, w.cli('takeover', url).out.error], [1, 'untrusted-source']);
+  assert.deepEqual([take(url).code, take(url).out.error], [1, 'untrusted-source']);
   assert.equal(existsSync(state), false);
   w.set((v) => { v.sources[COMMENT].user.login = LOGIN; });
-  const r = w.cli('takeover', url);
+  const r = take(url);
   assert.equal(r.code, 0, r.text);
   t.after(() => { try { process.kill(r.out.loop.pid); } catch { /* already gone */ } });
   const dir = join(dirname(w.dir), 'c900');
