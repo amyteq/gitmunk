@@ -128,7 +128,8 @@ export function advance({ row, facts, sessions, settings, authorized, mergeLock,
   // §11: without the owner's authorization line nothing new launches, merges included; running sessions go on.
   if (!authorized && actions.some((a) => a.type === 'launch')) ({ status, next, actions } = halt('owner', WAITING.authorization, 'authorization-missing'));
   if (status === row.status && next === row.next) actions = actions.filter((a) => a.type !== 'event'); // raised on an earlier tick
-  const needsLock = actions.some((a) => a.type === 'launch' && a.stage === 'merge') || latest('merge')?.state === 'working';
+  // One merge per repository: a merge launch or a live merge session holds the lock, until the PR is merged.
+  const needsLock = want !== 'merged' && (actions.some((a) => a.type === 'launch' && a.stage === 'merge') || LIVE.has(latest('merge')?.state));
   const lock = needsLock && mergeLock === 'free' ? [{ type: 'lock' }] : !needsLock && mergeLock === 'mine' ? [{ type: 'unlock' }] : [];
   const stops = sessions.filter((s) => IDLE.has(s.state) && RANK[s.stage] < RANK[want]).map((s) => ({ type: 'stop', session: s.name }));
   return { status, pr: facts.pr?.number ?? row.pr, head: facts.pr?.head?.slice(0, 7) ?? row.head, next, actions: [...stops, ...lock, ...actions] };
