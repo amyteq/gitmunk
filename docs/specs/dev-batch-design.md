@@ -3,12 +3,13 @@ title: "dev-batch: design"
 skill: dev-batch
 plugin: dev-skills
 version: 0.2.0
-status: in review
+status: approved
 created: 2026-11-18
 updated: 2026-11-18
 issue: 44
 pr: 45
 history:
+  - "0.2.0 approved by the owner (2026-11-18); implementation plan in docs/plans/dev-batch-plan.md"
   - "0.2.0 (2026-11-18): owner review of 0.1.0 (design accepted; file renamed without a date; this frontmatter). Follow-up proposals: sub-command argument hint with one ask round, `setup`, `autocompact` default 300k, `mcp=none` for workers, logs and metrics for later evaluation, what to watch after go-live"
   - "0.1.0 (2026-11-18): first draft"
 ---
