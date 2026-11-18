@@ -16,6 +16,7 @@ import * as sessions from './sessions.mjs';
 const TICK_MS = 300_000; // §8: the loop interval
 const CHECK_MS = 15_000; // §8: the check for setting changes and sessions that left `working`
 const HOUR = 3_600_000;
+const GRACE_MS = 120_000; // a session `claude agents` does not list yet is still registering for this long after its launch
 const STATUS_OF = { refine: 'refining', implement: 'implementing', review: 'reviewing', merge: 'merging' };
 const STAGE_OF = Object.fromEntries(Object.entries(STATUS_OF).map(([stage, status]) => [status, stage]));
 const PIPELINE = ['refining', 'implementing', 'reviewing', 'merging', 'merged'];
@@ -24,6 +25,7 @@ const ENDED = new Set(['stopped', 'failed']);
 const FINISHED = new Set(['merged', 'removed']);
 
 const iso = (ms) => new Date(ms).toISOString();
+const registering = (rec, now) => now - Date.parse(rec.startedAt) < GRACE_MS;
 const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
 const readJson = (path, fallback) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return fallback; } };
 const readLines = (path) => (read(path) ?? '').split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } });
@@ -70,7 +72,7 @@ function applyOwnerEdits(baseRows, edits, current, ev) {
     else if (e.type === 'batch') r.batch = e.value;
     else if (e.type === 'hold') r.status = 'hold';
     else if (e.type === 'deleted') r.status = 'removed'; // same as rm: a running session finishes
-    else if (e.type === 'answered') Object.assign(r, { status: 'queued', next: '' });
+    else if (e.type === 'answered' || e.type === 'release') Object.assign(r, { status: 'queued', next: '' });
     ev({ type: 'owner-edit', task: e.issue, detail: `${e.type}${e.issue ? ` #${e.issue}` : ''}${e.value === undefined ? '' : ` ${JSON.stringify(e.value)}`}` });
     if (e.type === 'answered') ev({ type: 'owner-reply', task: e.issue, detail: `#${e.issue}: the owner set the row back to queued`, judgment: true }, `#${e.issue}: the owner answered`);
   }
@@ -101,7 +103,7 @@ const outcomeOf = (rec, status) => (status === 'removed' ? 'removed'
  * One pass (§10). ctx = { dir, settings, gh, claude, now, host, pid }: `settings` is the batch's settings.json
  * (resolved §8 values plus repo, src, login, abbr and the recorded authorization line), `gh(args)` and
  * `claude(cmd, args, { env })` are the adapters, `now` is epoch ms. Expected failures become events, never throws.
- * → { wrote, launched, stopped, events, complete }.
+ * → { wrote, launched, stopped, events, complete, githubDown? }: `githubDown` when a GitHub call aborted the tick.
  */
 export function tick(ctx) {
   const { dir, settings: s, gh, now } = ctx;
@@ -118,6 +120,7 @@ export function tick(ctx) {
   // Review Focus 5: one event per failed tick, the third in a row a judgment; nothing decided this tick is kept.
   const githubDown = (error) => {
     queued.length = 0;
+    out.githubDown = true;
     st.githubFailures++;
     ev({ type: 'github-unavailable', detail: `${error.message} (${st.githubFailures} in a row)`, judgment: st.githubFailures === 3 });
     return finish();
@@ -152,7 +155,6 @@ export function tick(ctx) {
   const active = rows.filter((r) => !FINISHED.has(r.status) && r.status !== 'hold');
   const fetched = guard(() => (active.length ? fetchFacts({ repo: s.repo, issues: active.map((r) => r.issue), gh }) : null));
   if (fetched.down) return fetched.down;
-  st.githubFailures = 0;
 
   // 4. Sessions of every account. Review Focus 3: an unreadable account's sessions are unknown, never relaunched.
   const records = readJson(at('sessions.json'), []);
@@ -167,11 +169,16 @@ export function tick(ctx) {
   for (const [alias, until] of Object.entries(st.cooling)) if (until <= now) delete st.cooling[alias];
   const ended = []; // ended by themselves this tick: metrics in step 6
   for (const rec of records) {
+    if (!rec.account && !ENDED.has(rec.state)) { // reconcile found it on no readable account: match it by name once one lists it
+      const alias = Object.keys(agents).find((a) => agents[a]?.some((x) => x.name === rec.name));
+      if (alias) Object.assign(rec, { account: alias, id: agents[alias].find((x) => x.name === rec.name).id });
+    }
     const list = agents[rec.account];
     if (!list) { if (!ENDED.has(rec.state)) rec.state = 'unknown'; continue; }
     const agent = rec.id ? list.find((x) => x.id === rec.id) : list.find((x) => x.name === rec.name);
     const was = rec.state;
-    rec.state = agent?.state ?? (ENDED.has(was) ? was : 'stopped'); // a readable account that no longer lists it: gone
+    // A readable account that does not list it: gone, unless it was launched so recently that it is still registering.
+    rec.state = agent?.state ?? (ENDED.has(was) ? was : registering(rec, now) ? 'working' : 'stopped');
     rec.sessionId = agent?.sessionId ?? rec.sessionId;
     // §12: blocked on a usage limit → limited, and its account cools until the stated reset.
     const until = rec.state === 'blocked' && limitCooling(sessions.logs(cli(rec.account), rec.id ?? rec.name) ?? '', now);
@@ -338,8 +345,8 @@ export function tick(ctx) {
   }
   flush();
   const newRows = decided.map((d) => d.next);
-  out.complete = newRows.length > 0 && newRows.every((r) => FINISHED.has(r.status));
-  if (out.complete && base.header.loop !== 'stopped') {
+  const complete = newRows.length > 0 && newRows.every((r) => FINISHED.has(r.status));
+  if (complete && base.header.loop !== 'stopped') {
     // §10, §16: the final roll call, summary.json and one batch-complete event.
     const summary = batchSummary(readLines(at('events.jsonl')), readLines(at('metrics.jsonl')));
     writeJson(at('summary.json'), summary);
@@ -353,12 +360,13 @@ export function tick(ctx) {
   // 9. Write the region only when it changed (or held an unreadable row), spliced into the body fetched again just
   //    now, so text added outside it meanwhile survives (Review Focus 2). 10. Record what was written.
   const ledger = {
-    header: { ...base.header, loop: out.complete ? 'stopped' : paused ? 'paused' : 'running', cap: s.cap, merge: s.merge, waiting: pendingCount(dir) },
+    header: { ...base.header, loop: complete ? 'stopped' : paused ? 'paused' : 'running', cap: s.cap, merge: s.merge, waiting: pendingCount(dir) },
     authorization: current.authorization, // never written back once the owner edits or deletes it
     rows: newRows,
     log: [...base.log, ...logLines.map((event) => ({ time: iso(now).slice(5, 16).replace('T', ' '), event }))].slice(-20),
   };
-  if (renderLedger(ledger) !== lastText || problems.length) {
+  const changed = renderLedger(ledger) !== lastText || problems.length > 0;
+  if (changed) {
     ledger.header.changed = `${iso(now).slice(0, 16).replace('T', ' ')} UTC`;
     const text = renderLedger(ledger);
     writeAtomic(at('ledger.next.md'), text);
@@ -366,6 +374,8 @@ export function tick(ctx) {
       const fresh = readSource({ repo: s.repo, src: s.src, gh }).body;
       const region = findRegion(fresh);
       if (!region || region.error) return false; // gone or broken since step 1: the next tick raises it
+      // The owner edited the region since step 1: keep ledger.next.md; the next tick applies the edit on top of it.
+      if (fresh.slice(region.start, region.end) !== body.slice(found.start, found.end)) return false;
       writeSource({ repo: s.repo, src: s.src, gh, body: spliceLedger(fresh, renderLedger(ledger, { eol: fresh.includes('\r\n') ? '\r\n' : '\n' })) });
       return true;
     });
@@ -376,16 +386,22 @@ export function tick(ctx) {
       out.wrote = true;
     }
   }
+  // §10: the batch ends only once its final roll call is written; until then the next tick retries the write.
+  out.complete = complete && (out.wrote || !changed);
+  st.githubFailures = 0; // Review Focus 5: a tick counts as GitHub answering only once every call of it succeeded
   return finish();
 }
 
 // The 15 s check: has a batch session that was working left `working`?
-function leftWorking(ctx, s) {
+function leftWorking(ctx, s, now) {
   const working = readJson(join(ctx.dir, 'sessions.json'), []).filter((r) => r.state === 'working');
   return s.accounts.some((a) => {
     const mine = working.filter((r) => r.account === a.alias);
     const list = mine.length ? sessions.listAgents({ configDir: a.dir, run: ctx.claude }) : null;
-    return Array.isArray(list) && mine.some((r) => list.find((x) => x.id === r.id)?.state !== 'working');
+    return Array.isArray(list) && mine.some((r) => {
+      const agent = list.find((x) => x.id === r.id);
+      return agent ? agent.state !== 'working' : !registering(r, now);
+    });
   });
 }
 
@@ -417,7 +433,8 @@ export async function run(ctx) {
       if (result.complete) return { complete: true };
       for (let waited = 0; waited < TICK_MS; waited += CHECK_MS) {
         await sleep(CHECK_MS);
-        if (read(join(dir, 'settings.json')) !== text || leftWorking(ctx, settings)) break;
+        // While GitHub is down only a settings change wakes it early, so an outage is retried every 5 minutes.
+        if (read(join(dir, 'settings.json')) !== text || (!result.githubDown && leftWorking(ctx, settings, clock()))) break;
       }
     }
   } catch (error) {

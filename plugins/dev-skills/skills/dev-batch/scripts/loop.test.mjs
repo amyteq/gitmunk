@@ -55,7 +55,7 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
   const w = {
     dir, accts, lock: join(dirname(dir), 'merge.lock'), body: `Intro text.\n\n${region}\n\nOutro text.\n`, issues: {},
     agents: Object.fromEntries(accts.map((a) => [a.dir, []])), records: [], logs: {},
-    ghDown: false, writeFails: false, launchFails: false, unreadable: new Set(), reads: 0, onRead: null, edits: [], claudeCalls: [],
+    ghDown: false, writeFails: false, launchFails: false, hideLaunches: false, unreadable: new Set(), reads: 0, onRead: null, edits: [], claudeCalls: [],
   };
   w.gh = (args) => {
     if (w.ghDown) return { code: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway' };
@@ -83,7 +83,7 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
     if (args[0] === '--bg') {
       if (w.launchFails) return { code: 1, stdout: '', stderr: 'launch failed' };
       const id = (0xa0000000 + ++ids).toString(16);
-      list.push({ id, sessionId: `session-${id}`, name: args[args.indexOf('--name') + 1], state: 'working', cwd: '/w', startedAt: '' });
+      if (!w.hideLaunches) list.push({ id, sessionId: `session-${id}`, name: args[args.indexOf('--name') + 1], state: 'working', cwd: '/w', startedAt: '' });
       return { code: 0, stdout: `Started background session ${id}\n`, stderr: '' };
     }
     throw new Error(`unexpected claude ${args.join(' ')}`);
@@ -109,6 +109,14 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
   w.pending = () => (existsSync(join(dir, 'pending')) ? readdirSync(join(dir, 'pending')).sort().map((n) => JSON.parse(readFileSync(join(dir, 'pending', n), 'utf8'))) : []);
   w.launches = () => w.claudeCalls.filter((c) => c.args[0] === '--bg');
   w.loop = () => JSON.parse(readFileSync(join(dir, 'loop.json'), 'utf8'));
+  // Runs the loop; `clock(sleeps)` gives the time, and the run ends (`lost`) once `stopAt(sleeps)` drops the lease.
+  w.run = async ({ clock = () => T(10), stopAt = () => false, onSleep = () => {} } = {}) => {
+    const waits = [];
+    const ticks = [];
+    const r = await run({ dir, gh: w.gh, claude: w.claude, host: 'test-host', pid: process.pid, clock: () => clock(waits.length), log: (x) => ticks.push(x),
+      sleep: async (ms) => { waits.push(ms); onSleep(waits.length); if (stopAt(waits.length)) rmSync(join(dir, 'lease.json')); } });
+    return { r, waits, ticks };
+  };
   return w;
 }
 
@@ -170,6 +178,26 @@ test('concurrent body edit survives (Review Focus 2)', () => {
   assert.equal(w.status()[41], 'refining');
 });
 
+test('an owner edit inside the region during the tick is applied next tick, not overwritten', () => {
+  const w = world({ rows: [row(1, 41), row(2, 43)], cap: 1 });
+  w.onRead = (n) => {
+    if (n !== 2) return;
+    const { start, end } = findRegion(w.body);
+    const held = w.ledger();
+    held.rows[1].status = 'hold'; // the owner holds #43 between the tick's two reads
+    w.body = w.body.slice(0, start) + renderLedger(held, { eol: '\n' }) + w.body.slice(end);
+  };
+  const r = w.tick(T(10));
+  assert.deepEqual([r.launched, r.wrote, w.edits.length], [['er-i41r'], false, 0]);
+  assert.equal(w.status()[43], 'hold');
+  assert.ok(existsSync(join(w.dir, 'ledger.next.md')));
+  const again = w.tick(T(10, 5));
+  assert.deepEqual([again.launched, again.wrote], [[], true]);
+  assert.deepEqual(w.status(), { 41: 'refining', 43: 'hold' });
+  assert.equal(w.ledger().rows[0].session, 'er-i41r');
+  assert.deepEqual(w.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail), ['hold #43']);
+});
+
 test('an unreadable account (Review Focus 3)', () => {
   const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' }), row(2, 43)], accounts: ['A1', 'A2'] });
   w.issues[41] = { refined: true };
@@ -191,7 +219,7 @@ test('github unavailable (Review Focus 5)', () => {
   w.ghDown = true;
   for (const [i, at] of [T(10), T(10, 5), T(10, 10)].entries()) {
     const r = w.tick(at);
-    assert.deepEqual([r.wrote, r.launched, r.events.map((e) => e.type)], [false, [], ['github-unavailable']]);
+    assert.deepEqual([r.wrote, r.launched, r.githubDown, r.events.map((e) => e.type)], [false, [], true, ['github-unavailable']]);
     assert.equal(w.events().length, i + 1);
     assert.equal(w.pending().length, i === 2 ? 1 : 0); // only the third in a row is a judgment
   }
@@ -199,6 +227,34 @@ test('github unavailable (Review Focus 5)', () => {
   w.ghDown = false;
   assert.deepEqual(w.tick(T(10, 15)).launched, ['er-i41r']);
   assert.equal(w.loop().githubFailures, 0);
+
+  // A failing write counts the same: the reads succeed, and the third failed tick in a row is the judgment.
+  const v = world({ rows: [row(1, 41)] });
+  v.writeFails = true;
+  for (const [i, at] of [T(10), T(10, 5), T(10, 10)].entries()) {
+    const r = v.tick(at);
+    assert.deepEqual([r.wrote, r.githubDown, r.events.at(-1).type], [false, true, 'github-unavailable']);
+    assert.equal(v.pending().length, i === 2 ? 1 : 0);
+  }
+  assert.equal(v.launches().length, 1); // launched once; only the write is retried
+});
+
+test('while GitHub is down, run waits the full interval and wakes early only for a settings change', async () => {
+  const w = world({ rows: [row(1, 41, { status: 'refining', session: 'er-i41r' })] });
+  w.agent('er-i41r', { state: 'working', stage: 'refine', issue: 41 });
+  w.ghDown = true;
+  const settings = join(w.dir, 'settings.json');
+  const { r, waits, ticks } = await w.run({
+    onSleep: (n) => {
+      if (n === 1) w.set('er-i41r', 'done'); // would wake a healthy loop at the first check
+      if (n === 21) writeFileSync(settings, JSON.stringify({ ...JSON.parse(readFileSync(settings, 'utf8')), cap: 3 }));
+    },
+    stopAt: (n) => n === 21,
+  });
+  assert.deepEqual(r, { lost: true });
+  assert.deepEqual([ticks.length, waits.length], [2, 21]); // 20 checks of 15 s, then the settings change wakes it at once
+  assert.ok(ticks.every((t) => t.githubDown));
+  assert.equal(w.pending().length, 0); // two failures in ten minutes: no judgment yet
 });
 
 test('adopt, don\'t relaunch (Review Focus 4)', () => {
@@ -285,6 +341,15 @@ test('owner edits: order, hold and a deleted row', () => {
   assert.deepEqual(w.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail.split(' ')[0]).sort(), ['deleted', 'hold', 'order']);
 });
 
+test('the owner releases a held row', () => {
+  const w = world({ rows: [row(1, 41, { status: 'hold' })] });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  w.body = w.body.replace('| ⏸️ |', '| 🆕 |');
+  assert.deepEqual(w.tick(T(10, 5)).launched, ['er-i41r']);
+  assert.equal(w.status()[41], 'refining');
+  assert.deepEqual(w.events().filter((e) => e.type === 'owner-edit').map((e) => e.detail), ['release #41']);
+});
+
 test('a hand-edited CRLF table with an unknown emoji keeps the row and is rewritten once', () => {
   const w = world({ rows: [row(1, 41, { status: 'refining', session: 'er-i41r' })] });
   w.agent('er-i41r', { state: 'working', stage: 'refine', issue: 41 });
@@ -309,6 +374,40 @@ test('a failed ledger write does not raise the same judgment twice', () => {
   assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['blocked', 'refine: not ready']]);
 });
 
+test('a complete batch whose final roll call fails to write is not complete until it is written', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'removed' })] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true, merged: true } };
+  w.agent('er-pr50m', { stage: 'merge', issue: 41, pr: 50 });
+  w.writeFails = true;
+  let r = w.tick(T(10));
+  assert.deepEqual([r.complete, r.wrote], [false, false]);
+  w.writeFails = false;
+  r = w.tick(T(10, 5));
+  assert.deepEqual([r.complete, r.wrote], [true, true]);
+  assert.equal(w.ledger().header.loop, 'stopped');
+  assert.match(w.ledger().log.at(-1).event, /^batch complete: 1 PRs merged/);
+  assert.deepEqual(w.pending().map((e) => e.type), ['batch-complete']); // raised once
+});
+
+test('a session launched under 120 s ago and not yet listed stays working', () => {
+  const w = world({ rows: [row(1, 41)] });
+  w.hideLaunches = true; // `claude agents` has not registered the new session yet
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i41r']);
+  const r = w.tick(T(10, 1));
+  assert.deepEqual([r.launched, r.stopped], [[], []]);
+  assert.equal(w.sessions()[0].state, 'working');
+  w.tick(T(10, 2)); // two minutes and still not listed: gone
+  assert.equal(w.sessions()[0].state, 'stopped');
+});
+
+test('the 15 s check does not count a session still registering as left working', async () => {
+  const w = world({ rows: [row(1, 41)] });
+  w.hideLaunches = true;
+  const { waits, ticks } = await w.run({ clock: (n) => T(10) + n * 15_000, stopAt: (n) => n === 8 });
+  assert.deepEqual(ticks.map((t) => t.launched), [['er-i41r']]);
+  assert.equal(waits.length, 8); // woken once the launch is 120 s old and still not listed
+});
+
 test('reconcile for takeover adopts listed sessions and keeps unlisted ones unknown', () => {
   const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
   rmSync(join(w.dir, 'ledger.last.md')); // another machine: nothing local
@@ -320,6 +419,22 @@ test('reconcile for takeover adopts listed sessions and keeps unlisted ones unkn
   assert.deepEqual([r.stopped, r.launched], [['er-pr51'], ['er-pr51m']]); // an approval with no merge gets a merge
   assert.deepEqual(w.status(), { 41: 'implementing', 43: 'merging' }); // nothing relaunched over the unknown session
   assert.deepEqual(w.pending().map((e) => [e.type, e.session]), [['session-unknown', 'er-i41a']]);
+});
+
+test('reconcile keeps a session of an unreadable account matchable until the account answers', () => {
+  const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'] });
+  rmSync(join(w.dir, 'ledger.last.md'));
+  w.issues[41] = { refined: true };
+  w.agent('er-i41a', { alias: 'A2', state: 'working', record: false });
+  w.unreadable.add(w.accts[1].dir);
+  assert.deepEqual(reconcile(w.ctx(T(11))).unknown, ['er-i41a']);
+  w.unreadable.clear();
+  const r = w.tick(T(11, 5));
+  assert.deepEqual([r.launched, r.stopped], [[], []]);
+  assert.deepEqual(w.sessions().map((s) => [s.name, s.account, s.state]), [['er-i41a', 'A2', 'working']]); // adopted once A2 answers
+  w.issues[41].pr = { number: 50 };
+  w.set('er-i41a', 'done');
+  assert.deepEqual(w.tick(T(11, 10)).stopped, ['er-i41a']); // and seen as finished
 });
 
 test('run ticks, wakes early when a session leaves working, and ends the complete batch', async () => {
