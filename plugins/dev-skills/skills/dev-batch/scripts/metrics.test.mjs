@@ -28,8 +28,8 @@ test('compactions and goal checks are read', () => {
   assert.deepEqual(s.compactions, [{ at: '2026-01-01T10:01:30Z', trigger: 'auto', pre: 300000, post: 20000 }]);
   assert.deepEqual(s.goal, { met: 1, notMet: 1 });
   assert.equal(s.costUsd, 2.5);
-  assert.equal(s.rateLimits, 1);
-  assert.equal(s.apiErrors, 0);
+  assert.equal(s.rateLimits, 1); // error: rate_limit
+  assert.equal(s.apiErrors, 2); // server_error and authentication_failed
   assert.equal(s.denials, 1);
 });
 
@@ -58,4 +58,10 @@ test('batch summary: mean and median per stage; cost per merged PR', () => {
   assert.equal(s.costPerMergedPr, 9);
   assert.equal(s.measures.implementSessionsGoalMet, 1);
   assert.equal(s.measures.refineToLastMerge.mean, (2 * 3600 + 10 * 60 + 2 * 3600 + 20 * 60) / 2);
+});
+
+test('error lines without an error field fall back to the text', () => {
+  const line = (text) => JSON.stringify({ type: 'assistant', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text }] } });
+  const s = summarizeTranscript([line('API Error: rate limit reached'), line('API Error: boom')], []);
+  assert.deepEqual([s.rateLimits, s.apiErrors], [1, 1]);
 });

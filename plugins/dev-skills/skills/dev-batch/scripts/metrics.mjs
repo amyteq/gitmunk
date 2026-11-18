@@ -16,7 +16,8 @@ export function summarizeTranscript(lines, subagentLines = []) {
       if (n === 0 && o.timestamp) { out.startedAt ??= o.timestamp; out.endedAt = o.timestamp; }
       const m = o.message;
       if (o.type === 'assistant' && o.isApiErrorMessage) {
-        if (RATE_LIMIT.test(text(m?.content))) out.rateLimits++; else out.apiErrors++;
+        // the line's own `error` field wins; the text is the fallback. Checked before the synthetic-model skip, which only applies to usage.
+        if (o.error ? o.error === 'rate_limit' : RATE_LIMIT.test(text(m?.content))) out.rateLimits++; else out.apiErrors++;
       } else if (o.type === 'assistant' && m?.usage && m.model !== '<synthetic>') {
         if (m.model) models.add(m.model);
         const key = m.id ?? `${n}:${o.uuid ?? o.timestamp}`;
