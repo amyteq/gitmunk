@@ -27,3 +27,11 @@ test('order: (B1, row 3) comes before (B2, row 1)', () => {
   const rows = [row(1, 41, { batch: 2 }), row(2, 42, { batch: 1 }), row(3, 43, { batch: 1 })];
   assert.deepEqual(dispatchOrder(rows).map((r) => r.n), [2, 3, 1]);
 });
+
+test('dispatchable: a dep outside the batch is met, a merged row is met, an unmerged row is not', () => {
+  const rows = [row(1, 41, { status: 'merged' }), row(2, 42, { status: 'reviewing' }), row(3, 43, { deps: [99] }), row(4, 44, { deps: [41] }), row(5, 45, { deps: [42] })];
+  const by = new Map(rows.map((r) => [r.issue, r]));
+  assert.equal(dispatchable(rows[2], by, new Set()), true); // (a) no row for 99
+  assert.equal(dispatchable(rows[3], by, new Set()), true); // (b) row merged
+  assert.equal(dispatchable(rows[4], by, new Set()), false); // (c) row reviewing
+});

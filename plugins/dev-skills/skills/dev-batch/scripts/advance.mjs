@@ -20,10 +20,10 @@ export function layers(tasks) {
   return { batches };
 }
 
-// Queued or waiting, and every dep merged (a dep outside the ledger must be in `mergedIssues`).
+// Queued or waiting, and every dep met: merged, or with no row in the batch (same rule as layers).
 export function dispatchable(row, rowsByIssue, mergedIssues) {
   return (row.status === 'queued' || row.status === 'waiting')
-    && row.deps.every((d) => mergedIssues.has(d) || rowsByIssue.get(d)?.status === 'merged');
+    && row.deps.every((d) => mergedIssues.has(d) || !rowsByIssue.has(d) || rowsByIssue.get(d).status === 'merged');
 }
 
 // Lowest Batch first, then row order. Array.sort is stable, so ties keep the ledger's row order.
