@@ -176,7 +176,9 @@ async function stopLoop(lease, ms) {
 async function underLease(dir, work, { restart = true, force = false } = {}) {
   const was = busyCommand(leaseOf(dir));
   const running = loopHere(was, dir);
-  if (running && !(await stopLoop(was, 60_000))) refuse('loop-busy', { detail: `the loop (pid ${was.pid}) did not stop within 60 s` });
+  if (running && !(await stopLoop(was, 60_000))) {
+    refuse('loop-busy', { detail: `the loop (pid ${was.pid}) stops after its current tick and keeps the lease until then: run this command again, then start` });
+  }
   const { alias, coordinator } = ledgerOf(dir).header;
   let lease;
   for (let tries = 0; (lease = events.takeLease(dir, { pid: process.pid, host: HOST, alias, coordinator, holder: 'cli', force })).busy && tries < 20; tries++) await sleep(250);
@@ -447,7 +449,46 @@ async function handover(dir, flags) {
   return { handedOver: target.alias, session: name, id: launched.id, ...out };
 }
 
-async function takeover(dir, flags) {
+// §13: across machines, takeover works from the ledger and GitHub alone. A trusted source's region gives the rows,
+// cap and merge; the authorization is never taken from GitHub alone (§11), and extra is not in the region.
+function rebuild(text, settingWords) {
+  const repo = currentRepo();
+  const [owner, name] = repo.split('/');
+  const src = resolveSrc(text, repo);
+  const login = ghJson(['api', 'user']).login;
+  const source = readSource({ repo, src, gh });
+  if (!TRUSTED.has(source.association) && !(src.kind === 'comment' && source.author === login)) {
+    refuse('untrusted-source', { detail: `${sourceUrl(repo, src)} is by ${source.author || 'an unknown author'} (${source.association}): its ledger is not trusted` });
+  }
+  const found = findRegion(source.body);
+  if (!found || found.error) refuse('ledger-region', { detail: `the source's ledger region is ${found?.error ?? 'missing'}` });
+  const region = source.body.slice(found.start, found.end).replace(/\r\n/g, '\n');
+  const { header } = parseLedger(region).ledger;
+  const args = settingArgs(settingWords);
+  const fromLedger = ['cap', 'merge'].filter((k) => args[k] === undefined && header[k] != null);
+  for (const k of fromLedger) args[k] = String(header[k]);
+  const { values, sources } = resolveSettings(args, env);
+  for (const k of fromLedger) sources[k] = 'ledger';
+  const dir = stateDir({ owner, repo: name, src }, env);
+  mkdirSync(dir, { recursive: true });
+  writeAtomic(join(dir, 'ledger.last.md'), region);
+  writeJson(join(dir, 'sessions.json'), []); // the other machine's sessions show as unknown through reconcile
+  // Written last: settings.json is what makes the directory a batch.
+  saveSettings(dir, { ...values, abbr: values.abbr ?? deriveAbbr(name), repo, src, login, authorization: null, extra: null, paused: false, sources });
+  return { rebuilt: dir, authorization: 'needs-owner', extra: 'unrecovered',
+    detail: 'rebuilt from the region: the owner restores the authorization with config --authorization; extra could not be recovered' };
+}
+
+async function takeover(flags, words) {
+  let dir;
+  let rebuilt = {};
+  const { src, session, ...settingWords } = words;
+  try { dir = locate(flags, words); } catch (e) {
+    if (!(e instanceof Exit) || e.out.error !== 'no-batch' || !src || flags.batch) throw e;
+    rebuilt = rebuild(src, settingWords);
+    dir = rebuilt.rebuilt;
+  }
+  if (!rebuilt.rebuilt && Object.keys(settingWords).length) bad('key=value settings apply only when takeover rebuilds a batch: change them with config');
   const lease = leaseOf(dir);
   if (aliveHere(lease)) refuse('lease-held', { detail: `the loop runs here as pid ${lease.pid}`, lease });
   if (lease && lease.host !== HOST && !flags.force) foreign(lease);
@@ -457,7 +498,7 @@ async function takeover(dir, flags) {
     const r = loop.reconcile(loopCtx(dir));
     return { adopted: r.adopted, unknown: r.unknown, tick: brief(r) };
   }, { restart: false, force: !!flags.force });
-  return { ...out, loop: startLoop(dir) };
+  return { ...rebuilt, ...out, loop: startLoop(dir) };
 }
 
 // §14: stop the sessions this batch launched whose stage is finished and that are idle. Never a working or unknown
@@ -572,9 +613,10 @@ async function stop(dir, flags) {
     events.releaseLease(dir, lease.nonce);
     return { stopped: false, detail: `pid ${lease.pid} is not this batch's loop: its stale lease was dropped` };
   }
-  const exited = await stopLoop(lease, 10_000);
+  // A loop still in its tick keeps the lease, so no second loop or takeover runs beside it; it releases it on exit.
+  if (!(await stopLoop(lease, 10_000))) refuse('loop-busy', { detail: `the loop (pid ${lease.pid}) stops after its current tick and then releases the lease`, pid: lease.pid });
   events.releaseLease(dir, lease.nonce);
-  return { stopped: true, pid: lease.pid, exited };
+  return { stopped: true, pid: lease.pid, exited: true };
 }
 
 async function runLoop(dir) {
@@ -608,7 +650,7 @@ const FLAGS = {
   pause: {}, resume: {}, config: { authorization: S }, status: {}, clear: {}, start: {}, stop: { force: B }, run: {}, tick: {}, wait: { timeout: S },
 };
 const SETTING_WORDS = [...SETTINGS.map((s) => s.key), 'model_effort'];
-const WORDS = { config: [...SETTING_WORDS, 'extra'], setup: SETTING_WORDS };
+const WORDS = { config: [...SETTING_WORDS, 'extra'], setup: SETTING_WORDS, takeover: SETTING_WORDS };
 const HANDLERS = {
   add, rm, launch: launchStage, handover, takeover, clear, status, config, start, stop, run: runLoop, wait: waitEvents,
   pause: (dir) => { saveSettings(dir, { ...settingsOf(dir), paused: true }); return { paused: true }; },
@@ -634,6 +676,7 @@ async function main([sub, ...argv]) {
   }
   if (sub === 'init') return init(flags);
   if (sub === 'setup') return setup(flags, words);
+  if (sub === 'takeover') return takeover(flags, words); // it may rebuild a batch that is not here yet
   return HANDLERS[sub](locate(flags, words), flags, words);
 }
 

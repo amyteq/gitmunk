@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -31,7 +31,8 @@ else if (q.includes('issueOrPullRequest')) {
   const t = w.kinds[field('number')];
   out({ data: { repository: { issueOrPullRequest: t && t !== 'Discussion' ? { __typename: t } : null, discussion: t === 'Discussion' ? { id: 'D_1' } : null } }, errors: [{ type: 'NOT_FOUND' }] });
   process.exitCode = 1;
-} else if (q.includes(': issue(number')) out({ data: { repository: Object.fromEntries([...q.matchAll(/issue_(\\d+): issue/g)].map((m) => ['issue_' + m[1], w.node])) } });
+} else if (q.includes(': issue(number') && w.factsDown) process.exitCode = 1;
+else if (q.includes(': issue(number')) out({ data: { repository: Object.fromEntries([...q.matchAll(/issue_(\\d+): issue/g)].map((m) => ['issue_' + m[1], w.node])) } });
 else if (argv.includes('POST')) { w.comments.push(body()); save(); out({ id: 900 }); }
 else if (argv.includes('PATCH')) { w.sources[argv[3]].body = body(); save(); out({}); }
 else if (w.sources[argv[1]]) out(w.sources[argv[1]]);
@@ -264,6 +265,83 @@ test("takeover refuses while the loop lives here, needs --force for another host
   for (let i = 0; i < 100 && holder() !== r.out.loop.pid; i++) await sleep(100);
   assert.equal(holder(), r.out.loop.pid);
   assert.equal(w.cli('stop').out.exited, true);
+});
+
+// Another machine: the region on GitHub exists, the local state directory does not.
+function elsewhere(opts) {
+  const w = world(opts);
+  assert.equal(w.init().code, 0);
+  rmSync(join(w.root, 'state'), { recursive: true, force: true });
+  w.set((v) => { v.factsDown = true; }); // the started loop's ticks stop before any write, so the rebuilt files stay as written
+  return w;
+}
+async function stopLoopOf(w, dir, r) {
+  const holder = () => (existsSync(join(dir, 'lease.json')) ? json(join(dir, 'lease.json')).pid : null);
+  for (let i = 0; i < 100 && holder() !== r.out.loop.pid; i++) await sleep(100);
+  assert.equal(holder(), r.out.loop.pid);
+  assert.equal(w.cli('stop', '--batch', dir).out.exited, true);
+}
+
+test('takeover src= on a machine without the state directory rebuilds it from the region and starts the loop', async (t) => {
+  const w = elsewhere({ body: 'Intro text.\r\n' });
+  const region = w.body().slice(findRegion(w.body()).start, findRegion(w.body()).end);
+  const r = w.cli('takeover', `src=https://github.com/${REPO}/issues/40`, 'merge=off');
+  assert.equal(r.code, 0, r.text);
+  t.after(() => { try { process.kill(r.out.loop.pid); } catch { /* already gone */ } });
+  assert.deepEqual([r.out.rebuilt, r.out.authorization, r.out.extra, r.out.loop.started], [w.dir, 'needs-owner', 'unrecovered', true]);
+  const s = json(w.file('settings.json'));
+  assert.deepEqual([s.cap, s.sources.cap, s.merge, s.sources.merge, s.sources.accounts], [2, 'ledger', 'off', 'argument', 'environment']);
+  assert.deepEqual([s.repo, s.login, s.abbr, s.authorization, s.extra, s.paused], [REPO, LOGIN, 'er', null, null, false]);
+  assert.deepEqual(s.src, { kind: 'issue', number: 40 });
+  assert.deepEqual(json(w.file('sessions.json')), []);
+  assert.ok(region.includes('\r\n'));
+  assert.equal(readFileSync(w.file('ledger.last.md'), 'utf8'), region.replace(/\r\n/g, '\n'));
+  await stopLoopOf(w, w.dir, r);
+  assert.equal(w.cli('takeover', 'session=nobody').out.error, 'no-batch'); // without src= there is nothing to rebuild from
+  assert.equal(w.cli('takeover', 'src=40', 'cap=3').code, 2); // a local batch changes its settings with config
+  assert.equal(json(w.file('settings.json')).cap, 2);
+});
+
+test('takeover src= rebuilds only from a trusted source with a valid region, else exits 1 and writes nothing', async (t) => {
+  const w = elsewhere();
+  const state = join(w.root, 'state');
+  const original = w.body();
+  w.set((v) => { v.sources[ISSUE].author_association = 'NONE'; });
+  assert.deepEqual([w.cli('takeover', 'src=40').code, w.cli('takeover', 'src=40').out.error], [1, 'untrusted-source']);
+  w.set((v) => { v.sources[ISSUE].author_association = 'OWNER'; v.sources[ISSUE].body = 'No region here.\n'; });
+  assert.deepEqual([w.cli('takeover', 'src=40').code, w.cli('takeover', 'src=40').out.error], [1, 'ledger-region']);
+  assert.equal(existsSync(state), false);
+
+  // A comment: trusted when its author is the signed-in account, whatever its association.
+  const COMMENT = `repos/${REPO}/issues/comments/900`;
+  const { start, end } = findRegion(original);
+  w.set((v) => { v.sources[COMMENT] = { body: `Notes.\n${original.slice(start, end)}\n`, user: { login: 'someone' }, author_association: 'NONE' }; });
+  const url = `src=https://github.com/${REPO}/issues/40#issuecomment-900`;
+  assert.deepEqual([w.cli('takeover', url).code, w.cli('takeover', url).out.error], [1, 'untrusted-source']);
+  assert.equal(existsSync(state), false);
+  w.set((v) => { v.sources[COMMENT].user.login = LOGIN; });
+  const r = w.cli('takeover', url);
+  assert.equal(r.code, 0, r.text);
+  t.after(() => { try { process.kill(r.out.loop.pid); } catch { /* already gone */ } });
+  const dir = join(dirname(w.dir), 'c900');
+  assert.equal(r.out.rebuilt, dir);
+  assert.deepEqual(json(join(dir, 'settings.json')).src, { kind: 'comment', id: 900, parent: { kind: 'issue', number: 40 } });
+  await stopLoopOf(w, dir, r);
+});
+
+test('stop keeps the lease and says loop-busy while the loop is still in a tick', async (t) => {
+  const w = world();
+  w.init();
+  // A sleeper that ignores SIGTERM stands in for a loop in a long tick; its arguments look like the loop's.
+  const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)", 'run', '--batch', w.dir],
+    { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => child.kill('SIGKILL'));
+  await new Promise((ready) => child.stdout.once('data', ready));
+  writeFileSync(w.file('lease.json'), JSON.stringify({ pid: child.pid, host: hostname(), nonce: 'n1' }));
+  const r = w.cli('stop');
+  assert.deepEqual([r.code, r.out.error], [1, 'loop-busy'], r.text);
+  assert.equal(json(w.file('lease.json')).nonce, 'n1');
+  assert.deepEqual([w.cli('takeover').code, w.cli('takeover').out.error], [1, 'lease-held']); // no second loop meanwhile
 });
 
 test('handover to the current or a logged-out account warns and changes nothing', () => {
