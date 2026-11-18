@@ -45,31 +45,95 @@ const graphql = (gh, args) => {
   return res.data;
 };
 
-// ---- The source the ledger lives in (§6): an issue body, a discussion body, or an issue comment ----
+// ---- The source the ledger lives in (§6): an issue or discussion body, or an issue or discussion comment ----
+// A discussion comment source also carries `nodeId`, its GraphQL id.
 
 const restPath = (repo, src) => (src.kind === 'comment' ? `repos/${repo}/issues/comments/${src.id}` : `repos/${repo}/issues/${src.number}`);
-const READ_DISCUSSION = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { id body } } }';
+const repoVars = (repo) => { const [owner, name] = repo.split('/'); return ['-f', `owner=${owner}`, '-f', `name=${name}`]; };
+const READ_DISCUSSION = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { id body authorAssociation author { login } } } }';
 const UPDATE_DISCUSSION = 'mutation($id: ID!, $body: String!) { updateDiscussion(input: { discussionId: $id, body: $body }) { discussion { id } } }';
+const READ_DISCUSSION_COMMENT = 'query($id: ID!) { node(id: $id) { ... on DiscussionComment { body authorAssociation author { login } } } }';
+const UPDATE_DISCUSSION_COMMENT = 'mutation($id: ID!, $body: String!) { updateDiscussionComment(input: { commentId: $id, body: $body }) { comment { id } } }';
+const ADD_DISCUSSION_COMMENT = 'mutation($id: ID!, $body: String!) { addDiscussionComment(input: { discussionId: $id, body: $body }) { comment { id databaseId } } }';
+const SOURCE_KIND = 'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issueOrPullRequest(number: $number) { __typename } discussion(number: $number) { id } } }';
+const DISCUSSION_COMMENTS = 'query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { discussion(number: $number) { comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id databaseId } } } } }';
+const inDiscussion = (src) => src.kind === 'comment' && src.parent?.kind === 'discussion';
+const authorOf = (login, association) => ({ author: login ?? '', association });
 
-/** → { body } for an issue or comment, { body, id } for a discussion (id is its node id). Throws GithubUnavailable. */
+export const sourceUrl = (repo, src) => (src.kind === 'comment'
+  ? `https://github.com/${repo}/${src.parent?.kind === 'discussion' ? `discussions/${src.parent.number}#discussioncomment-` : `issues/${src.parent?.number}#issuecomment-`}${src.id}`
+  : `https://github.com/${repo}/${src.kind === 'discussion' ? 'discussions' : 'issues'}/${src.number}`);
+
+/** → { body, author, association }, plus `id` (its node id) for a discussion. Throws GithubUnavailable. */
 export function readSource({ repo, src, gh }) {
-  if (src.kind !== 'discussion') return { body: run(gh, ['api', restPath(repo, src)]).body ?? '' };
-  const [owner, name] = repo.split('/');
-  const d = graphql(gh, ['-f', `query=${READ_DISCUSSION}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${src.number}`])?.repository?.discussion;
+  if (inDiscussion(src)) {
+    const c = graphql(gh, ['-f', `query=${READ_DISCUSSION_COMMENT}`, '-f', `id=${src.nodeId}`])?.node;
+    if (!c) throw new GithubUnavailable(`discussion comment ${src.id} not found`);
+    return { body: c.body ?? '', ...authorOf(c.author?.login, c.authorAssociation) };
+  }
+  if (src.kind !== 'discussion') {
+    const r = run(gh, ['api', restPath(repo, src)]);
+    return { body: r.body ?? '', ...authorOf(r.user?.login, r.author_association) };
+  }
+  const d = graphql(gh, ['-f', `query=${READ_DISCUSSION}`, ...repoVars(repo), '-F', `number=${src.number}`])?.repository?.discussion;
   if (!d) throw new GithubUnavailable(`discussion #${src.number} not found`);
-  return { body: d.body ?? '', id: d.id };
+  return { body: d.body ?? '', id: d.id, ...authorOf(d.author?.login, d.authorAssociation) };
 }
 
-/** Replaces the whole body. It reaches gh as `body=@<file>` from a private temporary directory, never as argv text. */
-export function writeSource({ repo, src, body, gh }) {
+// `fn(file)` with `body` in a file of a private temporary directory, so the text never becomes argv.
+function withBodyFile(body, fn) {
   const tmp = mkdtempSync(join(tmpdir(), 'dev-batch-body-'));
   const file = join(tmp, 'body.md');
   try {
     writeFileSync(file, body);
-    if (src.kind !== 'discussion') run(gh, ['api', '-X', 'PATCH', restPath(repo, src), '-F', `body=@${file}`]);
-    else graphql(gh, ['-f', `query=${UPDATE_DISCUSSION}`, '-f', `id=${readSource({ repo, src, gh }).id}`, '-F', `body=@${file}`]);
+    return fn(file);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Replaces the whole body. It reaches gh as `body=@<file>`, never as argv text. */
+export function writeSource({ repo, src, body, gh }) {
+  withBodyFile(body, (file) => {
+    if (inDiscussion(src)) graphql(gh, ['-f', `query=${UPDATE_DISCUSSION_COMMENT}`, '-f', `id=${src.nodeId}`, '-F', `body=@${file}`]);
+    else if (src.kind !== 'discussion') run(gh, ['api', '-X', 'PATCH', restPath(repo, src), '-F', `body=@${file}`]);
+    else graphql(gh, ['-f', `query=${UPDATE_DISCUSSION}`, '-f', `id=${readSource({ repo, src, gh }).id}`, '-F', `body=@${file}`]);
+  });
+}
+
+/** A new comment by the signed-in account on `parent` ({ kind: 'issue' | 'discussion', number }) → it as a source. */
+export function createComment({ repo, parent, body, gh }) {
+  const src = withBodyFile(body, (file) => {
+    if (parent.kind === 'issue') return { id: run(gh, ['api', '-X', 'POST', `repos/${repo}/issues/${parent.number}/comments`, '-F', `body=@${file}`]).id };
+    const id = readSource({ repo, src: parent, gh }).id;
+    const c = graphql(gh, ['-f', `query=${ADD_DISCUSSION_COMMENT}`, '-f', `id=${id}`, '-F', `body=@${file}`])?.addDiscussionComment?.comment;
+    return { id: c?.databaseId, nodeId: c?.id };
+  });
+  // The id names the batch's state directory: never trust it to be a number.
+  if (!Number.isSafeInteger(src.id) || src.id < 1) throw new GithubUnavailable(`unexpected comment id ${JSON.stringify(src.id)}`);
+  return { kind: 'comment', id: src.id, parent, ...(src.nodeId && { nodeId: src.nodeId }) };
+}
+
+/** 'issue' | 'discussion' | 'pull-request' | null for number N. gh exits 1 when one lookup is NOT_FOUND; the other answers. */
+export function sourceKind({ repo, number, gh }) {
+  const r = gh(['api', 'graphql', '-f', `query=${SOURCE_KIND}`, ...repoVars(repo), '-F', `number=${number}`]);
+  let res = null;
+  try { res = JSON.parse(r.stdout); } catch { /* below */ }
+  if (!res?.data || res.errors?.some((e) => e.type !== 'NOT_FOUND')) throw new GithubUnavailable(`gh api graphql exited ${r.code}: ${String(r.stderr).trim()}`);
+  const kind = res.data.repository?.issueOrPullRequest?.__typename;
+  return kind === 'Issue' ? 'issue' : kind === 'PullRequest' ? 'pull-request' : res.data.repository?.discussion ? 'discussion' : null;
+}
+
+/** The node id of discussion #number's comment with database id `id`, paging its comments; null when absent. */
+export function discussionCommentNode({ repo, number, id, gh }) {
+  for (let after = null; ;) {
+    const page = graphql(gh, ['-f', `query=${DISCUSSION_COMMENTS}`, ...repoVars(repo), '-F', `number=${number}`, ...(after ? ['-f', `after=${after}`] : [])])
+      ?.repository?.discussion?.comments;
+    if (!page) throw new GithubUnavailable(`discussion #${number} not found`);
+    const hit = page.nodes.find((n) => n.databaseId === id);
+    if (hit) return hit.id;
+    if (!page.pageInfo.hasNextPage) return null;
+    after = page.pageInfo.endCursor;
   }
 }
 

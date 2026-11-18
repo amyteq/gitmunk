@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { factsQuery, fetchFacts, issueFacts, readSource, writeSource, GithubUnavailable } from './facts.mjs';
+import { createComment, discussionCommentNode, factsQuery, fetchFacts, issueFacts, readSource, sourceKind, sourceUrl, writeSource, GithubUnavailable } from './facts.mjs';
 
 const REPO = 'example-org/example-repo';
 const LOGIN = 'bot-user';
@@ -135,18 +135,86 @@ function recorder(reply) {
   return { gh, calls };
 }
 
-test('readSource reads an issue body, an issue comment and a discussion', () => {
-  const issue = recorder(() => ok({ body: 'issue text' }));
-  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'issue', number: 40 }, gh: issue.gh }), { body: 'issue text' });
+test('readSource reads an issue body, an issue comment and a discussion, with the author and association', () => {
+  const issue = recorder(() => ok({ body: 'issue text', user: { login: 'someone' }, author_association: 'NONE' }));
+  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'issue', number: 40 }, gh: issue.gh }), { body: 'issue text', author: 'someone', association: 'NONE' });
   assert.deepEqual(issue.calls[0].args, ['api', `repos/${REPO}/issues/40`]);
 
-  const comment = recorder(() => ok({ body: 'comment text' }));
-  assert.equal(readSource({ repo: REPO, src: { kind: 'comment', id: 77, parent: { kind: 'issue', number: 40 } }, gh: comment.gh }).body, 'comment text');
+  const comment = recorder(() => ok({ body: 'comment text', user: { login: LOGIN }, author_association: 'OWNER' }));
+  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'comment', id: 77, parent: { kind: 'issue', number: 40 } }, gh: comment.gh }),
+    { body: 'comment text', author: LOGIN, association: 'OWNER' });
   assert.deepEqual(comment.calls[0].args, ['api', `repos/${REPO}/issues/comments/77`]);
 
-  const disc = recorder(() => ok({ data: { repository: { discussion: { id: 'D_1', body: 'discussion text' } } } }));
-  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'discussion', number: 9 }, gh: disc.gh }), { body: 'discussion text', id: 'D_1' });
+  const disc = recorder(() => ok({ data: { repository: { discussion: { id: 'D_1', body: 'discussion text', authorAssociation: 'MEMBER', author: { login: 'm' } } } } }));
+  assert.deepEqual(readSource({ repo: REPO, src: { kind: 'discussion', number: 9 }, gh: disc.gh }), { body: 'discussion text', id: 'D_1', author: 'm', association: 'MEMBER' });
   assert.deepEqual(disc.calls[0].args.slice(-6), ['-f', 'owner=example-org', '-f', 'name=example-repo', '-F', 'number=9']);
+});
+
+// ---- Discussion comments, new comments and source kinds (Task 13) ----
+
+const DC = { kind: 'comment', id: 456, parent: { kind: 'discussion', number: 9 }, nodeId: 'DC_1' };
+
+test('a discussion comment is read and written through GraphQL by its node id', () => {
+  const read = recorder(() => ok({ data: { node: { body: 'dc text', authorAssociation: 'COLLABORATOR', author: { login: 'c' } } } }));
+  assert.deepEqual(readSource({ repo: REPO, src: DC, gh: read.gh }), { body: 'dc text', author: 'c', association: 'COLLABORATOR' });
+  assert.match(read.calls[0].args.find((a) => a.startsWith('query=')), /node\(id: \$id\) \{ \.\.\. on DiscussionComment/);
+  assert.ok(read.calls[0].args.includes('id=DC_1'));
+
+  const write = recorder(() => ok({ data: { updateDiscussionComment: { comment: { id: 'DC_1' } } } }));
+  writeSource({ repo: REPO, src: DC, body: BODY, gh: write.gh });
+  assert.equal(write.calls.length, 1);
+  assert.match(write.calls[0].args.find((a) => a.startsWith('query=')), /updateDiscussionComment\(input: \{ commentId: \$id, body: \$body \}\)/);
+  assert.ok(write.calls[0].args.includes('id=DC_1'));
+  assert.equal(write.calls[0].content, BODY);
+  assert.ok(!write.calls[0].args.some((a) => a.includes('Intro')));
+});
+
+test('createComment posts a new issue or discussion comment through a file and returns it as a source', () => {
+  const issue = recorder(() => ok({ id: 900, html_url: `https://github.com/${REPO}/issues/40#issuecomment-900` }));
+  assert.deepEqual(createComment({ repo: REPO, parent: { kind: 'issue', number: 40 }, body: BODY, gh: issue.gh }),
+    { kind: 'comment', id: 900, parent: { kind: 'issue', number: 40 } });
+  assert.deepEqual(issue.calls[0].args.slice(0, 5), ['api', '-X', 'POST', `repos/${REPO}/issues/40/comments`, '-F']);
+  assert.equal(issue.calls[0].content, BODY);
+  assert.ok(!issue.calls[0].args.some((a) => a.includes('Intro')));
+
+  const disc = recorder((args) => (args.some((a) => a.includes('addDiscussionComment'))
+    ? ok({ data: { addDiscussionComment: { comment: { id: 'DC_9', databaseId: 901 } } } })
+    : ok({ data: { repository: { discussion: { id: 'D_1', body: 'x' } } } })));
+  assert.deepEqual(createComment({ repo: REPO, parent: { kind: 'discussion', number: 9 }, body: BODY, gh: disc.gh }),
+    { kind: 'comment', id: 901, parent: { kind: 'discussion', number: 9 }, nodeId: 'DC_9' });
+  const add = disc.calls.at(-1);
+  assert.ok(add.args.includes('id=D_1'));
+  assert.equal(add.content, BODY);
+
+  assert.throws(() => createComment({ repo: REPO, parent: { kind: 'issue', number: 40 }, body: BODY, gh: () => ok({ id: '../x' }) }), GithubUnavailable);
+});
+
+test('sourceKind tells an issue, a discussion and a pull request apart, tolerating the other lookup\'s NOT_FOUND', () => {
+  const reply = (repository) => () => ({ code: 1, stdout: JSON.stringify({ data: { repository }, errors: [{ type: 'NOT_FOUND', message: 'Could not resolve' }] }), stderr: 'gh: Could not resolve' });
+  assert.equal(sourceKind({ repo: REPO, number: 40, gh: reply({ issueOrPullRequest: { __typename: 'Issue' }, discussion: null }) }), 'issue');
+  assert.equal(sourceKind({ repo: REPO, number: 9, gh: reply({ issueOrPullRequest: null, discussion: { id: 'D_1' } }) }), 'discussion');
+  assert.equal(sourceKind({ repo: REPO, number: 5, gh: reply({ issueOrPullRequest: { __typename: 'PullRequest' }, discussion: null }) }), 'pull-request');
+  assert.equal(sourceKind({ repo: REPO, number: 6, gh: reply({ issueOrPullRequest: null, discussion: null }) }), null);
+  assert.throws(() => sourceKind({ repo: REPO, number: 7, gh: () => ({ code: 1, stdout: '', stderr: 'HTTP 502' }) }), GithubUnavailable);
+  assert.throws(() => sourceKind({ repo: REPO, number: 7, gh: () => ok({ data: null, errors: [{ type: 'RATE_LIMITED' }] }) }), GithubUnavailable);
+});
+
+test('discussionCommentNode pages the discussion\'s comments for the database id', () => {
+  const pages = [
+    { pageInfo: { hasNextPage: true, endCursor: 'C1' }, nodes: [{ id: 'DC_a', databaseId: 1 }] },
+    { pageInfo: { hasNextPage: false, endCursor: 'C2' }, nodes: [{ id: 'DC_b', databaseId: 456 }] },
+  ];
+  const r = recorder((args) => ok({ data: { repository: { discussion: { comments: pages[args.includes('after=C1') ? 1 : 0] } } } }));
+  assert.equal(discussionCommentNode({ repo: REPO, number: 9, id: 456, gh: r.gh }), 'DC_b');
+  assert.equal(r.calls.length, 2);
+  assert.equal(discussionCommentNode({ repo: REPO, number: 9, id: 999, gh: r.gh }), null);
+});
+
+test('sourceUrl links every kind of source', () => {
+  assert.equal(sourceUrl(REPO, { kind: 'issue', number: 40 }), `https://github.com/${REPO}/issues/40`);
+  assert.equal(sourceUrl(REPO, { kind: 'discussion', number: 9 }), `https://github.com/${REPO}/discussions/9`);
+  assert.equal(sourceUrl(REPO, { kind: 'comment', id: 77, parent: { kind: 'issue', number: 40 } }), `https://github.com/${REPO}/issues/40#issuecomment-77`);
+  assert.equal(sourceUrl(REPO, DC), `https://github.com/${REPO}/discussions/9#discussioncomment-456`);
 });
 
 test('writeSource passes the body through a temporary file, never as argv text', () => {

@@ -7,7 +7,7 @@ import { advance, dispatchable, dispatchOrder } from './advance.mjs';
 import { chooseAccount, limitCooling, readSnapshot } from './accounts.mjs';
 import { deriveAbbr } from './config.mjs';
 import { appendEvent, pendingCount, pidAlive, queueJudgment, releaseLease, takeLease } from './events.mjs';
-import { GithubUnavailable, fetchFacts, issueFacts, readSource, writeSource } from './facts.mjs';
+import { GithubUnavailable, fetchFacts, issueFacts, readSource, sourceUrl, writeSource } from './facts.mjs';
 import { findRegion, ownerEdits, parseLedger, renderLedger, spliceLedger } from './ledger.mjs';
 import { batchSummary, sessionRecord, summarizeTranscript } from './metrics.mjs';
 import { appendedScope, nextFreeName, sessionName, stagePrompt } from './prompts.mjs';
@@ -35,10 +35,6 @@ function writeAtomic(path, text) {
   renameSync(tmp, path);
 }
 const writeJson = (path, value) => writeAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
-
-const sourceUrl = (repo, src) => (src.kind === 'comment'
-  ? `https://github.com/${repo}/issues/${src.parent?.number}#issuecomment-${src.id}`
-  : `https://github.com/${repo}/${src.kind === 'discussion' ? 'discussions' : 'issues'}/${src.number}`);
 
 // ---- The repository merge lock (R9): one merge at a time across every batch of the repository ----
 
