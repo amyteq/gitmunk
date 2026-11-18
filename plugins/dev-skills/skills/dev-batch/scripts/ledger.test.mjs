@@ -91,7 +91,7 @@ test('unreadable task cell with no previous row is dropped with a problem', () =
 
 test('owner edits', () => {
   const last = example();
-  last.rows.push(row(4, 44, { status: 'blocked' }), row(5, 45, { status: 'implementing' }));
+  last.rows.push(row(4, 44, { status: 'blocked' }), row(5, 45, { status: 'implementing' }), row(6, 46, { status: 'hold' }));
   const edit = (fn) => { const c = structuredClone(last); fn(c); return ownerEdits(last, c); };
   assert.deepEqual(edit(() => {}), []);
   assert.deepEqual(edit((c) => c.rows.reverse()).map((e) => e.type), ['order']);
@@ -100,6 +100,7 @@ test('owner edits', () => {
   assert.deepEqual(edit((c) => { c.rows[4].status = 'hold'; }), [{ type: 'hold', issue: 45 }]);
   assert.deepEqual(edit((c) => { c.rows[2].status = 'queued'; }), [{ type: 'answered', issue: 43 }]);
   assert.deepEqual(edit((c) => { c.rows[3].status = 'queued'; }), [{ type: 'answered', issue: 44 }]);
+  assert.deepEqual(edit((c) => { c.rows[5].status = 'queued'; }), [{ type: 'release', issue: 46 }]);
   assert.deepEqual(edit((c) => c.rows.splice(1, 1)), [{ type: 'deleted', issue: 42 }]);
   assert.deepEqual(edit((c) => { c.authorization = null; }).map((e) => e.type), ['authorization']);
   assert.deepEqual(edit((c) => { c.authorization += ' x'; }).map((e) => e.type), ['authorization']);

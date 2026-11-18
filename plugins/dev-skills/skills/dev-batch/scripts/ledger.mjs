@@ -155,6 +155,7 @@ export function ownerEdits(lastWritten, current) {
     if (was.batch !== r.batch) edits.push({ type: 'batch', issue: r.issue, value: r.batch });
     if (r.status === 'hold' && was.status !== 'hold') edits.push({ type: 'hold', issue: r.issue });
     else if (r.status === 'queued' && (was.status === 'owner' || was.status === 'blocked')) edits.push({ type: 'answered', issue: r.issue });
+    else if (r.status === 'queued' && was.status === 'hold') edits.push({ type: 'release', issue: r.issue });
   }
   return edits;
 }
