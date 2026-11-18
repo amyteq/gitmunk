@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `dev-batch` skill (#44, #45): runs a batch of issues through refine, implement, review and squash merge as background sessions across accounts, with one ledger in the source issue or discussion and merges only under the owner's authorization line. `dev-skills` 0.3.0-beta.1 (nine skills). The translations in `i18n/` follow in their own update.
+
 ## 0.5.0
 
 - Ask workflow reactions (#41): once a mention is authorized, a new `react` job adds a reaction to the triggering comment, issue, pull request or discussion, 🚀 `rocket` for Claude and 👀 `eyes` for Codex, as the retired pipeline did. `CLAUDE_ACTION_REACTION` / `CODEX_ACTION_REACTION` choose another of GitHub's reactions (`+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`); any other value warns and keeps the default. The job has `issues`, `pull-requests` and `discussions` write, which the caller templates already grant; it never delays or fails the agent run. Plugins unchanged.

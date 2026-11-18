@@ -10,7 +10,7 @@ A pocket-sized toolkit of agent skills, guardrail hooks and GitHub workflows for
 
 | Plugin | What it adds |
 | --- | --- |
-| [`dev-skills`](plugins/dev-skills) | Eight agent skills for GitHub work: refine issues into work orders, review and merge PRs, explain pending decisions, compact long threads, track discussion series, and plan features and stories. See [Skills](#skills). |
+| [`dev-skills`](plugins/dev-skills) | Nine agent skills for GitHub work: refine issues into work orders, review and merge PRs, explain pending decisions, compact long threads, track discussion series, and plan features and stories. See [Skills](#skills). |
 | [`dev-hooks`](plugins/dev-hooks) | Guardrail and audit hooks for Claude Code |
 
 GitHub Actions: a reusable "Ask agent" workflow ([`.github/workflows/ask-agent.yml`](.github/workflows/ask-agent.yml)) lets Claude Code or Codex answer mentions in issues, PRs and discussions. Copy the thin callers from [`templates/github/`](templates/github).
@@ -46,6 +46,7 @@ GitHub Actions: a reusable "Ask agent" workflow ([`.github/workflows/ask-agent.y
 | [`dev-track`](plugins/dev-skills/skills/dev-track/SKILL.md) | Collects every unprocessed discussion of one category, such as meeting notes, into that category's tracker discussion, merges their TODOs, marks each one done and closes it. It drafts by default and writes only with `--apply`. |
 | [`dev-analyse-rp`](plugins/dev-skills/skills/dev-analyse-rp/SKILL.md) | Analyses one request pack (a local path, an issue or a discussion) into a planning-only proposal with a story map, delivery slices, candidate units, a dependency graph and an independent review. Only on explicit authorization does it open one PR of feat and story docs, with labels and tracking issues. |
 | [`dev-refine-story`](plugins/dev-skills/skills/dev-refine-story/SKILL.md) | Resolves a `STY_<n>` story to exactly one GitHub issue, then hands off to `dev-refine-issue`. It never implements the story. |
+| [`dev-batch`](plugins/dev-skills/skills/dev-batch/SKILL.md) | Runs a batch of issues through refine, implement, review and squash merge as background sessions across accounts, keeping one ledger in the source issue or discussion. It merges only under the owner's authorization line. |
 
 ## Install
 
@@ -134,7 +135,7 @@ To pin a commit, use the full 40-character SHA where each tool accepts one:
 | [Install guide](docs/install.md) | Installing, updating and removing gitmunk in Claude Code and Codex: the installer, scopes, channels, templates and troubleshooting |
 | [CHANGELOG.md](CHANGELOG.md) | Changes in each release, with migration notes |
 | [AGENTS.md](AGENTS.md) | Rules for working in this repository |
-| [`dev-skills`](plugins/dev-skills/README.md) | The eight skills, their authority and their setup |
+| [`dev-skills`](plugins/dev-skills/README.md) | The nine skills, their authority and their setup |
 | [Work model](plugins/dev-skills/references/work-model.md) | The `ft-sty` feat and story model that `dev-analyse-rp` and `dev-refine-story` follow |
 | [`dev-hooks`](plugins/dev-hooks/README.md) | Each hook, what it denies or asks about, and its failure policy |
 | [Ask agent](scripts/github-agent/README.md) | Setting up the Ask workflow in a repository |
