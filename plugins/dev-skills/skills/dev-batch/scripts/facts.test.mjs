@@ -148,6 +148,9 @@ test('owner answer: only an unmarked comment outside every session window counts
   assert.equal(during.ownerAnswer, null);
   const open = facts(raw, { sessions: [{ stage: 'implement', startedAt: '2026-01-02T04:00:00Z', endedAt: null }] });
   assert.equal(open.ownerAnswer, null);
+  // I4: a session that left `working` before the answer (idle, not stopped) no longer runs.
+  const idle = facts(raw, { sessions: [{ stage: 'implement', startedAt: '2026-01-02T04:00:00Z', endedAt: null, idleAt: '2026-01-02T04:30:00Z' }] });
+  assert.deepEqual(idle.ownerAnswer, { at: '2026-01-02T05:00:00Z' });
 });
 
 test('lastActivity is the newest of issue comments, PR comments, reviews and the head commit', () => {

@@ -226,8 +226,12 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
 
   const q = mine.filter((c) => firstLine(c.body) === `<!-- dev-batch:owner issue=${issue} -->`).at(-1);
   const ownerQuestion = q ? { url: q.url, at: q.createdAt } : null;
-  // §11: after the question, no agent marker, posted while no session of the row ran (an open window has to: null).
-  const during = (t) => sessions.some(({ startedAt: from, endedAt: to }) => Date.parse(t) >= Date.parse(from) && (!to || Date.parse(t) <= Date.parse(to)));
+  // §11: after the question, no agent marker, posted while no session of the row ran. A session runs from its start
+  // until it ended, or until it left `working` (I4: an idle session that was not stopped); an open window has neither.
+  const during = (t) => sessions.some(({ startedAt: from, endedAt, idleAt }) => {
+    const to = endedAt ?? idleAt;
+    return Date.parse(t) >= Date.parse(from) && (!to || Date.parse(t) <= Date.parse(to));
+  });
   const a = q && mine.find((c) => time(c.createdAt) > time(q.createdAt) && !/<!-- dev-[a-z-]+/.test(c.body) && !during(c.createdAt));
   const ownerAnswer = a ? { at: a.createdAt } : null;
 

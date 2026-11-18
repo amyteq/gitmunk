@@ -93,7 +93,7 @@ Each batch has a state directory, `${XDG_STATE_HOME:-~/.local/state}/dev-batch/<
 | `ledger.last.md` | The region as last written to GitHub |
 | `ledger.next.md` | Decided changes whose GitHub write was skipped or failed. While it is pending, the next tick writes it |
 | `ledger.seen.md` | The region that `ledger.next.md` was decided from. Owner edits are compared with it, so each applies once |
-| `sessions.json` | One record per session the batch launched: name, stage, issue, PR, attempt, account alias, ids, start, end and state |
+| `sessions.json` | One record per session the batch launched: name, stage, issue, PR, attempt, account alias, ids, start, end, when it last left `working` (`idleAt`), and state |
 | `loop.json` | The loop's counters: failed GitHub ticks and launches, cooling accounts, hourly login checks |
 | `events.jsonl` | Every event ([metrics.md](metrics.md#eventsjsonl)) |
 | `pending/` | Judgments not yet delivered to the coordinator |

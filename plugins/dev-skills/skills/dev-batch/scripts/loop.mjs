@@ -180,6 +180,7 @@ export function tick(ctx) {
     // A readable account that does not list it: gone, unless it was launched so recently that it is still registering.
     rec.state = agent?.state ?? (ENDED.has(was) ? was : registering(rec, now) ? 'working' : 'stopped');
     rec.sessionId = agent?.sessionId ?? rec.sessionId;
+    rec.idleAt = rec.state === 'working' ? null : rec.idleAt ?? iso(now); // I4: when it left `working`, for owner answers
     // §12: blocked on a usage limit → limited, and its account cools until the stated reset.
     const until = rec.state === 'blocked' && limitCooling(sessions.logs(cli(rec.account), rec.id ?? rec.name) ?? '', now);
     if (until) {

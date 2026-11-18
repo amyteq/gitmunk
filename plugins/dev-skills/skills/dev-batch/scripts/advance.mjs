@@ -131,6 +131,8 @@ export function advance({ row, facts, sessions, settings, authorized, mergeLock,
   // One merge per repository: a merge launch or a live merge session holds the lock, until the PR is merged.
   const needsLock = want !== 'merged' && (actions.some((a) => a.type === 'launch' && a.stage === 'merge') || LIVE.has(latest('merge')?.state));
   const lock = needsLock && mergeLock === 'free' ? [{ type: 'lock' }] : !needsLock && mergeLock === 'mine' ? [{ type: 'unlock' }] : [];
-  const stops = sessions.filter((s) => IDLE.has(s.state) && RANK[s.stage] < RANK[want]).map((s) => ({ type: 'stop', session: s.name }));
+  // §11, I4: a worker that asked the owner ends; stopping it once idle closes its window, so a later comment is the answer.
+  const asked = status === 'owner' && next === decision;
+  const stops = sessions.filter((s) => IDLE.has(s.state) && (RANK[s.stage] < RANK[want] || asked)).map((s) => ({ type: 'stop', session: s.name }));
   return { status, pr: facts.pr?.number ?? row.pr, head: facts.pr?.head?.slice(0, 7) ?? row.head, next, actions: [...stops, ...lock, ...actions] };
 }

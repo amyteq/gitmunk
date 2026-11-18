@@ -21,10 +21,12 @@ const lines = (path) => (existsSync(path) ? readFileSync(path, 'utf8').trim().sp
 const row = (n, issue, over = {}) => ({ n, issue, title: `Task ${issue}`, deps: [], batch: 1, status: 'queued', pr: null, head: null, session: null, next: '', ...over });
 
 // The issue as GitHub's facts query returns it: plain, or refined (task comment + verdict), with an optional PR.
-function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention = null } = {}) {
+function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention = null, comments = [] } = {}) {
   const node = JSON.parse(FIXTURE.replaceAll('issues/41', `issues/${n}`).replaceAll('issue=41', `issue=${n}`)).data.repository.issue_41;
   if (!refined) Object.assign(node, { body: 'Plain issue.', comments: { totalCount: 0, nodes: [] } });
   node.comments.nodes[1] &&= { ...node.comments.nodes[1], body: node.comments.nodes[1].body.replace('state=ready', `state=${verdict}`) };
+  node.comments.nodes.push(...comments);
+  node.comments.totalCount = node.comments.nodes.length;
   const prNode = (p) => ({
     number: p.number, state: p.merged ? 'MERGED' : 'OPEN', merged: !!p.merged, headRefOid: HEAD, author: { login: LOGIN },
     createdAt: p.createdAt ?? '2026-11-19T10:05:00Z', mergedAt: p.merged ? (p.mergedAt ?? '2026-11-19T10:19:00Z') : null, baseRepository: { nameWithOwner: REPO },
@@ -58,7 +60,7 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
   const w = {
     dir, accts, lock: join(dirname(dir), 'merge.lock'), body: `Intro text.\n\n${region}\n\nOutro text.\n`, issues: {},
     agents: Object.fromEntries(accts.map((a) => [a.dir, []])), records: [], logs: {},
-    ghDown: false, writeFails: false, launchFails: false, hideLaunches: false, unreadable: new Set(), reads: 0, onRead: null, edits: [], claudeCalls: [],
+    ghDown: false, writeFails: false, launchFails: false, stopFails: false, hideLaunches: false, unreadable: new Set(), reads: 0, onRead: null, edits: [], claudeCalls: [],
   };
   w.gh = (args) => {
     if (w.ghDown) return { code: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway' };
@@ -82,7 +84,7 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
     if (args[0] === 'agents') return w.unreadable.has(cfg) ? { code: 1, stdout: '', stderr: 'not logged in' } : ok(list);
     if (args[0] === 'auth') return ok({ loggedIn: true });
     if (args[0] === 'logs') return { code: 0, stdout: w.logs[args[1]] ?? '', stderr: '' };
-    if (args[0] === 'stop') { const a = list.find((x) => x.id === args[1]); if (a) a.state = 'stopped'; return { code: a ? 0 : 1, stdout: '', stderr: '' }; }
+    if (args[0] === 'stop') { if (w.stopFails) return { code: 1, stdout: '', stderr: 'stop failed' }; const a = list.find((x) => x.id === args[1]); if (a) a.state = 'stopped'; return { code: a ? 0 : 1, stdout: '', stderr: '' }; }
     if (args[0] === '--bg') {
       if (w.launchFails) return { code: 1, stdout: '', stderr: 'launch failed' };
       const id = (0xa0000000 + ++ids).toString(16);
@@ -385,6 +387,37 @@ test('merge=auto under a line without the merge clause waits for merge authoriza
   const r = w.tick(T(10));
   assert.deepEqual([r.launched, existsSync(w.lock)], [[], false]);
   assert.deepEqual(w.ledger().rows.map((x) => [x.status, x.next]), [['owner', 'waiting for merge authorization']]);
+});
+
+// A worker asks the owner on #41 at 10:30 and goes idle; the owner answers by comment at 11:10.
+const ask = (body, at) => ({ databaseId: Date.parse(at) / 1000, body, authorAssociation: 'OWNER', createdAt: at, url: `https://github.com/${REPO}/issues/41#issuecomment-${Date.parse(at) / 1000}`, author: { login: LOGIN } });
+function asked({ stopFails = false } = {}) {
+  const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' })] });
+  w.issues[41] = { refined: true, comments: [ask('<!-- dev-batch:owner issue=41 -->\nWhich format?', '2026-11-19T10:30:00Z')] };
+  w.agent('er-i41a', { state: 'working', stage: 'implement', issue: 41 });
+  w.stopFails = stopFails;
+  w.set('er-i41a', 'done');
+  return w;
+}
+
+test('a session idle after its owner question is stopped, and a later comment is the answer (I4)', () => {
+  const w = asked();
+  const r = w.tick(T(11));
+  assert.deepEqual([w.status()[41], r.stopped], ['owner', ['er-i41a']]);
+  w.issues[41].comments.push(ask('Take CSV.', '2026-11-19T11:10:00Z'));
+  w.tick(T(11, 15));
+  assert.deepEqual(w.pending().map((e) => e.type), ['owner-reply']);
+  assert.match(w.ledger().rows[0].next, /^owner replied: /);
+});
+
+test('when the asking session cannot be stopped, its window closes when it left working (I4)', () => {
+  const w = asked({ stopFails: true });
+  const r = w.tick(T(11));
+  assert.deepEqual([w.status()[41], r.stopped, w.events().filter((e) => e.type === 'stop-failed').length], ['owner', [], 1]);
+  assert.equal(w.sessions()[0].idleAt, new Date(T(11)).toISOString());
+  w.issues[41].comments.push(ask('Take CSV.', '2026-11-19T11:10:00Z'));
+  w.tick(T(11, 15));
+  assert.deepEqual(w.pending().map((e) => e.type), ['owner-reply']);
 });
 
 test('owner edits: order, hold and a deleted row', () => {
