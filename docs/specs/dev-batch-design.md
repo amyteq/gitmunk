@@ -1,6 +1,19 @@
-# dev-batch: design
+---
+title: "dev-batch: design"
+skill: dev-batch
+plugin: dev-skills
+version: 0.2.0
+status: in review
+created: 2026-11-18
+updated: 2026-11-18
+issue: 44
+pr: 45
+history:
+  - "0.2.0 (2026-11-18): owner review of 0.1.0 (design accepted; file renamed without a date; this frontmatter). Follow-up proposals: sub-command argument hint with one ask round, `setup`, `autocompact` default 300k, logs and metrics for later evaluation, what to watch after go-live"
+  - "0.1.0 (2026-11-18): first draft"
+---
 
-Status: draft for owner review · 18 Nov 2026 · skill `dev-batch` in the `dev-skills` plugin · tracked in #44
+# dev-batch: design
 
 ## 1. Why
 
@@ -36,7 +49,7 @@ Owners already drive features through the `dev-skills` chain by hand or with an 
 - Reading Codex usage to throttle reviews. A review blocked by a limit surfaces as a judgment event.
 - Shared resource slots beyond the cap and the merge lock (for example one E2E environment).
 - Several machines coordinating one batch at the same time. Takeover across machines works through the ledger; running two loops does not.
-- Token and cost reporting. The event log keeps stage timestamps; token metrics can come later from transcripts.
+- Analysing runs and reporting trends. The skill records events and per-session metrics (§16); a later evaluation skill reads them.
 
 **Anti-goals** (failure even if it technically works)
 
@@ -94,20 +107,34 @@ All paths are inside `plugins/dev-skills/skills/dev-batch/`.
 | `SKILL.md` | Sub-commands, authority rules, the coordinator's procedure for init, judgment events, handover and takeover |
 | `references/ledger.md` | The ledger region format, status legend, owner edits that count |
 | `references/prompts.md` | The launch prompt and appended scope for each stage, and the marker comments workers write |
-| `references/accounts.md` | Accounts, usage snapshots, the status-line snippet, account choice |
-| `scripts/batch.mjs` | CLI entry: `args`, `start`, `run`, `tick`, `wait`, `stop`, `status`, `config`, `launch`, `clear`, `usage-statusline` |
-| `scripts/*.mjs` | Modules: `config`, `ledger`, `facts` (GitHub), `sessions` (CLI adapters), `advance` (state machine), `accounts`, `events` |
+| `references/accounts.md` | Accounts, usage snapshots, the status-line snippet, account choice, what `setup` writes |
+| `references/metrics.md` | The `events.jsonl` and `metrics.jsonl` record formats (§16), for the later evaluation skill |
+| `scripts/batch.mjs` | CLI entry: `args`, `start`, `run`, `tick`, `wait`, `stop`, `status`, `config`, `launch`, `clear`, `setup`, `usage-statusline` |
+| `scripts/*.mjs` | Modules: `config`, `ledger`, `facts` (GitHub), `sessions` (CLI adapters), `advance` (state machine), `accounts`, `events`, `metrics` (transcript summary) |
 | `scripts/*.test.mjs` | `node --test` suites; fixtures and stub `gh`/`claude` executables, no network |
 
 Node 20+, no new npm dependency. Commands are spawned with argument arrays, never through a shell string; GitHub text never reaches a command line except as a separate argv element of a prompt.
 
 ## 6. Sub-commands
 
-Usage: `/dev-batch <sub> [key=value…]` in Claude Code, `$dev-batch …` in Codex. Values with spaces use double quotes. Precedence is invocation argument, then environment variable, then default. With no sub-command the skill runs `status`. Every sub-command takes `extra="…"`: free-text rules the coordinator keeps in the batch settings and passes to every judgment and every worker's appended scope.
+Usage: `/dev-batch <sub> [key=value…]` in Claude Code, `$dev-batch …` in Codex. Values with spaces use double quotes. Precedence is invocation argument, then environment variable, then default; the helper carries the default of every setting, so nothing depends on the environment being set. With no sub-command the skill runs `status`. Every sub-command takes `extra="…"`: free-text rules the coordinator keeps in the batch settings and passes to every judgment and every worker's appended scope.
+
+**Argument hint and one ask round.** The hint lists only the sub-commands: `argument-hint: "[status|init|add|rm|pause|resume|config|clear|handover|takeover|setup] [key=value…]"`. After the sub-command, the skill collects the values that are still missing in **one** round of questions, recommended answer first: `AskUserQuestion` in Claude Code (at most four questions), one plain message in Codex that lists the questions with their defaults (a reply of `ok` takes them all). Values given on the command line are not asked again. `confirm=no` skips the round and uses the defaults; a required value with no default (the source of `init`) then stops with an error.
+
+| Sub-command | Asked when missing (recommended first) |
+|---|---|
+| `init` | Source (required; offers open issues and discussions that look like trackers); `merge` (`auto` / `off`); `cap` (4 / 2 / 6); model · effort (`opus` · `xhigh` / `opus` · `high`). The question text lists the other settings with their values and sources |
+| `add` | Issues; position (`end` / top / after a row); dependencies (analyse / none) |
+| `rm` | Which row; stop its running session (no / yes) |
+| `config` | With no keys: print every setting with its source, then ask about `cap`, `usage_cap`, `merge` and model · effort, "keep" first |
+| `handover` | Target account (the other valid accounts, with their usage) |
+| `takeover` | Which batch, when there are several; `force` only when the lease belongs to another host |
+| `setup` | Accounts (all configured / this one); write or show the changes only |
+| `status`, `pause`, `resume`, `clear` | Nothing; which batch only when it cannot be located (below) |
 
 | Sub-command | Arguments | Effect |
 |---|---|---|
-| `init` | `src=` (required), `label=`, `milestone=`, `merge=`, any setting from §8 | Resolve the source, collect tasks, analyse dependencies, show the key settings with recommendations and ask one confirmation question (skipped with `confirm=no`), write the ledger region and the owner's authorization line, start the loop, arm `wait` |
+| `init` | `src=` (required), `label=`, `milestone=`, `merge=`, any setting from §8 | Resolve the source, collect tasks, analyse dependencies, run the ask round with the key settings and recommendations, write the ledger region and the owner's authorization line, start the loop, arm `wait` |
 | `add` | `src=` (issue numbers `12,15`, an issue, discussion or comment), `pos=` (row number or `end`, default `end`), `deps=` | Add tasks; dependencies are analysed for the new rows only |
 | `rm` | `task=<issue>`, `stop=yes` | Mark the row ⏭️ removed. A running session finishes unless `stop=yes` stops it |
 | `handover` | `acct=` (an alias like `A2` or a config directory), `src=` or `session=` | Validate the account, stop this loop, start a coordinator session in that account that runs `takeover` |
@@ -116,6 +143,7 @@ Usage: `/dev-batch <sub> [key=value…]` in Claude Code, `$dev-batch …` in Cod
 | `clear` | `src=` | Stop every session this batch launched whose stage is finished; report the count and the memory freed |
 | `config` | `key=value…` | Change settings; the loop applies them on its next step (within 15 s). With no keys, print each setting and where it came from |
 | `status` | `src=` | Print the roll call, active sessions, pending events and the loop's health. Read-only |
+| `setup` | `acct=` (default: every configured account), `apply=no` | For each account's user settings: install the usage status line (chaining an existing one), add the `DEV_BATCH_*` values the owner chose, and raise `cleanupPeriodDays` to 365 when it is lower or unset, so transcripts survive for evaluation. Shows the change per account, writes after the ask round with a backup beside the file, and changes nothing that is already in place |
 
 **Locating the batch.** `src=` names it; `session=` names its coordinator session. Without either, the skill uses the only active batch of the current repository and stops when there are none or several.
 
@@ -176,12 +204,24 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 | `rounds` | `DEV_BATCH_ROUNDS` | `10` | `/dev-review-pr` round budget |
 | `model` / `effort` | `DEV_BATCH_MODEL` / `DEV_BATCH_EFFORT` | `opus` / `xhigh` | Model and effort of every Claude session the loop launches |
 | `reviewer_model`, `reviewer_effort`, `writer_model`, `writer_effort` | `DEV_BATCH_REVIEWER_MODEL`, … | unset (the CLI's defaults) | Passed to `/dev-review-pr` as the owner's choice for its phases |
-| `autocompact` | `DEV_BATCH_AUTOCOMPACT` | `368k` | `--autocompact` for refine, implement and review sessions. Merge sessions get none: none came near it in the pilot |
+| `autocompact` | `DEV_BATCH_AUTOCOMPACT` | `300k` | `--autocompact` for refine, implement and review sessions and the coordinator. Merge sessions get none: none came near it in the pilot |
 | `abbr` | `DEV_BATCH_ABBR` | initials of the repository name (`example-repo` → `er`; one word → its first two letters) | Session name prefix |
 
 Fixed in v1 and documented, not configurable: loop interval 5 min (plus a 15 s check for setting changes), 2 attempts per stage, a stall after 4 h without GitHub progress, automatic `clear` of finished stages, Remote Control on, permission mode `auto`.
 
-**Why `--autocompact 368k` stays for workers.** Compaction fired at about 335k and caused no loss, and a smaller window means smaller cache reads per turn, which are 98% of the tokens. The coordinator needs no special value: its state is in the ledger and the state directory, and the loop does the work that made pilot coordinators' contexts grow.
+**Why `--autocompact 300k`.** The window is the point at which Claude Code compacts, less a reserve: the pilot's `368k` fired at a median of 335k, and models with a 1M window compact at about 967k by default (`auto`). Replaying every pilot session's real context growth at other windows:
+
+| Window (fires at about) | Cache reads vs 368k | Compactions, 230 sessions | Per implement session |
+|---|---|---|---|
+| 250k (217k) | 0.70× | 235 | 2.0 |
+| **300k (267k)** | **0.83×** | **164** | **1.5** |
+| 368k (335k), the pilot | 1.00× | 103 (120 observed) | 1.0 (1.2 observed) |
+| 500k (467k) | 1.24× | 60 | 0.6 |
+| `auto` (about 967k) | 1.83× | 7 | 0.1 |
+
+Cache reads are 98% of the tokens and count against the usage windows, and an exhausted window caused the pilot's longest stall (11.6 h). The 120 pilot compactions lost nothing, and compaction did not explain unmet goals: implement sessions that compacted met their goal more often (15 of 28) than those that did not (4 of 12). The number of unmet `/goal` checks follows session length (correlation 0.45) more than compactions (0.25). `300k` saves about a sixth of the cache reads at about 1.5 compactions per implement session, close to what the pilot showed to be safe; `250k` is the next step if the metrics in §16 hold. `auto` is rejected: almost twice the cache reads.
+
+Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the environment overrides the flag, so `init` warns when it is set; and the documentation does not say whether `--autocompact` survives a background session's restart, which is a live check (§18).
 
 ## 9. Task lifecycle
 
@@ -227,7 +267,7 @@ Fixed in v1 and documented, not configurable: loop interval 5 min (plus a 15 s c
 ## 12. Accounts and usage
 
 - **Validity**: `claude auth status --json` with that `CLAUDE_CONFIG_DIR`, reading only `loggedIn`. Checked at `init`, `handover`, `takeover`, and before an account's first launch each hour.
-- **Usage source**: each account's status line runs `batch.mjs usage-statusline`, which reads the status-line JSON from stdin, writes `<config dir>/dev-batch-usage.json` (`at`, and `used_percentage` and `resets_at` for the 5-hour and 7-day windows), and prints a short usage text. `references/accounts.md` gives the settings snippet and how to chain an existing status line; installing it changes the owner's user settings, so the owner does it.
+- **Usage source**: each account's status line runs `batch.mjs usage-statusline`, which reads the status-line JSON from stdin, writes `<config dir>/dev-batch-usage.json` (`at`, and `used_percentage` and `resets_at` for the 5-hour and 7-day windows), and prints a short usage text. `setup` installs it in each account's user settings after one confirmation, chaining an existing status line; `references/accounts.md` gives the snippet for doing it by hand.
 - **Reading a snapshot**: a window whose `resets_at` has passed counts as 0%. Otherwise the last value stands; it can only have risen since, so it is a lower bound. No snapshot at all is unknown.
 - **Choice before each launch**: the coordinator's own account when its highest window is below `usage_cap`; otherwise the known account with the lowest usage below the cap; otherwise an unknown account, one session at a time until a snapshot appears; otherwise no launch, one `accounts-at-cap` event, and the next attempt at the earliest `resets_at`.
 - **Hitting a limit anyway**: a session whose job turns `blocked` with a usage-limit message in `claude logs` marks its account cooling until the reset time it states (or one hour), and the task's stage is relaunched in another account under the next session name, continuing from the pushed branch.
@@ -246,11 +286,41 @@ The loop stops a session as soon as its stage's GitHub fact is observed and the 
 
 The SKILL.md procedure is host-neutral and the helper is plain Node. Differences: `wait` runs in the foreground with a timeout instead of in the background, and the handover target is always a Claude account. Workers are Claude sessions in v1 whatever the host.
 
-## 16. Verification
+## 16. Logs and metrics
+
+The skill records enough for a later evaluation skill to measure each batch without the archaeology the pilot needed. Everything stays in the local state directory, `${XDG_STATE_HOME:-~/.local/state}/dev-batch/<owner>/<repo>/<source>/`, which the accounts on one machine share.
+
+| File | One record per | Content |
+|---|---|---|
+| `events.jsonl` | Event | Time, task, stage, session, account alias, type (launch with its argv, stage done, ledger write, wake, judgment, coordinator decision, owner edit, limit, stop, setting change) and detail |
+| `metrics.jsonl` | Session, written when the loop stops it or it ends | Name, stage, task, PR, account alias, session id, models, effort, autocompact, start and end, active time, API requests; tokens by type (input, output, cache write, cache read; deduplicated by message id, subagents included); Claude Code's own cost figure; peak context; each compaction with the tokens before and after; `/goal` checks met and not met; rate-limit and API errors; permission denials; outcome (fact reached, retried, judgment, removed). Read from the session's transcript. The coordinator's record is written at handover and at the end |
+| `summary.json` | Batch, at completion | Stage durations per task, mean and median per stage, cost per merged PR and the measures in §17; the final roll call in the ledger shows the headline numbers |
+
+- **Reviewer phases.** `/dev-review-pr` runs Codex with `--ephemeral`, so its usage is not recorded anywhere. A separate `dev-review-pr` change, tracked in its own issue, should put each phase's Codex usage in its report marker; `dev-batch` copies it into the review session's record when it is there.
+- **Retention.** Claude Code deletes transcripts after `cleanupPeriodDays` (30 days by default); `setup` raises it to 365.
+- **Not included.** OpenTelemetry export, which needs a collector while the transcripts and these files are enough; and analysis, which belongs to the later evaluation skill.
+
+## 17. What to watch after go-live
+
+| Measure | Pilot | Look for |
+|---|---|---|
+| Implement sessions that met their `/goal` | 19 of 40; 336 "not met" continuations | More, with just-in-time refine writing acceptance criteria against current code |
+| Refine → last merge, per issue (mean / median) | 17.3 h / 10.8 h | Lower |
+| Refine → first merge | 13.3 h / 6.2 h | Lower |
+| Task → dispatch | 7.7 h / 0.3 h | Mean close to the median, since refine now runs just before dispatch |
+| Cost per session, top three stages (mean) | Coordinator $50.6, implement $17.0, review $15.8 | Lower. Cost is the headline because it weighs output, cache writes and cache reads; raw tokens are 98% cache reads, the cheapest kind, and output is under 1% |
+| Cache reads per session, same three stages (mean) | 230M, 37M, 39M | Lower at `autocompact=300k`; this is what fills the usage windows |
+| Cost per merged PR | $63 | Lower |
+| Compactions per implement session; goal met with and without | 1.2; 54% / 33% | No fall in the met rate at 300k |
+| Hours with work waiting and no session running because of a usage limit | 11.6 h | None |
+
+## 18. Verification
 
 **Offline tests** (`npm test`, fixtures and stub executables only):
 
-- argument parsing, validation and precedence (argument > environment > default);
+- argument parsing, validation and precedence (argument > environment > default); which values the ask round asks per sub-command, and `confirm=no`;
+- `setup`: chains an existing status line, keeps a backup, removes nothing, and a second run changes nothing;
+- metrics from a fixture transcript: deduplication by message id, subagents, compactions, `/goal` checks, cost;
 - ledger parse → render round-trip; splicing preserves every byte outside the region; each owner edit in §7;
 - `advance` as a table: each stage × each fact combination → status and actions, including retries, stalls, head changes and merge-lock contention;
 - dependency layering and cycle detection;
@@ -259,13 +329,13 @@ The SKILL.md procedure is host-neutral and the helper is plain Node. Differences
 - fact extraction: review verdict at head, task-comment pointer and `/goal` line from an issue region, verdict and owner markers from trusted and untrusted logins, PR linkage;
 - `wait` semantics; lease refusal; a full `tick` against stub `gh` and `claude`.
 
-**Live checks** (owner-run; local tests do not prove them): the usage snapshot is written from a background session's status line; `claude agents --json --all` reports the states the loop expects; a background `wait` wakes a Claude Code session; one small batch of two dependent issues in a scratch repository runs to merge across two accounts with a forced handover.
+**Live checks** (owner-run; local tests do not prove them): the usage snapshot is written from a background session's status line; `claude agents --json --all` reports the states the loop expects; a background `wait` wakes a Claude Code session; one small batch of two dependent issues in a scratch repository runs to merge across two accounts with a forced handover; `--autocompact` is still in effect after a background session restarts; `metrics.jsonl` from that batch matches the transcripts.
 
-## 17. Rollout
+## 19. Rollout
 
-A task branch from `develop` and one PR into `develop` (the beta channel), tracked by #44. `dev-skills` goes to `0.3.0-beta.1`; `CHANGELOG.md`, the plugin README's skill table and the root README's skill table gain `dev-batch`. Translations under `i18n/` are left to their own update.
+A task branch from `develop` and one PR into `develop` (the beta channel), tracked by #44. `dev-skills` goes to `0.3.0-beta.1`; `CHANGELOG.md`, the plugin README's skill table and the root README's skill table gain `dev-batch`. Translations under `i18n/` are left to their own update. After the merge, the owner runs `/dev-batch setup` once for the configured accounts.
 
-## 18. Calls made in this design (for the owner to check)
+## 20. Calls made in this design (for the owner to check)
 
 1. `status` added as the default, read-only sub-command.
 2. The loop interval, attempts, stall time, automatic clear, Remote Control and permission mode are fixed rather than configurable.
@@ -281,5 +351,10 @@ A task branch from `develop` and one PR into `develop` (the beta channel), track
 12. The ledger is written only on change; the loop's liveness is its local lease; cross-host takeover needs `force=yes`.
 13. Merges use `cleanup=own`, wait for the PR's checks to finish, take a repository-wide lock, and are told to leave the ledger region alone; `/dev-merge`'s edits inside it are overwritten.
 14. Settings, including the account list, are fixed at `init` and change only through `config`.
+15. One ask round after the sub-command collects missing values; it replaces `init`'s single confirmation question.
+16. `setup` is a sub-command that writes the owner's user settings, after the ask round and with a backup.
+17. `autocompact` defaults to `300k` for workers and the coordinator.
+18. Metrics are read from transcripts when a session stops, not exported through OpenTelemetry.
+19. Codex reviewer usage needs a separate `dev-review-pr` change; `dev-batch` only copies it when present.
 
 Credit: the stage separation, "a worker's report is a lead, not evidence", never reusing an identifier, and the takeover rule "redo only the missing step" were adapted from `dabingfy-dot/solo-to-team-skills` (MIT).
