@@ -1,0 +1,12 @@
+{"type":"assistant","timestamp":"2026-01-01T10:00:00Z","message":{"id":"m1","model":"claude-opus-x","usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}}}
+{"type":"assistant","timestamp":"2026-01-01T10:00:01Z","message":{"id":"m1","model":"claude-opus-x","usage":{"input_tokens":10,"output_tokens":50,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000}}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:00Z","message":{"id":"m2","model":"claude-opus-x","usage":{"input_tokens":20,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":3000}}}
+{"type":"assistant","timestamp":"2026-01-01T11:00:00Z","message":{"id":"m3","model":"<synthetic>","usage":{"input_tokens":5,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
+{"type":"cost-state","timestamp":"2026-01-01T10:01:00Z","totalCostUSD":1.5}
+{"type":"cost-state","timestamp":"2026-01-01T10:02:00Z","totalCostUSD":2.5}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-01-01T10:01:30Z","compactMetadata":{"trigger":"auto","preTokens":300000,"postTokens":20000}}
+{"type":"attachment","timestamp":"2026-01-01T10:01:40Z","attachment":{"type":"goal_status","met":false}}
+{"type":"attachment","timestamp":"2026-01-01T10:01:50Z","attachment":{"type":"goal_status","met":true}}
+{"type":"assistant","timestamp":"2026-01-01T10:01:55Z","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: rate limit reached"}]}}
+{"type":"user","timestamp":"2026-01-01T10:02:00Z","message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash was denied in /work/example-org/example-repo"}]}}
+{"type":"assistant","timestamp":"2026-01-01T10:02
