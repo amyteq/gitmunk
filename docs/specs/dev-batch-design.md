@@ -9,7 +9,7 @@ updated: 2026-11-18
 issue: 44
 pr: 45
 history:
-  - "0.2.0 (2026-11-18): owner review of 0.1.0 (design accepted; file renamed without a date; this frontmatter). Follow-up proposals: sub-command argument hint with one ask round, `setup`, `autocompact` default 300k, logs and metrics for later evaluation, what to watch after go-live"
+  - "0.2.0 (2026-11-18): owner review of 0.1.0 (design accepted; file renamed without a date; this frontmatter). Follow-up proposals: sub-command argument hint with one ask round, `setup`, `autocompact` default 300k, `mcp=none` for workers, logs and metrics for later evaluation, what to watch after go-live"
   - "0.1.0 (2026-11-18): first draft"
 ---
 
@@ -206,6 +206,7 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 | `reviewer_model`, `reviewer_effort`, `writer_model`, `writer_effort` | `DEV_BATCH_REVIEWER_MODEL`, … | unset (the CLI's defaults) | Passed to `/dev-review-pr` as the owner's choice for its phases |
 | `autocompact` | `DEV_BATCH_AUTOCOMPACT` | `300k` | `--autocompact` for refine, implement and review sessions and the coordinator. Merge sessions get none: none came near it in the pilot |
 | `abbr` | `DEV_BATCH_ABBR` | initials of the repository name (`example-repo` → `er`; one word → its first two letters) | Session name prefix |
+| `mcp` | `DEV_BATCH_MCP` | `none` | MCP servers for worker sessions: `none` launches them with `--strict-mcp-config` and no servers (each unused server held 0.2–0.5 GB in the pilot); a path to an MCP config file gives exactly those servers; `inherit` keeps the account's servers |
 
 Fixed in v1 and documented, not configurable: loop interval 5 min (plus a 15 s check for setting changes), 2 attempts per stage, a stall after 4 h without GitHub progress, automatic `clear` of finished stages, Remote Control on, permission mode `auto`.
 
@@ -329,7 +330,7 @@ The skill records enough for a later evaluation skill to measure each batch with
 - fact extraction: review verdict at head, task-comment pointer and `/goal` line from an issue region, verdict and owner markers from trusted and untrusted logins, PR linkage;
 - `wait` semantics; lease refusal; a full `tick` against stub `gh` and `claude`.
 
-**Live checks** (owner-run; local tests do not prove them): the usage snapshot is written from a background session's status line; `claude agents --json --all` reports the states the loop expects; a background `wait` wakes a Claude Code session; one small batch of two dependent issues in a scratch repository runs to merge across two accounts with a forced handover; `--autocompact` is still in effect after a background session restarts; `metrics.jsonl` from that batch matches the transcripts.
+**Live checks** (owner-run; local tests do not prove them): the usage snapshot is written from a background session's status line; `claude agents --json --all` reports the states the loop expects; a background `wait` wakes a Claude Code session; one small batch of two dependent issues in a scratch repository runs to merge across two accounts with a forced handover; `--autocompact` is still in effect after a background session restarts; `mcp=none` also keeps plugin-provided MCP servers out; `metrics.jsonl` from that batch matches the transcripts.
 
 ## 19. Rollout
 
@@ -356,5 +357,6 @@ A task branch from `develop` and one PR into `develop` (the beta channel), track
 17. `autocompact` defaults to `300k` for workers and the coordinator.
 18. Metrics are read from transcripts when a session stops, not exported through OpenTelemetry.
 19. Codex reviewer usage needs a separate `dev-review-pr` change; `dev-batch` only copies it when present.
+20. Worker sessions get no MCP servers by default (`mcp=none`); a project that needs some names them in a config file.
 
 Credit: the stage separation, "a worker's report is a lead, not evidence", never reusing an identifier, and the takeover rule "redo only the missing step" were adapted from `dabingfy-dot/solo-to-team-skills` (MIT).
