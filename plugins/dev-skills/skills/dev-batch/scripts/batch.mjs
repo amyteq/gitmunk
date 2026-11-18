@@ -652,7 +652,7 @@ async function runLoop(dir) {
 
 async function waitEvents(dir, flags) {
   const timeoutSeconds = flags.timeout === undefined ? Infinity : /^\d+$/.test(flags.timeout) ? Number(flags.timeout) : bad('--timeout must be a whole number of seconds');
-  const r = await events.wait(dir, { timeoutSeconds });
+  const r = await events.wait(dir, { timeoutSeconds, host: HOST });
   if (r.code === 3) throw new Exit(3, { timeout: true });
   return { events: r.events };
 }

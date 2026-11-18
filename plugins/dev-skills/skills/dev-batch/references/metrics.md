@@ -38,7 +38,7 @@ Fields that do not apply are absent.
 | `account-unreadable` | `claude agents` failed for an account |
 | `ledger-unreadable-row` | A row of the region could not be read; it keeps its previous value |
 | `github-unavailable` | A GitHub call failed and aborted the tick; the third in a row is a judgment |
-| Judgment types | `refine-not-ready`, `owner-reply`, `review-blocked`, `review-budget-exhausted`, `stall`, `stage-failed`, `session-blocked`, `merge-stopped`, `launch-refused`, `session-unknown`, `accounts-at-cap`, `batch-paused`, `ledger-region`, `loop-error`, `batch-complete` (handling in SKILL.md) |
+| Judgment types | `refine-not-ready`, `owner-reply`, `review-blocked`, `review-budget-exhausted`, `stall`, `stage-failed`, `session-blocked`, `merge-stopped`, `launch-refused`, `session-unknown`, `accounts-at-cap`, `batch-paused`, `ledger-region`, `loop-error`, `loop-not-running`, `batch-complete` (handling in SKILL.md) |
 
 Ledger writes, `wait` wakes, coordinator decisions and setting changes are not recorded as events in v1.
 
@@ -46,7 +46,7 @@ Ledger writes, `wait` wakes, coordinator decisions and setting changes are not r
 
 A judgment is an event that the coordinator must decide. Its record goes to `events.jsonl` and, identically, to `pending/<epoch ms, 13 digits>-<sequence, 8 digits>.json`. The file is written under a `.tmp` name and renamed, so `wait` never reads half a file.
 
-`wait` claims each pending file by renaming it into `delivered/`, in name order, and prints `{ "events": [ … ] }` with exit `0`. With `--timeout` it prints `{ "timeout": true }` and exits `3` when nothing arrived. Two waits never deliver the same event: the rename decides. A delivered file stays in `delivered/`, so a coordinator that ended before handling it can be recovered from there.
+`wait` claims each pending file by renaming it into `delivered/`, in name order, and prints `{ "events": [ … ] }` with exit `0`. Every 60 s it also checks the lease: when the batch is active and not paused and no live loop on this host holds the lease, it queues one `loop-not-running` judgment, once per `wait`. A lease of another host cannot be checked and counts as held. With `--timeout` it prints `{ "timeout": true }` and exits `3` when nothing arrived. Two waits never deliver the same event: the rename decides. A delivered file stays in `delivered/`, so a coordinator that ended before handling it can be recovered from there.
 
 ## metrics.jsonl
 

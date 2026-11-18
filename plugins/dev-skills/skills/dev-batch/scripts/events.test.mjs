@@ -100,3 +100,24 @@ test('releaseLease by a non-holder leaves the lease', () => {
   releaseLease(dir, first.nonce);
   assert.equal(existsSync(join(dir, 'lease.json')), false);
 });
+
+test('wait raises one loop-not-running judgment when no live loop holds the lease of an active, unpaused batch (I7)', async () => {
+  const batch = (files) => {
+    const dir = tempDir();
+    for (const [name, value] of Object.entries({ 'settings.json': { paused: false }, ...files })) writeFileSync(join(dir, name), JSON.stringify(value));
+    return dir;
+  };
+  const watch = (dir, timeoutSeconds = 2) => wait(dir, { timeoutSeconds, pollMs: 10, host: 'h1', checkMs: 30 });
+  for (const dir of [batch({}), batch({ 'lease.json': { pid: dead(), host: 'h1' } })]) {
+    const r = await watch(dir);
+    assert.deepEqual([r.code, r.events.map((e) => e.type)], [0, ['loop-not-running']]);
+    assert.equal(readFileSync(join(dir, 'events.jsonl'), 'utf8').trim().split('\n').length, 1); // logged as well
+  }
+  // A live loop (or a command holding the lease for a moment), a paused or complete batch, another host's lease: nothing.
+  for (const files of [{ 'lease.json': { pid: process.pid, host: 'h1' } }, { 'settings.json': { paused: true } }, { 'settings.json': { paused: 'handover' } },
+    { 'summary.json': {} }, { 'lease.json': { pid: dead(), host: 'h2' } }]) {
+    assert.deepEqual(await watch(batch(files), 0.2), { code: 3 }, JSON.stringify(files));
+  }
+  // Without a host, wait never checks the lease.
+  assert.deepEqual(await wait(batch({}), { timeoutSeconds: 0.2, pollMs: 10 }), { code: 3 });
+});

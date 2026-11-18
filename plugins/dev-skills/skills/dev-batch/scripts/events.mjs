@@ -40,17 +40,38 @@ function claim(dir) {
   return events;
 }
 
-export async function wait(dir, { timeoutSeconds, pollMs = 1000 }) {
+// With `host`, every `checkMs` it also checks that a live loop holds the lease (I7): a loop killed by the OOM killer,
+// a reboot or kill -9 writes no event, so wait raises one loop-not-running judgment for it, once per wait.
+export async function wait(dir, { timeoutSeconds, pollMs = 1000, host, checkMs = 60_000 }) {
   const deadline = Date.now() + timeoutSeconds * 1000;
+  let check = host ? Date.now() + checkMs : Infinity;
   for (;;) {
     const events = claim(dir);
     if (events.length) return { code: 0, events };
     if (Date.now() >= deadline) return { code: 3 };
-    await sleep(Math.min(pollMs, Math.max(deadline - Date.now(), 0)));
+    if (Date.now() >= check) {
+      if (loopMissing(dir, host)) {
+        check = Infinity; // once per wait
+        queueJudgment(dir, { type: 'loop-not-running', detail: 'no live loop holds the lease of this active batch: run start, then report it to the owner' });
+        continue;
+      }
+      check = Date.now() + checkMs;
+    }
+    await sleep(Math.min(pollMs, Math.max(deadline - Date.now(), 0), Math.max(check - Date.now(), 0)));
   }
 }
 
 const leasePath = (dir) => join(dir, 'lease.json');
+const readJson = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+
+// The batch is active (no summary.json) and not paused, and no live process on this host holds its lease. Another
+// host's lease cannot be checked from here, so it counts as held.
+export function loopMissing(dir, host) {
+  const settings = readJson(join(dir, 'settings.json'));
+  if (!settings || settings.paused || existsSync(join(dir, 'summary.json'))) return false;
+  const lease = readJson(leasePath(dir));
+  return !lease || (lease.host === host && !pidAlive(lease.pid));
+}
 
 export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
