@@ -74,6 +74,11 @@ function ghJson(args) {
   return value ?? refuse('github-unavailable', { detail: `gh ${args.slice(0, 2).join(' ')}: ${r.stderr.trim() || `exit ${r.code}`}` });
 }
 const currentRepo = () => ghJson(['repo', 'view', '--json', 'nameWithOwner']).nameWithOwner;
+const git = (args) => spawnSync('git', args, { encoding: 'utf8' });
+function checkoutRoot() {
+  const r = git(['rev-parse', '--show-toplevel']);
+  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : refuse('checkout-missing', { detail: "run this command inside a checkout of the batch's repository" });
+}
 const currentDir = () => resolve(env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), '.claude'));
 const cli = (account) => ({ configDir: account.dir });
 const usageText = (dir) => { const s = readSnapshot(dir, Date.now()); return s ? `5h ${s.five ?? '?'}% · 7d ${s.seven ?? '?'}%` : 'usage unknown'; };
@@ -142,6 +147,15 @@ function locate(flags, words) {
     : words.session ? all.filter((d) => ledgerOf(d).header.coordinator === words.session) : all.filter(active);
   if (found.length === 1) return found[0];
   return refuse(found.length ? 'several-batches' : 'no-batch', { candidates: (found.length ? found : all).map(describe) });
+}
+
+// §13: the loop and every claude call run in the batch's checkout, wherever the command was run from.
+const OFF_CHECKOUT = new Set(['status', 'stop', 'wait', 'pause', 'resume', 'config', 'clear']);
+function enter(dir, sub) {
+  const { cwd, repo } = settingsOf(dir);
+  if (cwd && existsSync(cwd)) process.chdir(cwd);
+  else if (!OFF_CHECKOUT.has(sub)) refuse('checkout-missing', { detail: `the batch's checkout ${cwd ?? '(none recorded)'} is gone: clone ${repo} there again` });
+  return dir;
 }
 
 // ---- The loop's lease (§10, §13) ----
@@ -293,6 +307,7 @@ function init(flags) {
 
   const repo = currentRepo();
   const [owner, name] = repo.split('/');
+  const cwd = checkoutRoot();
   let src = resolveSrc(flags.src, repo);
   const existing = named(batchDirs(repo), src);
   if (existing.length) refuse('batch-exists', { detail: 'this source already has a batch: use takeover or add', candidates: existing.map(describe) });
@@ -324,7 +339,7 @@ function init(flags) {
   }
   const dir = stateDir({ owner, repo: name, src }, env);
   mkdirSync(dir, { recursive: true });
-  saveSettings(dir, { ...values, abbr, repo, src, login, authorization, extra, paused: false, sources });
+  saveSettings(dir, { ...values, abbr, repo, src, login, authorization, extra, paused: false, sources, cwd });
   writeAtomic(join(dir, 'ledger.last.md'), renderLedger(ledger));
   return { initialized: true, dir, src: sourceUrl(repo, src), tasks: tasks.length, batches: Object.fromEntries(batches), ...(movedToComment && { movedToComment }), warnings };
 }
@@ -470,6 +485,9 @@ async function handover(dir, flags) {
 function rebuild(text, settingWords) {
   const repo = currentRepo();
   const [owner, name] = repo.split('/');
+  const cwd = checkoutRoot();
+  const origin = git(['remote', 'get-url', 'origin']).stdout?.trim().match(/([^/:]+\/[^/:]+?)(?:\.git)?\/?$/)?.[1];
+  if (origin?.toLowerCase() !== repo.toLowerCase()) refuse('checkout-missing', { detail: `${cwd} is not a checkout of ${repo} (its origin is ${origin ?? 'missing'}): run takeover in one` });
   const src = resolveSrc(text, repo);
   const login = ghJson(['api', 'user']).login;
   const source = readSource({ repo, src, gh });
@@ -490,7 +508,7 @@ function rebuild(text, settingWords) {
   writeAtomic(join(dir, 'ledger.last.md'), region);
   writeJson(join(dir, 'sessions.json'), []); // the other machine's sessions show as unknown through reconcile
   // Written last: settings.json is what makes the directory a batch.
-  saveSettings(dir, { ...values, abbr: values.abbr ?? deriveAbbr(name), repo, src, login, authorization: null, extra: null, paused: false, sources });
+  saveSettings(dir, { ...values, abbr: values.abbr ?? deriveAbbr(name), repo, src, login, authorization: null, extra: null, paused: false, sources, cwd });
   return { rebuilt: dir, authorization: 'needs-owner', extra: 'unrecovered',
     detail: 'rebuilt from the region: the owner restores the authorization with config --authorization; extra could not be recovered' };
 }
@@ -507,6 +525,7 @@ async function takeover(flags, words) {
     dir = rebuilt.rebuilt;
   }
   if (!rebuilt.rebuilt && Object.keys(settingWords).length) bad('key=value settings apply only when takeover rebuilds a batch: change them with config');
+  enter(dir, 'takeover');
   const lease = leaseOf(dir);
   if (aliveHere(lease)) refuse('lease-held', { detail: `the loop runs here as pid ${lease.pid}`, lease });
   if (lease && lease.host !== HOST && !flags.force) foreign(lease);
@@ -694,7 +713,7 @@ async function main([sub, ...argv]) {
   if (sub === 'init') return init(flags);
   if (sub === 'setup') return setup(flags, words);
   if (sub === 'takeover') return takeover(flags, words); // it may rebuild a batch that is not here yet
-  return HANDLERS[sub](locate(flags, words), flags, words);
+  return HANDLERS[sub](enter(locate(flags, words), sub), flags, words);
 }
 
 try {

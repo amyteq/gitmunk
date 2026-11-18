@@ -51,6 +51,8 @@ Your own calls: `B start` and `B stop [--force]` for the loop, `B wait` for even
 
 **Host sandbox.** Run every `B` call except `ask` outside the host's sandbox, with its normal escalation: the state directory is outside the workspace, the lease needs the host's process table, and the loop and the workers are launched from there. Request it once, and report a refusal instead of working around it. `init` refuses with `state-unwritable` before it writes to GitHub when it cannot write the state directory.
 
+**Checkout.** `init` and a rebuild record the checkout they run in; the loop and every worker run there, wherever later calls are made. Once that directory is gone, every call except `status`, `stop`, `wait`, `pause`, `resume`, `config` and `clear` refuses with `checkout-missing`: report it.
+
 ## Authority
 
 - One "Owner authorization" line in the ledger covers every stage: refine writes, implementation commits, branch pushes and PRs, review comments and fix pushes, and with `merge=auto` the squash merge with `/dev-merge`'s closeout and `cleanup=own`. Its template is in [prompts.md](references/prompts.md#authorization-line).
@@ -133,7 +135,7 @@ Post one comment on the task's issue whose first line is `<!-- dev-batch:owner i
 1. Before the ask round, run `B status src=<…>` (or `session=`). `no-batch` means this machine has no state for the batch. `B ask` raises the `force` question only for another host's lease that it can see, so in that case add the `force` question to the one ask round yourself.
 2. `B takeover [src=<…> | session=<name>]`, with `--force` only on the owner's `force=yes`, both for another host's lease and for a rebuild: the last loop ran on another host and cannot be checked from here. Without it both refuse with `lease-foreign`, and a rebuild writes nothing. `lease-held` means the loop already runs on this host: just arm `wait`.
 3. Takeover reconciles the ledger with GitHub's facts and the sessions, and redoes only the missing step. A PR with no review gets a review; an approval with no merge gets a merge; a finished session with no fact becomes an event. A session still listed under its name is adopted, not relaunched. It lifts a handover's pause, never the owner's, and starts the loop.
-4. On a machine without the batch's state, pass `src=`. The helper rebuilds the state from the ledger and GitHub: `cap` and `merge` come from the ledger header, and other settings from `key=value` words (accepted only here), the environment and defaults. The result says `authorization: "needs-owner"`: nothing launches until the owner runs `/dev-batch config` and you record the line with `--authorization`. `extra` is not recovered.
+4. On a machine without the batch's state, pass `src=` from a checkout whose `origin` is the batch's repository (else `checkout-missing`). The helper rebuilds the state from the ledger and GitHub: `cap` and `merge` come from the ledger header, and other settings from `key=value` words (accepted only here), the environment and defaults. The result says `authorization: "needs-owner"`: nothing launches until the owner runs `/dev-batch config` and you record the line with `--authorization`. `extra` is not recovered.
 5. `B status src=<…>` gives `dir` and the pending count. The newest files in `delivered/` are judgments an earlier coordinator received; if their rows are still ⛔ or 👤, handle them. Then arm `wait`.
 
 ## Report

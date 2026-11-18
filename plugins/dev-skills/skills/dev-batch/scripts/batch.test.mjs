@@ -38,6 +38,13 @@ else if (argv.includes('PATCH')) { w.sources[argv[3]].body = body(); save(); out
 else if (w.sources[argv[1]]) out(w.sources[argv[1]]);
 else { process.stderr.write('unexpected gh ' + argv.join(' ')); process.exitCode = 1; }
 `;
+// git: the checkout's top level and its origin, from the world file.
+const GIT = `
+const w = fixture();
+if (argv.join(' ') === 'rev-parse --show-toplevel' && w.checkout) process.stdout.write(w.checkout + '\\n');
+else if (argv.join(' ') === 'remote get-url origin') process.stdout.write(w.origin + '\\n');
+else process.exitCode = 128;
+`;
 // claude: login per config directory, the agents listed per directory, and a launch that always starts.
 const CLAUDE = `
 const w = fixture();
@@ -54,17 +61,20 @@ function world({ association = 'OWNER', body = 'Intro text.\n', accounts = ['A1'
   mkdirSync(bin);
   stubBin(bin, 'gh', GH);
   stubBin(bin, 'claude', CLAUDE);
+  stubBin(bin, 'git', GIT);
+  const checkout = join(root, 'checkout');
+  mkdirSync(checkout);
   const accts = accounts.map((alias) => { const dir = join(root, alias); mkdirSync(dir); return { alias, dir }; });
   const file = join(root, 'world.json');
   const log = join(root, 'stub.log');
   const source = (text) => ({ body: text, user: { login: 'owner-user' }, author_association: association });
-  writeFileSync(file, JSON.stringify({ repo: REPO, login: LOGIN, kinds: { 40: 'Issue', 50: 'Issue', 9: 'Discussion', 77: 'PullRequest' }, node: PLAIN,
+  writeFileSync(file, JSON.stringify({ repo: REPO, login: LOGIN, checkout, origin: `git@github.com:${REPO}.git`, kinds: { 40: 'Issue', 50: 'Issue', 9: 'Discussion', 77: 'PullRequest' }, node: PLAIN,
     comments: [], agents: {}, loggedOut: [], sources: { [ISSUE]: source(body), [`repos/${REPO}/issues/50`]: source('Second tracker.\n') } }));
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(DEV_BATCH_|CLAUDE_)/.test(k))),
     PATH: withPath(bin), HOME: root, XDG_STATE_HOME: join(root, 'state'), CLAUDE_CONFIG_DIR: accts[0].dir,
     DEV_BATCH_ACCOUNTS: JSON.stringify(accts.map((a) => a.dir)), STUB_FIXTURE: file, STUB_LOG: log };
   const w = {
-    root, accts, env, dir: join(root, 'state', 'dev-batch', 'example-org', 'example-repo', 'i40'),
+    root, accts, env, checkout, dir: join(root, 'state', 'dev-batch', 'example-org', 'example-repo', 'i40'),
     cli: (...args) => {
       const r = spawnSync(process.execPath, [BATCH, ...args], { cwd: root, env: w.env, encoding: 'utf8' });
       let out = null;
@@ -112,6 +122,7 @@ test('init writes the region and settings', () => {
   assert.deepEqual([s.cap, s.repo, s.login, s.abbr, s.authorization, s.paused, s.extra], [2, REPO, LOGIN, 'er', AUTH, false, null]);
   assert.deepEqual([s.sources.cap, s.sources.merge, s.sources.accounts], ['argument', 'default', 'environment']);
   assert.deepEqual(s.src, { kind: 'issue', number: 40 });
+  assert.equal(s.cwd, w.checkout); // I9: the checkout the loop and every claude call run in
   const { start, end } = findRegion(body);
   assert.equal(readFileSync(w.file('ledger.last.md'), 'utf8'), body.slice(start, end));
 
@@ -236,6 +247,18 @@ test('merge=auto needs the merge clause in the authorization line: init, config 
   assert.deepEqual(w.calls('claude', '--bg'), []);
 });
 
+test('a command that starts the loop or a session refuses checkout-missing once the checkout is gone (I9)', () => {
+  const w = world();
+  w.init();
+  rmSync(w.checkout, { recursive: true });
+  for (const args of [['start'], ['tick'], ['launch', '--task', '41', '--stage', 'refine'], ['add', '--tasks', w.tasks([{ issue: 43, title: 'X', deps: [] }])]]) {
+    const r = w.cli(...args);
+    assert.deepEqual([r.code, r.out?.error], [1, 'checkout-missing'], `${args[0]}: ${r.text}`);
+  }
+  assert.equal(existsSync(w.file('loop.log')), false);
+  assert.deepEqual([w.cli('status').code, w.cli('pause').code], [0, 0]); // reading and pausing still work
+});
+
 test('start refuses while the lease is held', () => {
   const w = world();
   w.init();
@@ -335,7 +358,7 @@ test('takeover src= on a machine without the state directory rebuilds it from th
   assert.deepEqual([r.out.rebuilt, r.out.authorization, r.out.extra, r.out.loop.started], [w.dir, 'needs-owner', 'unrecovered', true]);
   const s = json(w.file('settings.json'));
   assert.deepEqual([s.cap, s.sources.cap, s.merge, s.sources.merge, s.sources.accounts], [2, 'ledger', 'off', 'argument', 'environment']);
-  assert.deepEqual([s.repo, s.login, s.abbr, s.authorization, s.extra, s.paused], [REPO, LOGIN, 'er', null, null, false]);
+  assert.deepEqual([s.repo, s.login, s.abbr, s.authorization, s.extra, s.paused, s.cwd], [REPO, LOGIN, 'er', null, null, false, w.checkout]);
   assert.deepEqual(s.src, { kind: 'issue', number: 40 });
   assert.deepEqual(json(w.file('sessions.json')), []);
   assert.ok(region.includes('\r\n'));
@@ -351,7 +374,9 @@ test('takeover src= rebuilds only from a trusted source with a valid region, els
   const state = join(w.root, 'state');
   const original = w.body();
   const take = (...words) => w.cli('takeover', ...words, '--force');
-  w.set((v) => { v.sources[ISSUE].author_association = 'NONE'; });
+  w.set((v) => { v.origin = 'https://github.com/other-org/example-repo.git'; }); // I9: a checkout of another repository
+  assert.deepEqual([take('src=40').code, take('src=40').out.error], [1, 'checkout-missing']);
+  w.set((v) => { v.origin = `https://github.com/${REPO}`; v.sources[ISSUE].author_association = 'NONE'; });
   assert.deepEqual([take('src=40').code, take('src=40').out.error], [1, 'untrusted-source']);
   w.set((v) => { v.sources[ISSUE].author_association = 'OWNER'; v.sources[ISSUE].body = 'No region here.\n'; });
   assert.deepEqual([take('src=40').code, take('src=40').out.error], [1, 'ledger-region']);
@@ -458,6 +483,7 @@ test('launch replaces a stuck unknown session record and relaunches the stage', 
   assert.deepEqual(json(w.file('sessions.json')).map((x) => [x.name, x.state, x.account]), [['er-i41r', 'stopped', null], ['er-i41r2', 'working', 'A1']]);
   const [launch] = w.calls('claude', '--bg');
   assert.match(launch.argv.at(-1), /^\/dev-refine-issue 41\n/);
+  assert.equal(launch.cwd, w.checkout); // I9: wherever the command was run from
   assert.deepEqual([w.ledger().rows[0].status, w.ledger().rows[0].session], ['refining', 'er-i41r2']);
   assert.equal(w.cli('launch', '--task', '42', '--stage', 'review').out.error, 'no-pr');
 });

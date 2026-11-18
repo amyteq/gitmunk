@@ -89,7 +89,7 @@ Each batch has a state directory, `${XDG_STATE_HOME:-~/.local/state}/dev-batch/<
 
 | File | What it is for |
 |---|---|
-| `settings.json` | The resolved settings plus `repo`, `src`, `login`, `abbr`, `authorization`, `extra`, `paused` and each setting's source. Its presence makes the directory a batch |
+| `settings.json` | The resolved settings plus `repo`, `src`, `login`, `abbr`, `authorization`, `extra`, `paused`, each setting's source and `cwd`, the checkout (`git rev-parse --show-toplevel`) that the loop and every `claude` call run in. Its presence makes the directory a batch |
 | `ledger.last.md` | The region as last written to GitHub |
 | `ledger.next.md` | Decided changes whose GitHub write was skipped or failed. While it is pending, the next tick writes it |
 | `ledger.seen.md` | The region that `ledger.next.md` was decided from. Owner edits are compared with it, so each applies once |
