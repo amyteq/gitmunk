@@ -2,6 +2,7 @@
   "data": {
     "repository": {
       "issue_41": {
+        "authorAssociation": "OWNER", "editor": null,
         "body": "Human intro. /goal not this one\n\n<!-- AUTO:BEGIN -->\n<!-- dev-refine-issue:body -->\n## Execution\n\n**Current task:** [Task instructions, revision 1](https://github.com/example-org/example-repo/issues/41#issuecomment-1).\n\n**Goal prompt**, only where supported and after readiness:\n\n```text\n/goal Execute from https://github.com/example-org/example-repo/issues/41#issuecomment-1. Deliver the change. Continue until done.\n```\n\n**Plain-language prompt**\n\n```text\nExecute from https://github.com/example-org/example-repo/issues/41#issuecomment-1.\n```\n<!-- AUTO:END -->\n",
         "comments": {
           "totalCount": 2,

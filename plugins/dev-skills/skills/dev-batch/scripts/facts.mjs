@@ -21,7 +21,7 @@ const PR_FIELDS = `fragment pr on PullRequest {
   reviews(last: 50) { nodes { state submittedAt authorAssociation url author { login } commit { oid } } }
 }`;
 
-const ISSUE_FIELDS = `body
+const ISSUE_FIELDS = `body authorAssociation editor { login }
   comments(last: 100) { totalCount nodes { databaseId body authorAssociation createdAt url author { login } } }
   closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { ...pr } }
   timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20) { nodes { ... on CrossReferencedEvent { willCloseTarget source { ... on PullRequest { ...pr } } } } }`;
@@ -247,8 +247,16 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
   const best = kept || (closing.length ? closing : refs).sort((x, y) => y.number - x.number)[0];
   const pr = best ? prFacts(best, login) : null;
 
+  // I3 (§11): the /goal line runs with permission mode auto, so it counts only from a body last written by a trusted
+  // hand (a trusted author, or a last editor who is the signed-in login or trusted here), and only when it names the
+  // current task comment, as dev-refine-issue writes it ("/goal Execute from <permalink>. …").
+  const trusted = new Set(comments.filter((c) => TRUSTED.has(c.association)).map((c) => c.author)).add(login);
+  const taskUrl = task.action === 'use-current' && `https://github.com/${repo}/issues/${issue}#issuecomment-${task.commentId}`;
+  const line = taskUrl && (TRUSTED.has(node.authorAssociation) || trusted.has(node.editor?.login)) ? goalLine(node.body ?? '') : null;
+  const goal = line && [...line.matchAll(/https:\/\/github\.com\/\S+?#issuecomment-\d+/g)].some((m) => m[0] === taskUrl) ? line : null;
+
   return {
-    task, goal: goalLine(node.body ?? ''), verdict, ownerQuestion, ownerAnswer, pr,
+    task, goal, verdict, ownerQuestion, ownerAnswer, pr,
     lastActivity: newest([...comments.map((c) => c.createdAt), pr?.lastActivity]),
   };
 }

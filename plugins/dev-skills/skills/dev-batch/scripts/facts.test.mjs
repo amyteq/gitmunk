@@ -43,6 +43,23 @@ test('goal line', () => {
   assert.equal(facts(build((n) => { n.body = 'Prose\n/goal outside the region\n'; })).goal, null);
 });
 
+test('I3: the /goal line counts only from a trusted author or a last editor who is the login or trusted', () => {
+  const untrusted = (editor, more = () => {}) => build((n) => { Object.assign(n, { authorAssociation: 'NONE', editor: editor && { login: editor } }); more(n); });
+  assert.equal(facts(untrusted(null)).goal, null); // the author wrote the line themselves
+  assert.equal(facts(untrusted('stranger')).goal, null); // edited after the refine session wrote it
+  assert.match(facts(untrusted(LOGIN)).goal, /^\/goal Execute from /);
+  const member = (n) => { n.comments.nodes.push(comment('Looks good.', { databaseId: 12, author: { login: 'maintainer' }, authorAssociation: 'MEMBER' })); n.comments.totalCount = 3; };
+  assert.match(facts(untrusted('maintainer', member)).goal, /^\/goal Execute from /);
+});
+
+test('I3: the /goal line must name the current task comment', () => {
+  const goal = (url) => facts(build((n) => { n.body = n.body.replace('/goal Execute from https://github.com/example-org/example-repo/issues/41#issuecomment-1.', `/goal Execute from ${url}.`); })).goal;
+  assert.equal(goal('https://github.com/example-org/example-repo/issues/41#issuecomment-12'), null);
+  assert.equal(goal('https://github.com/example-org/example-repo/issues/40#issuecomment-1'), null);
+  assert.match(goal('https://github.com/example-org/example-repo/issues/41#issuecomment-1'), /^\/goal /);
+  assert.equal(facts(build((n) => { n.comments.nodes.splice(0, 1); n.comments.totalCount = 1; })).goal, null); // no current task comment
+});
+
 test('PR by another login is not the task\'s PR', () => {
   assert.equal(facts(build((n) => { pr(n).author.login = 'someone-else'; })).pr, null);
   assert.equal(facts(build()).pr.number, 50);
