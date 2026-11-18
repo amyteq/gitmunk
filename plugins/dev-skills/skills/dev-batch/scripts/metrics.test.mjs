@@ -55,6 +55,7 @@ test('batch summary: mean and median per stage; cost per merged PR', () => {
   const s = batchSummary(events, [rec('implement', 10, { met: 1, notMet: 2 }), rec('review', 5), rec('implement', 3)]);
   assert.deepEqual(s.stages.refine, { mean: 2000, median: 1800 });
   assert.deepEqual(s.stages.merge, { mean: 900, median: 900 });
+  assert.deepEqual(s.tasks, { i1: { refine: 600, merge: 600 }, i2: { refine: 1800, merge: 1200 }, i3: { refine: 3600 } }); // §16 per task
   assert.equal(s.costPerMergedPr, 9);
   assert.equal(s.measures.implementSessionsGoalMet, 1);
   assert.equal(s.measures.refineToLastMerge.mean, (2 * 3600 + 10 * 60 + 2 * 3600 + 20 * 60) / 2);

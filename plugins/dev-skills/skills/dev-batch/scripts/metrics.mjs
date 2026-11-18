@@ -78,8 +78,12 @@ export function batchSummary(events, records) {
     if (e.type === 'launch') s.launch ??= t(e);
     else s.done.push(t(e));
   }
-  const durations = {};
-  for (const task of Object.values(perTask)) for (const [stage, s] of Object.entries(task)) if (s.launch != null && s.done.length) (durations[stage] ??= []).push((s.done[0] - s.launch) / 1000);
+  const durations = {}, tasks = {}; // stage -> seconds[], and task -> stage -> seconds
+  for (const [id, task] of Object.entries(perTask)) for (const [stage, s] of Object.entries(task)) if (s.launch != null && s.done.length) {
+    const d = (s.done[0] - s.launch) / 1000;
+    (durations[stage] ??= []).push(d);
+    (tasks[id] ??= {})[stage] = d;
+  }
   const stages = Object.fromEntries(Object.entries(durations).map(([k, v]) => [k, stat(v)]));
 
   const first = [], last = [];
@@ -94,6 +98,7 @@ export function batchSummary(events, records) {
   const impl = stageRecords.implement ?? [];
   const metRate = (rs) => (rs.length ? rs.filter((r) => r.goal.met > 0).length / rs.length : null);
   return {
+    tasks,
     stages,
     costPerMergedPr: mergedPrs ? cost / mergedPrs : null,
     measures: {
