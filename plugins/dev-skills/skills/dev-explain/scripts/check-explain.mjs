@@ -23,7 +23,6 @@ const TARGET_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/
 // A leading token that looks like a reference must be a valid target; it never silently becomes notes.
 const TARGET_LIKE = [/^#/, /^\d+$/, /^[a-z][a-z0-9+.-]*:\/\//i, /^[^\s/#]+\/[^\s/#]+#/, /github\.com\//i,
   /\/(?:issues|pull|discussions)\/\d/];
-const OPTION = /^(type|lang)=(.*)$/;
 const encodePathSegment = (value) => encodeURIComponent(value)
   .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 
@@ -70,7 +69,7 @@ export function canonicalLanguage(value) {
 const CANONICAL = { type: canonicalType, lang: canonicalLanguage };
 
 // Why a value was rejected, phrased to help the caller fix it.
-const REJECTION = {
+export const REJECTION = {
   type: () => 'is not OD, SD or ALL',
   lang: (value) => {
     try {
@@ -95,7 +94,7 @@ function fallback(key, envValue, warnings) {
 }
 
 // A rejected argument falls back exactly as an absent one would, and its warning comes first.
-function resolveOption(key, given, envValue, warnings) {
+export function resolveOption(key, given, envValue, warnings) {
   if (given.length === 0) return fallback(key, envValue, warnings);
   const value = given.length === 1 ? CANONICAL[key](given[0]) : null;
   if (value) return { value, source: 'argument' };
@@ -110,18 +109,22 @@ function resolveOption(key, given, envValue, warnings) {
 }
 
 /**
- * Resolve the invocation text. The target, type= and lang= tokens may come in any order; the first
- * other token starts the notes, which run verbatim to the end of the text.
+ * Split invocation text into target tokens, `name=value` options, bare flags and notes. They may come in
+ * any order; the first other token starts the notes, which run verbatim to the end of the text.
  */
-export function resolveArgs({ repo, text, typeEnv, langEnv, candidates }) {
+export function splitInvocation(text, repo, { options = ['type', 'lang'], flags = [] } = {}) {
+  const option = new RegExp(`^(${options.join('|')})=(.*)$`);
   const targets = [];
-  const options = { type: [], lang: [] };
+  const given = Object.fromEntries(options.map((name) => [name, []]));
+  const set = new Set();
   let notes = '';
   for (const match of text.matchAll(/\S+/g)) {
     const token = match[0];
-    const option = OPTION.exec(token);
-    if (option) {
-      options[option[1]].push(option[2]);
+    const found = option.exec(token);
+    if (found) {
+      given[found[1]].push(found[2]);
+    } else if (flags.includes(token)) {
+      set.add(token);
     } else if (TARGET_LIKE.some((shape) => shape.test(token))) {
       const target = parseTarget(token, repo);
       if (target.error) return stop('bad-target', target.error);
@@ -131,29 +134,40 @@ export function resolveArgs({ repo, text, typeEnv, langEnv, candidates }) {
       break;
     }
   }
-  let target;
+  return { action: 'proceed', targets, options: given, flags: [...set], notes };
+}
+
+/** The one target given, else the one context candidate; none or several stop. Pushes a target warning. */
+export function pickTarget(targets, candidates, warnings) {
   if (targets.length > 1) {
     const numbers = targets.map(({ number }) => number);
     return stop('ambiguous-target', `more than one target was given: ${numbers.map((n) => `#${n}`).join(', ')}`,
       { candidates: numbers });
   }
-  const warnings = [];
   if (targets.length === 1) {
     const { warning, ...given } = targets[0];
     if (warning) warnings.push(warning);
-    target = { ...given, source: 'argument' };
-  } else {
-    const distinct = [...new Set(candidates)];
-    if (distinct.length === 0) return stop('no-target', 'no issue, PR or discussion identified');
-    if (distinct.length > 1) {
-      return stop('ambiguous-target',
-        `more than one issue, PR or discussion identified: ${distinct.map((n) => `#${n}`).join(', ')}`, { candidates: distinct });
-    }
-    target = { number: distinct[0], kind: 'any', source: 'context' };
+    return { ...given, source: 'argument' };
   }
-  const type = resolveOption('type', options.type, typeEnv, warnings);
-  const lang = resolveOption('lang', options.lang, langEnv, warnings);
-  return { action: 'proceed', target, type, lang, notes, warnings };
+  const distinct = [...new Set(candidates)];
+  if (distinct.length === 0) return stop('no-target', 'no issue, PR or discussion identified');
+  if (distinct.length > 1) {
+    return stop('ambiguous-target',
+      `more than one issue, PR or discussion identified: ${distinct.map((n) => `#${n}`).join(', ')}`, { candidates: distinct });
+  }
+  return { number: distinct[0], kind: 'any', source: 'context' };
+}
+
+/** Resolve the invocation text: the target, type= and lang= in any order, then the notes. */
+export function resolveArgs({ repo, text, typeEnv, langEnv, candidates }) {
+  const split = splitInvocation(text, repo);
+  if (split.action === 'stop') return split;
+  const warnings = [];
+  const target = pickTarget(split.targets, candidates, warnings);
+  if (target.action === 'stop') return target;
+  const type = resolveOption('type', split.options.type, typeEnv, warnings);
+  const lang = resolveOption('lang', split.options.lang, langEnv, warnings);
+  return { action: 'proceed', target, type, lang, notes: split.notes, warnings };
 }
 
 /** Split a planned label change into what may be applied and what is refused, with reasons. */

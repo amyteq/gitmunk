@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
-  applyEdits, cleanupOutcome, lintSquashMessage, closeoutTarget, detectLang, discoverTargets, gate, lintSquashBody, parseArgs, planCleanup,
+  applyEdits, cleanupOutcome, lintSquashMessage, closeoutTarget, detectLang, discoverTargets, discussionRunner, gate, lintSquashBody, parseArgs, planCleanup,
   renderCi, renderCloseout, renderReport, resolvePr, runGuardedEdit, t, verifyMerge, warningText,
 } from './check-merge.mjs';
 import { apply, commandFor, deniedResults, execute, ignoredOf, mergeResults, parseWorktrees } from './apply-cleanup.mjs';
@@ -600,6 +600,9 @@ test('AC-7d the closeout follows the language of the PR body', () => {
   // Han characters outside the basic blocks are Chinese too, as the English-only validator reads them.
   assert.equal(detectLang('\u{20000}\u{20001}'), 'zh', 'supplementary ideographs count');
   assert.equal(detectLang('\uf900\uf901'), 'zh', 'compatibility ideographs count');
+  // A caller can tell text without prose apart; the default answer stays 'en'.
+  for (const bare of ['', '`code` https://example.com <!-- m -->', '```\n\u4e2d\u6587\n```']) assert.equal(detectLang(bare, null), null);
+  assert.equal(detectLang(enBody, null), 'en');
   assert.equal(gate({ pr: pr({ body: zhBody }), main: B }).lang, 'zh');
   assert.equal(gate({ pr: pr({ body: enBody, isDraft: true }), main: B }).lang, 'en', 'a stop carries the language too');
   const zh = renderCloseout(closeoutInput({ lang: 'zh', mode: 'handover', handover: ['x'] }));
@@ -788,6 +791,48 @@ test('AC-9b a section replacement keeps human edits made since its draft: it sto
   const written = runGuardedEdit({ edits, gh: fakeGh([{ body: NEXT_BODY, updated_at: 't1' }, { body: NEXT_BODY, updated_at: 't1' }]) });
   assert.equal(written.status, 'written');
   assert.ok(written.body.includes('| 1 | done |'));
+});
+
+// A fake `gh api graphql --input FILE` holding one discussion body or comment.
+function fakeGraphql({ drift = false, lie = false } = {}) {
+  const state = { body: NEXT_BODY, updatedAt: 't1', reads: 0, writes: [] };
+  const run = (args) => {
+    assert.deepEqual(args.slice(0, 3), ['api', 'graphql', '--input']);
+    const { query, variables } = JSON.parse(readFileSync(args[3], 'utf8'));
+    if (query.startsWith('mutation')) {
+      state.writes.push({ id: variables.id, update: /updateDiscussion\w*/.exec(query)[0] });
+      state.body = lie ? 'other' : variables.body;
+      state.updatedAt = 'w';
+      return JSON.stringify({ data: { done: true } });
+    }
+    state.reads += 1;
+    if (drift) state.updatedAt = `t${state.reads}`;
+    const node = { id: 'D_1', body: state.body, updatedAt: state.updatedAt };
+    return JSON.stringify({ data: variables.n ? { repository: { discussion: node } } : { node } });
+  };
+  return { state, run };
+}
+
+test('AC-9 a discussion body or comment goes through the same guarded sequence over GraphQL', () => {
+  const edits = [{ section: 'Next steps', find: '| 1 | a |', replace: '| 1 | b |' }];
+  for (const [target, id, update] of [[{ discussion: 7 }, 'D_1', 'updateDiscussion'], [{ discussionComment: 'DC_1' }, 'DC_1', 'updateDiscussionComment']]) {
+    const runner = (options) => { const fake = fakeGraphql(options); return [fake.state, discussionRunner({ repo: REPO, ...target }, fake.run)]; };
+    let [state, gh] = runner();
+    assert.equal(runGuardedEdit({ edits, gh }).status, 'written');
+    assert.deepEqual(state.writes, [{ id, update }]);
+    assert.ok(state.body.includes('| 1 | b |'));
+    [state, gh] = runner({ drift: true });
+    assert.equal(runGuardedEdit({ edits, gh }).reason, 'drift');
+    assert.deepEqual(state.writes, []);
+    [state, gh] = runner({ lie: true });
+    assert.equal(runGuardedEdit({ edits, gh }).reason, 'readback-mismatch');
+    [state, gh] = runner();
+    assert.equal(runGuardedEdit({ edits, gh, dryRun: true }).status, 'planned');
+    assert.deepEqual(state.writes, []);
+  }
+  // A missing node or a GraphQL error is a failed read, never an empty body.
+  assert.throws(() => discussionRunner({ repo: REPO, discussionComment: 'X' }, () => '{"data":{"node":null}}').get(), /no discussion comment X/);
+  assert.throws(() => discussionRunner({ repo: REPO, discussion: 7 }, () => '{"errors":[{"message":"nope"}]}').get(), /GraphQL failed/);
 });
 
 test('AC-9c a missing or repeated anchor, or a missing section, stops without writing', () => {

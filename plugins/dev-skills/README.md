@@ -1,12 +1,13 @@
 # dev-skills
 
-Eight agent skills for GitHub-centred work in Claude Code and Codex.
+Nine agent skills for GitHub-centred work in Claude Code and Codex.
 
 | Skill | Use it to |
 | --- | --- |
 | `dev-review-pr` | Run bounded review and fix rounds on a PR with independent Codex or Claude Code sessions, evidence-linked dispositions and a final full review before approval. |
 | `dev-refine-issue` | Turn an existing issue into a bounded work order with observable acceptance criteria, a task comment and copyable launch prompts. |
 | `dev-explain` | Explain pending human decisions on an issue, PR or discussion comment and append one result comment. It decides nothing. |
+| `dev-interview` | Ask the owner's pending decisions on an issue, PR or discussion (optionally its sub-issues and linked threads) in rounds of popups, and record each answer where its item sits before the next round. It never acts on a decision. |
 | `dev-compact` | Compress a long issue, PR or discussion thread into a summary and archive parts, after an explicit request. |
 | `dev-merge` | Squash merge one reviewed PR when the owner explicitly asks: gate on the reviewed head, verify the merged tree, clean up branches and worktrees, post a closeout in the PR's language and update linked issues and trackers. Otherwise it runs as a dry run. |
 | `dev-track` | Register every unprocessed discussion of one category (such as meeting notes) in that category's tracker discussion: digest it in place, merge its TODOs, mark it done and close it. Drafts by default; writes only with `--apply`. |

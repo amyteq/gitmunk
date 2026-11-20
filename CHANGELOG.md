@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `dev-skills` 0.2.2-beta.1: new `dev-interview` (#50). It collects the owner's pending decisions (`type=OD|SD|ALL`) on one issue, PR or discussion, and with `linked` on its open sub-issues and the threads its body links, then asks them in rounds of up to four popups. The recommended option comes first. After each round, before the next, it records every answer where its item sits: the item's status mark and a row in one decisions block of that body or comment, or a reply when the place cannot be edited. Free-text answers are kept verbatim, partial answers stay partly open, and requested work is listed as a follow-up, never done. `DEV_INTERVIEW_ASK_LANG` sets the popup language (default: the session's language) and `DEV_INTERVIEW_NOTE_LANG` the language written back (default: each source's language); both fall back to `zh-CN`. `dry-run` prints the plan only.
+- `dev-merge`'s guarded `edit` also writes discussion bodies and comments, and `dev-explain`'s argument parsing is shared with `dev-interview`. Neither skill's behaviour changes.
+
 ## 0.5.0
 
 - Ask workflow reactions (#41): once a mention is authorized, a new `react` job adds a reaction to the triggering comment, issue, pull request or discussion, 🚀 `rocket` for Claude and 👀 `eyes` for Codex, as the retired pipeline did. `CLAUDE_ACTION_REACTION` / `CODEX_ACTION_REACTION` choose another of GitHub's reactions (`+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes`); any other value warns and keeps the default. The job has `issues`, `pull-requests` and `discussions` write, which the caller templates already grant; it never delays or fails the agent run. Plugins unchanged.
