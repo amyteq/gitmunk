@@ -15,8 +15,10 @@ const FLAGS = ['linked', 'dry-run'];
 const NOT_PROSE = new Set(['code', 'inlineCode', 'html', 'link', 'linkReference', 'image', 'imageReference', 'definition']);
 function proseOf(node) {
   if (NOT_PROSE.has(node.type)) return '';
-  // A bare www. link is a link too (GFM); detectLang already drops bare http(s) URLs.
-  if (node.type === 'text') return node.value.replace(/(?<!\S)www\.\S+/g, '');
+  // GFM's bare links and emails stay plain text in a CommonMark tree, so a token holding `://`, `www.` or an
+  // email shape is a link, whatever wraps it. shortcut: a word glued to such a token with no space is dropped
+  // with it, which only affects this language guess; upgrade to the GFM parser extensions if that ever matters.
+  if (node.type === 'text') return node.value.replace(/\S*(?::\/\/|www\.|[\w.+-]@[\w-]+\.\w)\S*/g, '');
   const text = (node.children ?? []).map(proseOf).join(' ');
   // A list item's leading `[ ]`, `[x]` or `[X]` is a task status mark, not prose.
   return node.type === 'listItem' ? text.replace(/^\[[ xX]\](?!\S)/, '') : text;

@@ -130,6 +130,17 @@ test('AC-2.5 link and image labels, reference definitions, any code span and ind
   assert.deepEqual(sourceLanguage(`${EN}\n\n    ${ZH}`), { value: 'en', source: 'source' });
 });
 
+test('AC-2.5 a bare link or email is not prose, whatever wraps it; the words around it still count', () => {
+  for (const form of ['(www.example.com/docs)', 'owner@example.com', '~~www.example.com/docs~~', '- [x] owner@example.com',
+    '(https://example.com/x).', '<owner@example.com>']) {
+    assert.deepEqual(sourceLanguage(form), { value: 'zh-CN', source: 'default' }, form);
+  }
+  assert.deepEqual(proceed('#1', { sessionText: '(www.example.com/docs)' }).ask, { value: null, source: 'source' });
+  assert.deepEqual(sourceLanguage(`${EN} (www.example.com/docs)`), { value: 'en', source: 'source' });
+  assert.deepEqual(sourceLanguage(`${ZH} owner@example.com`), { value: 'zh-CN', source: 'source' });
+  assert.deepEqual(sourceLanguage('Ask @owner first'), { value: 'en', source: 'source' }, 'a mention is not an email');
+});
+
 test('AC-2.6 an invalid or repeated value warns once, naming it, and falls through to the next link', () => {
   const badArg = proceed('#1 ask-lang=zh_CN note-lang=', { sessionText: EN });
   assert.deepEqual([badArg.ask, badArg.note], [{ value: 'en', source: 'session' }, { value: null, source: 'source' }]);
