@@ -109,6 +109,15 @@ test('AC-2.4/2.5 a pending language comes from the source text, else zh-CN', () 
 
 test('AC-2.5 session text with no prose falls through to the source', () => {
   assert.deepEqual(proceed('#1', { sessionText: '`#12` https://example.com' }).ask, { value: null, source: 'source' });
+  assert.deepEqual(proceed('#1', { sessionText: '[source](https://example.com)' }).ask, { value: null, source: 'source' });
+});
+
+test('AC-2.5 link and image labels, reference definitions, any code span and indented code are not prose', () => {
+  const forms = ['[source](https://example.com)', '![diagram](d.png)', '[source][1]\n\n[1]: https://example.com',
+    '<https://example.com>', '``a `b` c``', `\`OD-1\`\n\n    ${EN}`];
+  for (const form of forms) assert.deepEqual(sourceLanguage(form), { value: 'zh-CN', source: 'default' }, form);
+  assert.deepEqual(sourceLanguage(`${ZH} [the source](https://example.com)`), { value: 'zh-CN', source: 'source' });
+  assert.deepEqual(sourceLanguage(`${EN}\n\n    ${ZH}`), { value: 'en', source: 'source' });
 });
 
 test('AC-2.6 an invalid or repeated value warns once, naming it, and falls through to the next link', () => {

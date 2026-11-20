@@ -1,18 +1,23 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 import { REJECTION, canonicalLanguage, pickTarget, resolveOption, splitInvocation } from '../../dev-explain/scripts/check-explain.mjs';
 import { detectLang } from '../../dev-merge/scripts/check-merge.mjs';
 
 // Deterministic decisions for dev-interview: resolving the invocation and the two languages. Target
-// parsing, the type option and the language-tag check are dev-explain's; prose detection is dev-merge's.
+// parsing, the type option and the language-tag check are dev-explain's; Chinese-or-English is dev-merge's.
 // Exit 0 proceeds, 1 stops, and 2 means the check did not run, which never counts as a pass.
 
 export const FALLBACK = 'zh-CN';
 const FLAGS = ['linked', 'dry-run'];
 
+// Code of every form, HTML and markers, and links, images and reference definitions with their labels.
+const NOT_PROSE = new Set(['code', 'inlineCode', 'html', 'link', 'linkReference', 'image', 'imageReference', 'definition']);
+const proseOf = (node) => (NOT_PROSE.has(node.type) ? '' : node.type === 'text' ? node.value : (node.children ?? []).map(proseOf).join(' '));
+
 /** The language of a text's prose: zh-CN for Chinese, en otherwise, or null when it has no prose. */
 export function proseLanguage(text) {
-  const lang = detectLang(text, null);
+  const lang = detectLang(proseOf(fromMarkdown(text)), null);
   return lang && (lang === 'zh' ? 'zh-CN' : 'en');
 }
 

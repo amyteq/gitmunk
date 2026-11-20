@@ -29,7 +29,7 @@ Usage: `/dev-interview [target] [type=<v>] [linked] [ask-lang=<v>] [note-lang=<v
 | `dry-run` | Collect, then print the planned rounds and where each answer would be recorded. No popups, no writes | off |
 | `notes…` | Extra instructions, such as "only #12 Q2–Q3" | Everything from the first token that is not a target or option, verbatim |
 
-The target and options may come in any order before the notes, so a `linked` inside the notes stays a note. Language values are BCP 47 tags checked like `dev-explain`'s `lang=`; an invalid argument or variable warns and falls through to the next source in its chain. Only Chinese and English prose are detected from text: Chinese becomes `zh-CN`, English `en`, and text without prose decides nothing. The human's free-text answers are recorded as typed and never translated. The [helper](scripts/check-interview.mjs) holds these rules; do not re-implement them.
+The target and options may come in any order before the notes, so a `linked` inside the notes stays a note. Language values are BCP 47 tags checked like `dev-explain`'s `lang=`; an invalid argument or variable warns and falls through to the next source in its chain. Only Chinese and English prose are detected from text: Chinese becomes `zh-CN`, English `en`, and text without prose (only code, links, images or markers) decides nothing. The human's free-text answers are recorded as typed and never translated. The [helper](scripts/check-interview.mjs) holds these rules; do not re-implement them.
 
 ## Procedure
 
@@ -51,7 +51,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/check-interview.mjs" args --input $S/args.json
 ```
 
 Exit `1` prints a `stop` with its reason and any candidates: report it and stop. Exit `2` means the check did not run, which also stops.
-4. Verify the target exactly as `dev-explain` step 2 does, with its stops. When `ask` came back with `value: null`, write the target's title and body to `$S/target.txt` and take the popup language from `node "${CLAUDE_SKILL_DIR}/scripts/check-interview.mjs" lang --input $S/target-lang.json`, whose input is `{"text": …}` built with `jq --rawfile`. It answers the target's language, else `zh-CN`.
+4. Verify the target exactly as `dev-explain` step 2 does, with its stops, except that a locked target proceeds: keep its `locked` state, and step 4 records its answers as a reply. When `ask` came back with `value: null`, write the target's title and body to `$S/target.txt` and take the popup language from `node "${CLAUDE_SKILL_DIR}/scripts/check-interview.mjs" lang --input $S/target-lang.json`, whose input is `{"text": …}` built with `jq --rawfile`. It answers the target's language, else `zh-CN`.
 5. Announce, before collecting: the target and its kind, the type, `linked`, `dry-run`, the popup language and its source, the note language and its source (or "each source's language, else `zh-CN`"), the notes and **every warning**.
 
 ### 2. Collect
@@ -81,7 +81,7 @@ Record every answered item of the round, and finish or report each write, **befo
 
 For each body or comment that holds answered items, decide where the record goes:
 
-1. **Reply instead of edit** when the source is a PR review or review comment; the item lies inside an `<!-- AUTO:BEGIN -->` region; the place is locked; or this account cannot edit it. Check `viewerCanUpdate` with `gh api graphql -F id=NODE_ID -f query='query($id: ID!) { node(id: $id) { ... on Updatable { viewerCanUpdate } } }'`, where `NODE_ID` is the REST `node_id` or the GraphQL `id`.
+1. **Reply instead of edit** when the source is a PR review or review comment; the item lies inside an `<!-- AUTO:BEGIN -->` region; its thread is locked (`locked` in that issue, PR or discussion's read); or this account cannot edit it. Check `viewerCanUpdate` with `gh api graphql -F id=NODE_ID -f query='query($id: ID!) { node(id: $id) { ... on Updatable { viewerCanUpdate } } }'`, where `NODE_ID` is the REST `node_id` or the GraphQL `id`.
 2. **Otherwise edit in place** with the guarded edit. Write `{repo, issue|comment|discussion|discussionComment, edits}` to `$S/edit-K.json` and run `M edit --input $S/edit-K.json`: `issue: N` for an issue or PR body, `comment: ID` for an issue or PR comment, `discussion: N` for a discussion body, and `discussionComment: NODE_ID` for a discussion comment or reply. It reads, plans, re-reads for freshness, writes and reads back in sequence. The edits, in order:
    - For each fully answered item whose line has one status mark, `{"find": LINE, "replace": LINE_WITH_NEW_MARK}`, where `LINE` is that exact line: `⏳`, `❓`, `⚠️` or `🔄` becomes `✅`, and `- [ ]` becomes `- [x]`. A partial answer, or a line with no mark or several, changes no mark.
    - The decisions block. When the place has none yet, `{"create": {"heading": "### TITLE (dev-interview)", "content": TABLE}}`, with `TITLE` "Decisions" in the note language (`决定` for `zh-CN`) and `TABLE` a header row and one row per item. When the block exists, `{"section": "TITLE (dev-interview)", "find": LAST_ROW, "replace": LAST_ROW + "\n" + NEW_ROWS}`. A row is `| {{now}} | ID | DECISION | WORDS | FOLLOW_UPS |`: the decision in the note language, starting with the note language's "Partial:" for a partial answer; the human's verbatim words or `—`; the follow-ups or `—`. In a cell, the only change to the human's words is `\|` for `|` and a space for each line break.
@@ -124,7 +124,7 @@ Report in the popup language: the decisions with links to where they were record
 
 ## Helper
 
-[`scripts/check-interview.mjs`](scripts/check-interview.mjs) holds the deterministic decisions: `args` resolves the invocation and as much of both languages as the arguments, variables and session text settle, and `lang` decides a language from one source's text, else `zh-CN`. It imports target parsing, the type option and the language check from `dev-explain`'s helper and prose detection from `dev-merge`'s; records go through `dev-merge`'s guarded `edit`. Exit `0` proceeds, `1` stops, and `2` means the check did not run, which never counts as a pass. It needs Node.js 20+; the publication check also needs the plugin's locked `mdast-util-from-markdown` (`npm ci --prefix "${CLAUDE_PLUGIN_ROOT}"`). `npm test` in the plugin root runs its tests.
+[`scripts/check-interview.mjs`](scripts/check-interview.mjs) holds the deterministic decisions: `args` resolves the invocation and as much of both languages as the arguments, variables and session text settle, and `lang` decides a language from one source's text, else `zh-CN`. It imports target parsing, the type option and the language check from `dev-explain`'s helper and prose detection from `dev-merge`'s; records go through `dev-merge`'s guarded `edit`. Exit `0` proceeds, `1` stops, and `2` means the check did not run, which never counts as a pass. It needs Node.js 20+ and, like the publication check, the plugin's locked `mdast-util-from-markdown` (`npm ci --prefix "${CLAUDE_PLUGIN_ROOT}"`). `npm test` in the plugin root runs its tests.
 
 ## Limits
 
