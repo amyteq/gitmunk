@@ -13,7 +13,14 @@ const FLAGS = ['linked', 'dry-run'];
 
 // Code of every form, HTML and markers, and links, images and reference definitions with their labels.
 const NOT_PROSE = new Set(['code', 'inlineCode', 'html', 'link', 'linkReference', 'image', 'imageReference', 'definition']);
-const proseOf = (node) => (NOT_PROSE.has(node.type) ? '' : node.type === 'text' ? node.value : (node.children ?? []).map(proseOf).join(' '));
+function proseOf(node) {
+  if (NOT_PROSE.has(node.type)) return '';
+  // A bare www. link is a link too (GFM); detectLang already drops bare http(s) URLs.
+  if (node.type === 'text') return node.value.replace(/(?<!\S)www\.\S+/g, '');
+  const text = (node.children ?? []).map(proseOf).join(' ');
+  // A list item's leading `[ ]`, `[x]` or `[X]` is a task status mark, not prose.
+  return node.type === 'listItem' ? text.replace(/^\[[ xX]\](?!\S)/, '') : text;
+}
 
 /** The language of a text's prose: zh-CN for Chinese, en otherwise, or null when it has no prose. */
 export function proseLanguage(text) {
