@@ -18,14 +18,15 @@ export function t(lang, key, vars = {}) {
   return String(text).replace(/\{(\w+)\}/g, (match, name) => String(vars[name] ?? match));
 }
 
-/** 'zh' when CJK characters carry the prose (code, markers and links removed), otherwise 'en'. */
-export function detectLang(text = '') {
+/** 'zh' when CJK characters carry the prose (code, markers and links removed), otherwise 'en'; `none` when there is no prose. */
+export function detectLang(text = '', none = 'en') {
   // Sample data inside a fence is not prose, whatever fence it uses, so the shared scanner drops those lines first.
   const prose = unfenced(text).replace(/`[^`\n]*`|<!--[\s\S]*?-->|\]\([^)]*\)|https?:\/\/\S+/g, '');
   // Every Han block a body could carry, as in the English-only validator: extension A, the basic range,
   // the compatibility ideographs and all of planes 2-3, so later extensions need no edit here.
   const cjk = (prose.match(/[\u3400-\u9fff\uf900-\ufaff\u{20000}-\u{3ffff}]/gu) ?? []).length;
   const latin = (prose.match(/[A-Za-z]/g) ?? []).length;
+  if (cjk === 0 && latin === 0) return none;
   // One CJK character reads as roughly one word; an English word averages about five letters.
   return cjk > 0 && cjk * 5 >= latin ? 'zh' : 'en';
 }
@@ -626,19 +627,47 @@ export function renderReport(input) {
 
 // ---------- CLI ----------
 
+const ghRun = (args) => {
+  const result = spawnSync('gh', args, { encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`gh ${args.join(' ')} failed: ${result.stderr.trim()}`);
+  return result.stdout;
+};
+
 function ghRunner(path) {
-  const run = (args) => {
-    const result = spawnSync('gh', args, { encoding: 'utf8' });
-    if (result.status !== 0) throw new Error(`gh ${args.join(' ')} failed: ${result.stderr.trim()}`);
-    return result.stdout;
-  };
   return {
-    get: () => { const data = JSON.parse(run(['api', path])); return { body: data.body ?? '', updated_at: data.updated_at }; },
+    get: () => { const data = JSON.parse(ghRun(['api', path])); return { body: data.body ?? '', updated_at: data.updated_at }; },
     patch: (body) => {
       const file = `${process.env.TMPDIR ?? '/tmp'}/dev-merge-patch-${process.pid}.json`;
       writeFileSync(file, JSON.stringify({ body }));
-      run(['api', '-X', 'PATCH', path, '--input', file]);
+      ghRun(['api', '-X', 'PATCH', path, '--input', file]);
     },
+  };
+}
+
+/** The same get/patch pair for a discussion body (`discussion: N`) or comment (`discussionComment: node id`), through GraphQL. */
+export function discussionRunner({ repo, discussion, discussionComment }, run = ghRun) {
+  const graphql = (query, variables) => {
+    const file = `${process.env.TMPDIR ?? '/tmp'}/dev-merge-graphql-${process.pid}.json`;
+    writeFileSync(file, JSON.stringify({ query, variables }));
+    const reply = JSON.parse(run(['api', 'graphql', '--input', file]));
+    if (reply.errors?.length || !reply.data) throw new Error(`GraphQL failed: ${JSON.stringify(reply.errors ?? reply)}`);
+    return reply.data;
+  };
+  const [owner, name] = repo.split('/');
+  let id = discussionComment;
+  return {
+    get: () => {
+      const node = discussionComment
+        ? graphql('query($id: ID!) { node(id: $id) { ... on DiscussionComment { body updatedAt } } }', { id }).node
+        : graphql('query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) { discussion(number: $n) { id body updatedAt } } }',
+          { owner, name, n: discussion }).repository?.discussion;
+      if (typeof node?.body !== 'string') throw new Error(`no discussion ${discussionComment ? `comment ${discussionComment}` : `#${discussion}`}`);
+      if (!discussionComment) id = node.id;
+      return { body: node.body, updated_at: node.updatedAt };
+    },
+    patch: (body) => graphql(discussionComment
+      ? 'mutation($id: ID!, $body: String!) { updateDiscussionComment(input: {commentId: $id, body: $body}) { comment { id } } }'
+      : 'mutation($id: ID!, $body: String!) { updateDiscussion(input: {discussionId: $id, body: $body}) { discussion { id } } }', { id, body }),
   };
 }
 
@@ -654,7 +683,8 @@ const COMMANDS = {
   render: (i) => ({ ok: true, markdown: i.kind === 'report' ? renderReport(i) : renderCloseout(i) }),
   edit: (i) => {
     const path = i.comment ? `repos/${i.repo}/issues/comments/${i.comment}` : `repos/${i.repo}/issues/${i.issue}`;
-    return runGuardedEdit({ edits: i.edits, gh: ghRunner(path), dryRun: Boolean(i.dryRun) });
+    const gh = i.discussion || i.discussionComment ? discussionRunner(i) : ghRunner(path);
+    return runGuardedEdit({ edits: i.edits, gh, dryRun: Boolean(i.dryRun) });
   },
 };
 
