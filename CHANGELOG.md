@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
 
-- `dev-skills` 0.2.2-beta.1: new `dev-interview` (#50). It collects the owner's pending decisions (`type=OD|SD|ALL`) on one issue, PR or discussion, and with `linked` on its open sub-issues and the threads its body links, then asks them in rounds of up to four popups. The recommended option comes first. After each round, before the next, it records every answer where its item sits: the item's status mark and a row in one decisions block of that body or comment, or a reply when the place cannot be edited. Free-text answers are kept verbatim, partial answers stay partly open, and requested work is listed as a follow-up, never done. `DEV_INTERVIEW_ASK_LANG` sets the popup language (default: the session's language) and `DEV_INTERVIEW_NOTE_LANG` the language written back (default: each source's language); both fall back to `zh-CN`. `dry-run` prints the plan only.
+- `dev-skills` 0.2.2 (released from 0.2.2-beta.1): new `dev-interview` (#50). It collects the owner's pending decisions (`type=OD|SD|ALL`) on one issue, PR or discussion, and with `linked` on its open sub-issues and the threads its body links, then asks them in rounds of up to four popups. The recommended option comes first. After each round, before the next, it records every answer where its item sits: the item's status mark and a row in one decisions block of that body or comment, or a reply when the place cannot be edited. Free-text answers are kept verbatim, partial answers stay partly open, and requested work is listed as a follow-up, never done. `DEV_INTERVIEW_ASK_LANG` sets the popup language (default: the session's language) and `DEV_INTERVIEW_NOTE_LANG` the language written back (default: each source's language); both fall back to `zh-CN`. `dry-run` prints the plan only.
 - `dev-merge`'s guarded `edit` also writes discussion bodies and comments, and `dev-explain`'s argument parsing is shared with `dev-interview`. Neither skill's behaviour changes.
 
 ## 0.5.0
