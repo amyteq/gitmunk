@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `dev-skills` 0.3.0-beta.1: `dev-track` links each processed discussion back to its tracker (#48). Under the invisible done mark, `H body` adds one visible line, `> 📋 Registered in tracker [#N · <tracker title>](<tracker URL>)`, or `已登记到台账` for a Chinese discussion, in both the default and `meetings` playbooks. It is skipped when the part of the body that stays visible already has a `>` line linking the tracker URL, so a hand-made back-ref is not doubled. The tracker title and URL come from `locate.json` as files (`--tracker-title @…`, `--tracker-url @…`). A URL other than `https://<host>/<owner>/<repo>/discussions/N` is refused, and `[`, `]` and `\` in the title are escaped. Discussions processed earlier keep their bodies, because a `redo` still never rewrites one.
+- `dev-skills` 0.2.4: `dev-track` links each processed discussion back to its tracker (#48). Under the invisible done mark, `H body` adds one visible line, `> 📋 Registered in tracker [#N · <tracker title>](<tracker URL>)`, or `已登记到台账` for a Chinese discussion, in both the default and `meetings` playbooks. It is skipped when the part of the body that stays visible already has a `>` line linking the tracker URL, so a hand-made back-ref is not doubled. The tracker title and URL come from `locate.json` as files (`--tracker-title @…`, `--tracker-url @…`). A URL other than `https://<host>/<owner>/<repo>/discussions/N` is refused, and `[`, `]` and `\` in the title are escaped. Discussions processed earlier keep their bodies, because a `redo` still never rewrites one.
 
 ## 0.5.1
 

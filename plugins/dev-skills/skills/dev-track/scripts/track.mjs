@@ -14,19 +14,21 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 const parsed = new Map();
 
 // `text`'s lines (ends kept), the indexes of lines inside code blocks, each top-level ATX `##` heading's
-// name by line index, and its links (none inside code). A code block quotes an example: never a mark, never a section.
+// name by line index, and its links and link definitions (none inside code). A code block quotes an example: never a mark, never a section.
 function parse(text) {
   if (parsed.has(text)) return parsed.get(text);
   const lines = text.match(/[^\r\n]*(?:\r\n?|\n)|[^\r\n]+$/g) ?? [];
   const tree = fromMarkdown(text);
-  const code = new Set(), links = [];
+  const code = new Set(), links = [], definitions = new Map();
   const pending = [tree];
   while (pending.length) {
     const node = pending.pop();
     if (node.type === 'code') {
       for (let line = node.position.start.line; line <= node.position.end.line; line++) code.add(line - 1);
     }
-    if (node.type === 'link') links.push(node);
+    if (node.type === 'link' || node.type === 'linkReference') links.push(node);
+    // The stack walks right to left, so the last write is a label's first definition, the one CommonMark uses.
+    if (node.type === 'definition') definitions.set(node.identifier, node.url);
     if (node.children) pending.push(...node.children);
   }
   const heads = new Map();
@@ -38,7 +40,7 @@ function parse(text) {
       heads.set(i, first ? text.slice(first.position.start.offset, last.position.end.offset) : '');
     }
   }
-  const result = { lines, code, heads, links };
+  const result = { lines, code, heads, links, definitions };
   parsed.set(text, result);
   return result;
 }
@@ -229,7 +231,7 @@ export function rebuild(source, tracker, date, { digest = '', folds = [], unlink
   trackerTitle = '', trackerUrl = '', backrefLabel = 'Registered in tracker' } = {}) {
   source = source.replaceAll('\r\n', '\n'); // web posts are CRLF; GitHub stores LF after an API write
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { action: 'refuse', reason: `date ${repr(date)} is not YYYY-MM-DD` };
-  if (!new RegExp(`^https://(?:[^/\\s()<>]+/){3}discussions/${tracker}$`).test(trackerUrl)) {
+  if (!new RegExp(`^https://\\w[\\w.-]*(?::\\d+)?/\\w[\\w.-]*/\\w[\\w.-]*/discussions/${tracker}$`).test(trackerUrl)) {
     return { action: 'refuse', reason: `tracker URL ${repr(trackerUrl)} is not https://<host>/<owner>/<repo>/discussions/${tracker}` };
   }
   if (/[\r\n]/.test(trackerTitle)) return { action: 'refuse', reason: 'the tracker title holds a line break' };
@@ -252,8 +254,8 @@ export function rebuild(source, tracker, date, { digest = '', folds = [], unlink
   }
   // A back-ref is already there only as a `>` line, outside code, linking exactly the tracker URL where the new
   // body shows it; a copy folded or dropped is hidden.
-  const { lines, links } = parse(kept);
-  const present = links.some((link) => link.url === trackerUrl && lines[link.position.start.line - 1].startsWith('>'));
+  const { lines, links, definitions } = parse(kept);
+  const present = links.some((link) => (link.url ?? definitions.get(link.identifier)) === trackerUrl && lines[link.position.start.line - 1].startsWith('>'));
   const backref = present ? '' : `> 📋 ${backrefLabel} [#${tracker} · ${trackerTitle.replace(/[\\[\]]/g, '\\$&')}](${trackerUrl})`;
   let body = `<!-- dev-track:done · #${tracker} · ${date} -->`;
   for (const piece of [backref, digest, kept, ...folded]) if (piece) body += gap(body, piece) + piece;
@@ -381,7 +383,8 @@ const readText = (path) => decoder.decode(readFileSync(path)).replace(/\r\n?/g, 
 
 // `@path` reads the value from that file, so discussion text never reaches a shell command line.
 // shortcut: a value that really starts with @ has to come from a file too; add an escape if one turns up.
-const readArg = (value) => (value?.startsWith('@') ? readText(value.slice(1)).trim() : value);
+const readRaw = (value) => (value?.startsWith('@') ? readText(value.slice(1)) : value);
+const readArg = (value) => (value?.startsWith('@') ? readRaw(value).trim() : value);
 
 const S = { type: 'string' }, MANY = { type: 'string', multiple: true };
 const COMMANDS = {
@@ -433,7 +436,8 @@ export function main(argv) {
       const digest = args.digest ? readText(args.digest) : '';
       result = rebuild(readText(args.source), args.tracker, args.date, { digest, folds: (args.fold ?? []).map(readArg),
         unlinks: args.unlink ?? [], drops: (args.drop ?? []).map(readArg), label: args.label,
-        trackerTitle: readArg(args['tracker-title']), trackerUrl: readArg(args['tracker-url']), backrefLabel: args['backref-label'] });
+        // untrimmed: jq -j writes the exact value, so stray whitespace is checked, not hidden
+        trackerTitle: readRaw(args['tracker-title']), trackerUrl: readRaw(args['tracker-url']), backrefLabel: args['backref-label'] });
       ok = result.action === 'proceed';
       if (ok) {
         const { body, ...rest } = result;

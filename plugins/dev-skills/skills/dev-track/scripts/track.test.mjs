@@ -302,12 +302,18 @@ test('a tracker URL other than this tracker\'s discussion URL refuses', () => {
     trackerUrl(12).replace('/12', '/012'), `${trackerUrl(12)}?x=1`, `${trackerUrl(12)}#top`, `${trackerUrl(12)})`,
     'https://github.com/example-org/example-repo/issues/12', 'https://github.com/example-org/discussions/12',
     'https://github.com/example org/example-repo/discussions/12', 'https://github.com/a(b)/example-repo/discussions/12',
-    'https://github.com/<x>/example-repo/discussions/12', ` ${trackerUrl(12)}`, '', undefined]) {
+    'https://github.com/<x>/example-repo/discussions/12', ` ${trackerUrl(12)}`, '', undefined,
+    // a query, fragment, backslash or dot segment moves /discussions/12 out of the repository's path
+    'https://github.com/example-org/example-repo?view/discussions/12', 'https://github.com/example-org/example-repo#readme/discussions/12',
+    'https://github.com/example-org/example\\repo/discussions/12', 'https://github.com/../example-repo/discussions/12',
+    'https://github.com/example-org/%2e%2e/discussions/12']) {
     const result = build('x\n', 12, '2026-11-13', { trackerUrl: url });
     assert.equal(result.action, 'refuse', String(url));
     assert.match(result.reason, /tracker URL/, String(url));
   }
-  assert.equal(build('x\n', 12, '2026-11-13', { trackerUrl: 'https://ghe.example/org/repo/discussions/12' }).action, 'proceed');
+  for (const url of ['https://ghe.example/org/repo/discussions/12', 'https://ghe.example:8443/my_org/repo.js/discussions/12']) {
+    assert.equal(build('x\n', 12, '2026-11-13', { trackerUrl: url }).action, 'proceed', url);
+  }
 });
 
 test('rebuild refuses a bad date, a done or tracker body, a missing section and an oversize body', () => {
@@ -333,6 +339,16 @@ test('a back-ref the shown body already holds is not added again', () => {
     assert.equal(result.backref, 'present');
     assert.equal(backrefs(result.body, 12).length, 1);
   }
+  // a reference link counts too: full, collapsed and shortcut
+  for (const line of ['> [tracker][ledger]', '> [ledger][]', '> [ledger]']) {
+    const source = `Notes\n\n${line}\n\n[ledger]: <${trackerUrl(12)}>\n`;
+    const result = build(source, 12, '2026-11-13');
+    assert.deepEqual([result.body, result.backref], [`${MARK(12, '2026-11-13')}\n\n${source}`, 'present'], line);
+  }
+  // a label defined twice links its first definition, as CommonMark reads it
+  const twice = (a, b) => `> [ledger]\n\n[ledger]: ${trackerUrl(a)}\n[ledger]: ${trackerUrl(b)}\n`;
+  assert.deepEqual([build(twice(12, 13), 12, '2026-11-13').backref, build(twice(13, 12), 12, '2026-11-13').backref],
+    ['present', 'added']);
   // still shown after --unlink and next to a dropped section
   const source = `## Summary\n${BACK(12)}\n## Old digest\nold\n`;
   const result = build(source, 12, '2026-11-13', { drops: ['Old digest'], unlinks: ['fathom\\.video'] });
@@ -342,7 +358,8 @@ test('a back-ref the shown body already holds is not added again', () => {
 test('a back-ref that is not shown, or is not a quoted link to this tracker, does not count', () => {
   // AC2(b) fenced, AC2(d) another tracker, and shapes D3 does not count
   for (const source of [`\`\`\`markdown\n${BACK(12)}\n\`\`\`\n`, `${BACK(13).replace('#13', '#12')}\n`, `${BACK(13)}\n`,
-    `See [ledger](${trackerUrl(12)})\n`, `- ${BACK(12)}\n`, `> \`${BACK(12)}\`\n`, `> ${trackerUrl(12)}\n`]) {
+    `See [ledger](${trackerUrl(12)})\n`, `- ${BACK(12)}\n`, `> \`${BACK(12)}\`\n`, `> ${trackerUrl(12)}\n`,
+    `See [ledger]\n\n[ledger]: ${trackerUrl(12)}\n`, `> [ledger]\n\n[ledger]: ${trackerUrl(13)}\n`, `> [ledger]: ${trackerUrl(12)}\n`]) {
     const result = build(source, 12, '2026-11-13');
     assert.equal(result.body, `${HEAD(12, '2026-11-13')}${source}`, source);
     assert.equal(result.backref, 'added');
@@ -546,9 +563,11 @@ test('a wrong tracker URL exits 1 and a missing title or URL exits 2, writing no
   // AC1(d), AC1(e)
   const source = file('bad.md', 'x\n'), out = join(scratch, 'bad.out.md');
   const base = ['body', '--source', source, '--tracker', '12', '--date', '2026-11-13', '--out', out];
-  for (const url of [trackerUrl(13), trackerUrl(12).replace('https:', 'http:')]) {
-    const run = cli(...base, '--tracker-title', `@${file('bad-title.txt', TITLE)}`, '--tracker-url', `@${file('bad-url.txt', url)}`);
-    assert.deepEqual([run.status, JSON.parse(run.stdout).action, existsSync(out)], [1, 'refuse', false], url);
+  // the files are read as jq -j wrote them: surrounding whitespace is part of the value, not trimmed away
+  for (const [title, url] of [[TITLE, trackerUrl(13)], [TITLE, trackerUrl(12).replace('https:', 'http:')],
+    [TITLE, `${trackerUrl(12)}\n`], [TITLE, ` ${trackerUrl(12)}`], [`\n${TITLE}`, trackerUrl(12)], [`${TITLE}\n`, trackerUrl(12)]]) {
+    const run = cli(...base, '--tracker-title', `@${file('bad-title.txt', title)}`, '--tracker-url', `@${file('bad-url.txt', url)}`);
+    assert.deepEqual([run.status, JSON.parse(run.stdout).action, existsSync(out)], [1, 'refuse', false], `${title} ${url}`);
   }
   const [, titleFile, , urlFile] = trackerArgs(12);
   for (const given of [['--tracker-title', titleFile], ['--tracker-url', urlFile], []]) {
