@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `dev-skills` 0.3.0-beta.1: `dev-track`'s `meetings` digest gives every TODO row a permanent ID, `D<discussion>-T<k>` (#47). The `ID` column comes first in the English and the Chinese TODO table, also with one row, and `k` counts from 1 in row order. A redraft keeps every published ID, a new row takes the next `k`, and a number is never reused or renumbered. A tracker item's source link names its row (`[MM-DD D39-T2](meeting link)`), one link per row, so a digest row leads to its item through the Tracker column and an item back to its rows. Earlier digests and source links stay as they are, and a `redo` still never changes a body.
+
 ## 0.5.1
 
 - `dev-skills` 0.2.2 (released from 0.2.2-beta.1): new `dev-interview` (#50). It collects the owner's pending decisions (`type=OD|SD|ALL`) on one issue, PR or discussion, and with `linked` on its open sub-issues and the threads its body links, then asks them in rounds of up to four popups. The recommended option comes first. After each round, before the next, it records every answer where its item sits: the item's status mark and a row in one decisions block of that body or comment, or a reply when the place cannot be edited. Free-text answers are kept verbatim, partial answers stay partly open, and requested work is listed as a follow-up, never done. `DEV_INTERVIEW_ASK_LANG` sets the popup language (default: the session's language) and `DEV_INTERVIEW_NOTE_LANG` the language written back (default: each source's language); both fall back to `zh-CN`. `dry-run` prints the plan only.

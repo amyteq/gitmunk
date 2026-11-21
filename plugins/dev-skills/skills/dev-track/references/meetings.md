@@ -50,8 +50,8 @@ YYYY-MM-DD · Attendees: A, B · [Recording (N min)](recording share link)   ←
 1. **Bold lead-in**: content.
 
 ### TODO
-| Item | Owner | When | Tracker |
-| --- | --- | --- | --- |
+| ID | Item | Owner | When | Tracker |
+| --- | --- | --- | --- | --- |
 
 ### Risks
 - **Bold lead-in**: content.
@@ -65,10 +65,11 @@ YYYY-MM-DD · Attendees: A, B · [Recording (N min)](recording share link)   ←
 <sub>Digested by TOOL from … (YYYY-MM-DD); TODOs are tracked in #T.</sub>
 ```
 
-- A Chinese digest uses the same shape with Chinese headings: `## 会议摘要（YYYY-MM-DD）`, `来源：`, `参会：`, `**一句话**：`, `### 已拍板的决定`, `### 待办` (`事项 | 负责 | 时间 | 台账`), `### 风险`, `### 建议`, `### 说明`, and a Chinese footer. The footer is the digest's last line, so it sits above the fold.
+- A Chinese digest uses the same shape with Chinese headings: `## 会议摘要（YYYY-MM-DD）`, `来源：`, `参会：`, `**一句话**：`, `### 已拍板的决定`, `### 待办` (`ID | 事项 | 负责 | 时间 | 台账`), `### 风险`, `### 建议`, `### 说明`, and a Chinese footer. The footer is the digest's last line, so it sits above the fold.
 - The attendee line is always there; it carries exactly one recording link when there is a recording, never a `timestamp=` link.
 - Decisions are only what the meeting settled; what was discussed but not settled goes under risks or notes. When the meeting compared options item by item, group by topic (`### 1. Topic`) and compare in a table.
-- Owners as the notes give them (a name, a team, `both`, `all`); write `TBD` (or `未定`) for a missing owner or date. The Tracker column says where the item went in the tracker: its ID, `new`, or `merged: <first words of the existing item>`.
+- Owners as the notes give them (a name, a team, `both`, `all`); write `TBD` (or `未定`) for a missing owner or date. The Tracker column says where the item went in the tracker: its tracker number (`T5`), `new`, or `merged: <first words of the existing item>`.
+- **Row IDs.** Every TODO table has the `ID` column first, in both shapes, also when it has one row. A row's ID is `D<discussion>-T<k>`: `<discussion>` is the number of the digested discussion and `<k>` counts from 1 in row order, so discussion 39 has `D39-T1`, `D39-T2`, …; the `D` keeps it apart from a tracker's `T<n>`. IDs are permanent: a redraft (a stale-write redraft, or a new digest that `--drop`s an earlier one) keeps every ID already published in that discussion, giving a row the ID of the published row it matches by meaning; a new row takes the next `k` after the highest one published; and no number is reused or renumbered, so a row that a redraft removes leaves its number unused. A digest published without the `ID` column stays as it is; never number it afterwards.
 - Mark quoted prices and unbuilt features as unverified or not built, and follow any other rule the repository's agent instructions set. Keep transcription-garbled names verbatim and mark them `to check` (`待核`).
 - The fold is the original, already public in the discussion; never edit it. If it holds credentials or contact details, list them in the report so a person can edit the discussion.
 - Suggestions are the editor's own, concrete and actionable, and checked against the repository's agent instructions; omit the section when there are none. Omit any section the meeting has nothing for, rather than writing "none".
@@ -81,20 +82,21 @@ Change only the **TODO list** and the **Meeting Ledger**; keep every other byte.
 **TODO list.** Always a GitHub task list (checkboxes and drag-to-reorder), under the tracker's TODO heading and grouped in the `###` subsections it already has. One item per line, in the item format the list already uses, for example:
 
 ```markdown
-- [ ] Item (Owner / When) —— evidence — [MM-DD](meeting link), [MM-DD](meeting link)
-- [ ] 🔄 T5 Item (Owner) — [MM-DD](meeting link) · [MM-DD](meeting link) —— evidence
+- [ ] Item (Owner / When) —— evidence — [MM-DD D39-T2](meeting link), [MM-DD D41-T1](meeting link)
+- [ ] 🔄 T5 Item (Owner) — [MM-DD D39-T3](meeting link) · [MM-DD D41-T4](meeting link) —— evidence
 ```
 
 - If the list numbers its items (`T1 …`, which digests cite), keep the numbers and give new items the next one; never reuse a number. Otherwise add no numbers.
 - `🔄` in progress and `⛔` blocked go right after the checkbox; ticked means done.
-- The same work is one item: merge by meaning and append this meeting's link to the sources. Update owner or time in place when the meeting changed them; reword the item only when the meeting changed the work.
+- The same work is one item: merge by meaning and append this meeting's source link for each merged row to the sources. Update owner or time in place when the meeting changed them; reword the item only when the meeting changed the work.
+- A source link names its digest row: `[MM-DD D39-T2](meeting link)`, the row ID from the digest's `ID` column. An item merged from several digest rows lists one source link per row, each with its row ID, also when two of those rows come from the same meeting (`[MM-DD D39-T2](meeting link), [MM-DD D39-T5](meeting link)`). The Tracker column leads from a digest row to its item, the source link from an item back to its rows. Source links without a row ID, and digests published without an `ID` column, stay as they are; a later meeting adds its own link, with its row ID, next to them. A `redo` (`--only n` on a discussion that has a done mark) cites the row IDs of that discussion's published digest, and no row ID when that digest has no `ID` column; it still never changes the body.
 - Keep every existing item, its tick state and its position; append new items at the end of their subsection; **never untick, delete or move an item** — the one exception is the tracker pass folding a duplicate into its twin. People reorder by dragging.
 - Tick an item only when completion is confirmed — this meeting says it is done, or a merged PR or recorded decision delivered it; mark it `🔄` when the meeting reports work under way ("fixed, deploying tonight" is `🔄` until the deploy is confirmed). Write the evidence after `——`.
 - An item that fits no subsection goes into the closest one; suggest a new subsection in the report rather than adding it.
 
 **Meeting Ledger.** A table, one row per meeting, with the columns and order the tracker already has; the new-tracker default is `Date | Meeting | Attendees | Status | TODO | Recording`, oldest first.
 
-Status is the ledger's digested value (`✅` unless the ledger uses another); update an existing row for the same discussion instead of adding one. Two discussions of the same meeting share one row whose meeting cell links both; say so in the report. When the ledger names meetings in a fixed form (such as `#number YYYYMMDD Meeting notes`), the meeting cell follows it, and a TODO column counts the TODO rows in that meeting's digest. Older per-meeting TODO sections stay in their fold; add no new ones.
+Status is the ledger's digested value (`✅` unless the ledger uses another); update an existing row for the same discussion instead of adding one. Two discussions of the same meeting share one row whose meeting cell links both; say so in the report. When the ledger names meetings in a fixed form (such as `#number YYYYMMDD Meeting notes`), the meeting cell follows it, and a TODO column counts the TODO rows in that meeting's digest, not its highest `k`. Older per-meeting TODO sections stay in their fold; add no new ones.
 
 ### New tracker
 
@@ -120,7 +122,7 @@ Status is always `✅️`. When the ledger names meetings in a fixed form such a
 
 ## 6. Tracker pass
 
-Once per run, after the meetings: read the whole TODO list and merge items that are the same work, including across subsections and across older meetings. The surviving item is the one higher in the list, stays where it is and takes every source link and evidence of the other, reworded if needed so no detail of either is lost; it is ticked only if one of the merged items was ticked with evidence, and a conflict between a ticked and an unticked item goes in the report instead of being resolved silently. Then check that every ledger row links a discussion that exists, and report any that does not.
+Once per run, after the meetings: read the whole TODO list and merge items that are the same work, including across subsections and across older meetings. The surviving item is the one higher in the list, stays where it is and takes every source link (each keeping its row ID) and evidence of the other, reworded if needed so no detail of either is lost; it is ticked only if one of the merged items was ticked with evidence, and a conflict between a ticked and an unticked item goes in the report instead of being resolved silently. Then check that every ledger row links a discussion that exists, and report any that does not.
 
 ## 7. Report
 
