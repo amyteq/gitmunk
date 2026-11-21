@@ -59,7 +59,7 @@ Project settings win over user settings: a project that declares `gitmunk` itsel
 
 ### Channels
 
-Stable is the marketplace `gitmunk`, at the head of `main`. Beta is the marketplace `gitmunk-beta`, at the head of `develop`, with versions such as `0.3.0-beta.1`. The two need different names because Claude Code registers one source per marketplace name for the whole machine, so one name cannot serve `main` in your user settings and `develop` in a project. A beta install therefore sets the stable plugin ids, `dev-skills@gitmunk` and `dev-hooks@gitmunk`, to `false` at its scope, so a user-level stable install does not load the same skills twice. The README's [Channels](../README.md#channels) table lists the plugin ids of each.
+Stable is the marketplace `gitmunk`, at the head of `main`. Beta is the marketplace `gitmunk-beta`, at the head of `develop`. The two need different names because Claude Code registers one source per marketplace name for the whole machine, so one name cannot serve `main` in your user settings and `develop` in a project. A beta install therefore sets the stable plugin ids, `dev-skills@gitmunk` and `dev-hooks@gitmunk`, to `false` at its scope, so a user-level stable install does not load the same skills twice. The README's [Channels](../README.md#channels) table lists the plugin ids of each.
 
 ### Templates
 
@@ -123,7 +123,7 @@ The Ask workflows are not a plugin: a repository copies a thin caller workflow f
 
 ## Updating
 
-An installed plugin updates only when its `version` in `.claude-plugin/plugin.json` changes. Every change on `develop` meant for beta users bumps a `-beta.N` version, and a release drops the suffix when it reaches `main`. See [CHANGELOG.md](../CHANGELOG.md) for what changed.
+An installed plugin updates only when its `version` in `.claude-plugin/plugin.json` changes. Every change on `develop` meant for users bumps the version, with no pre-release suffix: beta installs get it from `develop`, stable installs when a release brings it to `main`. See [CHANGELOG.md](../CHANGELOG.md) for what changed.
 
 ### Claude Code
 
@@ -149,7 +149,7 @@ npm ci --prefix "${CODEX_HOME:-$HOME/.codex}/plugins/cache/gitmunk/dev-skills/<v
 
 ### Moving from beta to stable
 
-When a beta becomes a release, its plugins' versions drop the `-beta.N` suffix and `develop` is merged into `main`. A beta install can then move back to stable.
+When a beta becomes a release, `develop` is merged into `main`. A beta install can then move back to stable.
 
 Claude Code, at the scope `S` that holds the beta:
 
