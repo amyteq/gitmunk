@@ -13,19 +13,20 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 
 const parsed = new Map();
 
-// `text`'s lines (ends kept), the indexes of lines inside code blocks, and each top-level ATX `##` heading's
-// name by line index. A code block quotes an example: never a mark, never a section.
+// `text`'s lines (ends kept), the indexes of lines inside code blocks, each top-level ATX `##` heading's
+// name by line index, and its links (none inside code). A code block quotes an example: never a mark, never a section.
 function parse(text) {
   if (parsed.has(text)) return parsed.get(text);
   const lines = text.match(/[^\r\n]*(?:\r\n?|\n)|[^\r\n]+$/g) ?? [];
   const tree = fromMarkdown(text);
-  const code = new Set();
+  const code = new Set(), links = [];
   const pending = [tree];
   while (pending.length) {
     const node = pending.pop();
     if (node.type === 'code') {
       for (let line = node.position.start.line; line <= node.position.end.line; line++) code.add(line - 1);
     }
+    if (node.type === 'link') links.push(node);
     if (node.children) pending.push(...node.children);
   }
   const heads = new Map();
@@ -37,7 +38,7 @@ function parse(text) {
       heads.set(i, first ? text.slice(first.position.start.offset, last.position.end.offset) : '');
     }
   }
-  const result = { lines, code, heads };
+  const result = { lines, code, heads, links };
   parsed.set(text, result);
   return result;
 }
@@ -222,11 +223,16 @@ function fold(heading, text) {
   return `${head}${gap(head, text)}${text}${gap(text, '</details>')}</details>`;
 }
 
-// New body = done mark + digest + the other sections (unlinked) + folded sections. The original keeps every
-// byte; only blank lines between the pieces are added.
-export function rebuild(source, tracker, date, { digest = '', folds = [], unlinks = [], drops = [], label = 'Original notes' } = {}) {
+// New body = done mark + back-ref to the tracker + digest + the other sections (unlinked) + folded sections. The
+// original keeps every byte; only blank lines between the pieces are added.
+export function rebuild(source, tracker, date, { digest = '', folds = [], unlinks = [], drops = [], label = 'Original notes',
+  trackerTitle = '', trackerUrl = '', backrefLabel = 'Registered in tracker' } = {}) {
   source = source.replaceAll('\r\n', '\n'); // web posts are CRLF; GitHub stores LF after an API write
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { action: 'refuse', reason: `date ${repr(date)} is not YYYY-MM-DD` };
+  if (!new RegExp(`^https://(?:[^/\\s()<>]+/){3}discussions/${tracker}$`).test(trackerUrl)) {
+    return { action: 'refuse', reason: `tracker URL ${repr(trackerUrl)} is not https://<host>/<owner>/<repo>/discussions/${tracker}` };
+  }
+  if (/[\r\n]/.test(trackerTitle)) return { action: 'refuse', reason: 'the tracker title holds a line break' };
   if (DONE_RE.test(prose(source)) || trackerOf({ body: source })) {
     return { action: 'refuse', reason: 'the body already holds a done mark or is a tracker' };
   }
@@ -244,14 +250,19 @@ export function rebuild(source, tracker, date, { digest = '', folds = [], unlink
       .map(([, head, text]) => unlink(head + text, unlinks)).join('');
     folded = parts.filter(([name]) => folds.includes(name)).map(([name, , text]) => fold(name, text));
   }
+  // A back-ref is already there only as a `>` line, outside code, linking exactly the tracker URL where the new
+  // body shows it; a copy folded or dropped is hidden.
+  const { lines, links } = parse(kept);
+  const present = links.some((link) => link.url === trackerUrl && lines[link.position.start.line - 1].startsWith('>'));
+  const backref = present ? '' : `> 📋 ${backrefLabel} [#${tracker} · ${trackerTitle.replace(/[\\[\]]/g, '\\$&')}](${trackerUrl})`;
   let body = `<!-- dev-track:done · #${tracker} · ${date} -->`;
-  for (const piece of [digest, kept, ...folded]) if (piece) body += gap(body, piece) + piece;
+  for (const piece of [backref, digest, kept, ...folded]) if (piece) body += gap(body, piece) + piece;
   if (!body.endsWith('\n')) body += '\n';
   const characters = [...body].length; // code points, as the original counted
   if (characters > BODY_LIMIT) {
     return { action: 'refuse', reason: `the new body has ${characters} characters; GitHub allows ${BODY_LIMIT}` };
   }
-  return { action: 'proceed', body, characters };
+  return { action: 'proceed', body, characters, backref: present ? 'present' : 'added' };
 }
 
 // Replace any leading status emoji with `status`; `base` replaces the rest of the title.
@@ -376,8 +387,9 @@ const S = { type: 'string' }, MANY = { type: 'string', multiple: true };
 const COMMANDS = {
   locate: { options: { pages: S, number: S, cat: S, only: S }, required: ['pages'] },
   body: {
-    options: { source: S, tracker: S, date: S, digest: S, fold: MANY, label: S, unlink: MANY, drop: MANY, out: S },
-    required: ['source', 'tracker', 'date', 'out'],
+    options: { source: S, tracker: S, date: S, digest: S, fold: MANY, label: S, unlink: MANY, drop: MANY, out: S,
+      'tracker-title': S, 'tracker-url': S, 'backref-label': S },
+    required: ['source', 'tracker', 'date', 'tracker-title', 'tracker-url', 'out'],
   },
   title: { options: { title: S, status: S, base: S }, required: ['title', 'status'] },
   tracker: { options: { source: S, cat: S, category: S, remove: { type: 'boolean' }, out: S }, required: ['source', 'out'] },
@@ -420,7 +432,8 @@ export function main(argv) {
     } else if (args.command === 'body') {
       const digest = args.digest ? readText(args.digest) : '';
       result = rebuild(readText(args.source), args.tracker, args.date, { digest, folds: (args.fold ?? []).map(readArg),
-        unlinks: args.unlink ?? [], drops: (args.drop ?? []).map(readArg), label: args.label });
+        unlinks: args.unlink ?? [], drops: (args.drop ?? []).map(readArg), label: args.label,
+        trackerTitle: readArg(args['tracker-title']), trackerUrl: readArg(args['tracker-url']), backrefLabel: args['backref-label'] });
       ok = result.action === 'proceed';
       if (ok) {
         const { body, ...rest } = result;
