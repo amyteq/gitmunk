@@ -102,6 +102,17 @@ export function toolchainDirs(path, env) {
   return [...dirs];
 }
 
+// The first executable `codex` on PATH after symlinks, and its release directory when it sits where Codex's standalone
+// installer puts it, inside the login directory. Codex's sandbox runs its own binary again for every command, so that one
+// directory is mounted read-only; only this exact layout qualifies, so no other part of the login is ever exposed.
+export function resolveCodex(path, env) {
+  const exe = path.split(':').filter(isAbsolute).map((dir) => real(join(dir, 'codex')))
+    .find((file) => { try { accessSync(file, constants.X_OK); return statSync(file).isFile(); } catch { return false; } }) ?? null;
+  const login = real(env.CODEX_HOME || join(env.HOME || homedir(), '.codex'));
+  const release = exe && dirname(dirname(exe));
+  return { exe, release: login && exe?.endsWith('/bin/codex') && dirname(release) === join(login, 'packages/standalone/releases') ? release : null };
+}
+
 // The worktree's `.git` entry locates the repository every later Git command trusts, so a phase may not change it.
 const gitLink = (worktree) => { const path = join(worktree, '.git');
   try { return lstatSync(path).isFile() ? readFileSync(path, 'utf8') : lstatSync(path).isDirectory() ? 'directory' : 'other'; } catch { return 'missing'; } };
@@ -205,7 +216,7 @@ function launchCommand(request, bounds, settings = {}) {
   if (request.provider === 'claude') {
     // Bash is the only tool, and the trusted shell prefix runs every command in bounded-shell.sh. Native file tools would
     // run inside the logged-in CLI, so none is offered: reads, diffs, edits and checks all go through the bounded shell.
-    return { command: 'claude', env: { CLAUDE_CODE_SHELL_PREFIX: BOUNDED_SHELL, BOUNDED_WORKTREE: request.worktree,
+    return { env: { CLAUDE_CODE_SHELL_PREFIX: BOUNDED_SHELL, BOUNDED_WORKTREE: request.worktree,
       BOUNDED_MODE: write ? 'write' : 'read', BOUNDED_SCRATCH: bounds.scratch, BOUNDED_READ: bounds.read.join('\n'),
       BOUNDED_GIT: bounds.git.join('\n'), BOUNDED_PATH: bounds.path, TMPDIR: bounds.scratch },
     args: ['-p', ...(request.model ? ['--model', request.model] : []), ...(request.effort ? ['--effort', request.effort] : []),
@@ -218,12 +229,14 @@ function launchCommand(request, bounds, settings = {}) {
   // Git directories come last and are the most specific entries, so a worktree's own `.git` stays read-only.
   const filesystem = { ':minimal': 'read', ...Object.fromEntries(bounds.read.map((dir) => [dir, 'read'])),
     ':workspace_roots': write ? 'write' : 'read', [bounds.scratch]: 'write', ...Object.fromEntries(bounds.git.map((dir) => [dir, 'read'])) };
-  return { command: 'codex', env: {}, args: ['exec', '--color', 'never', '-C', request.worktree,
+  // The sandbox probe runs under these same overrides, so it tests the profile the phase gets.
+  const profile = ['-c', 'default_permissions="bounded"', '-c', `permissions.bounded.filesystem=${toml(filesystem)}`,
+    '-c', 'permissions.bounded.network.enabled=false'];
+  return { env: {}, profile, args: ['exec', '--color', 'never', '-C', request.worktree,
     // As in the GitHub pipeline: no user configuration or rules load, so no configured integration starts (see codexSettings).
     '--ignore-user-config', '--ignore-rules', ...Object.entries(settings).flatMap(([key, value]) => ['-c', `${key}=${toml(value)}`]),
     ...(request.model ? ['-m', request.model] : []), ...(request.effort ? ['-c', `model_reasoning_effort="${request.effort}"`] : []),
-    '-c', 'default_permissions="bounded"', '-c', `permissions.bounded.filesystem=${toml(filesystem)}`,
-    '-c', 'permissions.bounded.network.enabled=false', '-c', 'shell_environment_policy.inherit="none"',
+    ...profile, '-c', 'shell_environment_policy.inherit="none"',
     '-c', `shell_environment_policy.set=${toml({ PATH: bounds.path, LANG: 'C.UTF-8', HOME: bounds.scratch, TMPDIR: bounds.scratch })}`,
     '-c', 'approval_policy="never"', '--ephemeral', '-'] };
 }
@@ -344,14 +357,18 @@ async function runPhase(request) {
   if (record.permissions?.edit === 'not-writable') record.blockers.push('writer-permission: the worktree is not writable, so the phase could produce no change');
   if (timeouts.length || record.blockers.length) return finish('refused');
 
-  const version = await runBounded(route.cli, ['--version'], { env, timeoutSeconds: probeSeconds, label: `${route.cli} --version` });
+  // Every Codex call starts the binary resolved here, so an update that switches releases mid-launch cannot swap it.
+  const resolved = route.cli === 'codex' ? resolveCodex(env.PATH ?? '', env) : {};
+  const cli = resolved.exe ?? route.cli;
+  const version = await runBounded(cli, ['--version'], { env, timeoutSeconds: probeSeconds, label: `${route.cli} --version` });
   record.cli_version = version.code === 0 ? version.stdout.trim().split('\n').at(-1) : 'unverified';
   if (timeouts.length) return finish('timeout');
   if (version.code !== 0) { record.blockers.push(`${route.cli}: version probe failed; check the installed CLI`); return finish('refused'); }
   scratch = mkdtempSync(join(tmpdir(), 'dev-review-pr-'));
   const gitDirs = await git(request.worktree, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probeSeconds);
-  const bounds = { scratch, path: env.PATH ?? '', read: toolchainDirs(env.PATH ?? '', process.env), git: [...new Set((gitDirs ?? '').split('\n').filter(Boolean))] };
-  const { command, args, env: workerEnv } = launchCommand(request, bounds, codex.settings);
+  const bounds = { scratch, path: env.PATH ?? '', read: [...toolchainDirs(env.PATH ?? '', process.env), ...(resolved.release ? [resolved.release] : [])],
+    git: [...new Set((gitDirs ?? '').split('\n').filter(Boolean))] };
+  const { args, env: workerEnv, profile } = launchCommand(request, bounds, codex.settings);
   const phaseEnv = { ...env, ...workerEnv };
   if (route.cli === 'claude') {
     const probe = await runBounded(BOUNDED_SHELL, ['true'], { cwd: request.worktree, env: phaseEnv, timeoutSeconds: probeSeconds, label: 'bounded-shell probe' });
@@ -360,10 +377,25 @@ async function runPhase(request) {
       record.blockers.push(`bounded-shell: the worker could not start (${probe.stderr.trim().split('\n')[0]?.slice(0, 160) || `exit ${probe.code}`}); it needs bubblewrap and unprivileged user namespaces`);
       return finish('refused');
     }
+  } else {
+    // `codex sandbox` has no --ignore-user-config, so it gets an empty CODEX_HOME: configuration the phase ignores cannot
+    // change its result. Only exit 0 lets the phase start, so a CLI whose `codex sandbox` differs fails closed.
+    const home = mkdtempSync(join(tmpdir(), 'dev-review-pr-codex-home-'));
+    const probe = await runBounded(cli, ['sandbox', ...profile, '--', 'true'], { cwd: request.worktree, env: { ...phaseEnv, CODEX_HOME: home },
+      timeoutSeconds: probeSeconds, label: 'codex sandbox probe' });
+    rmSync(home, { recursive: true, force: true });
+    if (timeouts.length) return finish('timeout');
+    if (probe.code !== 0) {
+      // Codex warns first when CODEX_HOME is a temporary directory, so the cause is the first line that is not a warning.
+      const lines = probe.stderr.trim().split('\n');
+      const cause = (lines.find((line) => !line.startsWith('WARNING:')) ?? lines[0]).slice(0, 160) || `exit ${probe.code}`;
+      record.blockers.push(`bounded-tools: codex sandbox could not run a command under the phase's permission profile (${cause})`);
+      return finish('refused');
+    }
   }
   const link = gitLink(request.worktree);
   record.started_at = new Date().toISOString();
-  const phase = await runBounded(command, args, { cwd: request.worktree, env: phaseEnv, stdinPath: request.prompt,
+  const phase = await runBounded(cli, args, { cwd: request.worktree, env: phaseEnv, stdinPath: request.prompt,
     timeoutSeconds: request.timeout, label: `the ${request.role} phase` });
   record.ended_at = new Date().toISOString();
   record.elapsed_seconds = Math.round(phase.elapsedMs / 1000);
