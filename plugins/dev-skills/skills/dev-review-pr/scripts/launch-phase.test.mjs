@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after } from 'node:test';
-import { BOUNDED_SHELL, readToml, toolchainDirs } from './launch-phase.mjs';
+import { BOUNDED_SHELL, readToml, resolveCodex, toolchainDirs } from './launch-phase.mjs';
 
 const HELPER = fileURLToPath(new URL('./launch-phase.mjs', import.meta.url));
 const GIT = execFileSync('sh', ['-c', 'command -v git']).toString().trim();
@@ -31,13 +31,23 @@ const env = process.env;
 // Like Codex, a phase loads config.toml, and starts each configured MCP server beside the CLI, unless user configuration is ignored.
 const mcp = cli === 'codex' && argv[0] === 'exec' && !argv.includes('--ignore-user-config')
   ? [...readFileSync(env.CODEX_HOME + '/config.toml', 'utf8').matchAll(/^\\[mcp_servers\\.([^\\]]+)\\]/gm)].map((match) => match[1]) : [];
-appendFileSync(env.STUB_LOG, JSON.stringify({ cli, argv, mcp, key: env.AZURE_OPENAI_API_KEY ?? null, openai: env.OPENAI_API_KEY ?? null,
+appendFileSync(env.STUB_LOG, JSON.stringify({ cli, bin: process.argv[1], argv, mcp, home: env.CODEX_HOME ?? null,
+  key: env.AZURE_OPENAI_API_KEY ?? null, openai: env.OPENAI_API_KEY ?? null,
   prefix: env.CLAUDE_CODE_SHELL_PREFIX ?? null, mode: env.BOUNDED_MODE ?? null,
   session: Object.fromEntries(Object.keys(env).filter((n) => /^(CLAUDE|CODEX_COMPANION_)/.test(n) && n !== 'CLAUDE_CODE_SHELL_PREFIX').sort()
     .map((n) => [n, env[n] === 'sentinel:' + n])) }) + '\\n');
 const after = (flag) => argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined;
 const config = (name) => (argv.find((a) => a.startsWith(name + '=')) ?? '').split('=').slice(1).join('=').replace(/"/g, '');
 if (env.STUB_HANG && argv.includes(env.STUB_HANG)) { setTimeout(() => {}, 30000); return; }
+if (argv[0] === 'sandbox') {
+  if (env.STUB_SANDBOX_EXIT) { if (env.STUB_SANDBOX_ERR) console.error(env.STUB_SANDBOX_ERR); process.exit(Number(env.STUB_SANDBOX_EXIT)); }
+  // Like Codex 0.169.0-0.171.0, the sandbox runs its own binary again inside bubblewrap, which sees only the mounts passed.
+  const self = require('node:fs').realpathSync(process.argv[1]);
+  const table = argv.find((a) => a.startsWith('permissions.bounded.filesystem=')) ?? '';
+  const mounts = [...table.matchAll(/"((?:[^"\\\\]|\\\\.)*)"="read"/g)].map((match) => JSON.parse('"' + match[1] + '"'));
+  if (!mounts.some((dir) => self === dir || self.startsWith(dir + '/'))) { console.error('bwrap: execvp ' + self + ': No such file or directory'); process.exit(1); }
+  process.exit(0);
+}
 if (argv[0] === '--version') { if (env.STUB_VERSION_FAIL) process.exit(1); console.log(cli + ' 9.9.9'); process.exit(0); }
 if (argv[0] === 'login') { console.log(env.STUB_LOGIN ?? 'Logged in using ChatGPT'); process.exit(0); }
 readFileSync(0);
@@ -519,6 +529,127 @@ test('the bounded worker mounts no home directory or CLI login', () => {
     .map((dir) => (dir && dir !== 'relative/bin' ? join(root, dir) : dir)).join(':');
   assert.deepEqual(toolchainDirs(path, { HOME: home }).sort(), [join(root, 'home/.local/bin'), join(root, 'home/.nvm/v1'), join(root, 'home/.nvm/v1/bin'),
     join(root, 'opt/plain'), join(root, 'opt/tool'), join(root, 'opt/tool/bin')].sort());
+});
+
+const install = (file, content = '#!/bin/sh\n') => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); chmodSync(file, 0o755); return file; };
+
+test('only the standalone installer\'s release directory inside the Codex login is resolved for a mount', () => {
+  const root = mkdtempSync(join(tmpdir(), 'codex-release-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const outside = install(join(root, 'opt/codex/bin/codex'));
+  let links = 0;
+  // A PATH directory holding only a `codex` link, as the standalone installer leaves ~/.local/bin/codex.
+  const linked = (target) => { const dir = join(root, `path-${links++}`); mkdirSync(dir); symlinkSync(target, join(dir, 'codex')); return dir; };
+  // (e): each case holds with CODEX_HOME unset (~/.codex) and set to a custom directory.
+  for (const [login, env] of [[join(home, '.codex'), { HOME: home }], [join(root, 'custom'), { HOME: home, CODEX_HOME: join(root, 'custom') }]]) {
+    const release = join(login, 'packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl');
+    install(join(release, 'bin/codex'));
+    symlinkSync(release, join(login, 'packages/standalone/current'));
+    for (const [path, expected] of [
+      [linked(join(login, 'packages/standalone/current/bin/codex')), release], // (a) through links
+      [join(release, 'bin'), release], // (a) directly
+      [linked(outside), null], // (b)
+      [`${linked(outside)}:${linked(join(release, 'bin/codex'))}`, null], // (b) a copy first on PATH
+      [linked(install(join(login, 'bin/codex'))), null], // (c)
+      [linked(install(join(login, 'sessions/bin/codex'))), null], // (d)
+      [linked(install(join(release, 'nested/bin/codex'))), null], // (d)
+    ]) assert.equal(resolveCodex(path, env).release, expected && realpathSync(expected), `${path} with ${JSON.stringify(env)}`);
+  }
+  assert.equal(resolveCodex(join(home, '.codex/packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl/bin'),
+    { HOME: home, CODEX_HOME: join(root, 'custom') }).release, null, 'only the login directory in use counts');
+  assert.equal(resolveCodex(`${linked(outside)}:${join(home, '.codex/bin')}`, { HOME: home }).exe, realpathSync(outside), 'the first codex on PATH');
+});
+
+const filesystemOf = (argv) => Object.fromEntries([...argv.find((arg) => arg.startsWith('permissions.bounded.filesystem='))
+  .matchAll(/"((?:[^"\\]|\\.)*)"="(read|write)"/g)].map(([, key, mode]) => [JSON.parse(`"${key}"`), mode]));
+
+test('a Codex phase starts only after codex sandbox runs true under the phase\'s own permission profile', () => {
+  const run = launch(fixture());
+  assert.equal(run.code, 0, run.recordText);
+  assert.deepEqual(run.log.map((entry) => entry.argv[0]), ['--version', 'sandbox', 'exec']);
+  const profile = (argv) => argv.flatMap((arg, index) => (argv[index - 1] === '-c' && /^(?:default_permissions|permissions\.bounded\.)/.test(arg) ? ['-c', arg] : []));
+  assert.equal(profile(run.exec.argv).length, 6);
+  assert.deepEqual(run.log[1].argv, ['sandbox', ...profile(run.exec.argv), '--', 'true']);
+  // The phase ignores user configuration, so the probe reads none: its CODEX_HOME is an empty directory of its own, removed afterwards.
+  assert.ok(run.log[1].home !== run.exec.home && !existsSync(run.log[1].home), run.log[1].home);
+  const claude = launch(fixture(), { provider: 'claude' });
+  assert.deepEqual(claude.log.map((entry) => entry.argv[0]), ['--version', '-p'], 'a Claude phase keeps its bounded-shell probe only');
+  for (const [env, quoted] of [
+    [{ STUB_SANDBOX_EXIT: '2', STUB_SANDBOX_ERR: "error: unrecognized subcommand 'sandbox'\n\nUsage: codex [OPTIONS] [PROMPT]" }, "(error: unrecognized subcommand 'sandbox')"],
+    [{ STUB_SANDBOX_EXIT: '1', STUB_SANDBOX_ERR: `WARNING: ${'w'.repeat(200)}\nWARNING: second\nbwrap: execvp /x/codex: No such file or directory` },
+      `(WARNING: ${'w'.repeat(151)}; bwrap: execvp /x/codex: No such file or directory)`],
+    [{ STUB_SANDBOX_EXIT: '1', STUB_SANDBOX_ERR: 'x'.repeat(200) }, `(${'x'.repeat(160)})`],
+    [{ STUB_SANDBOX_EXIT: '3' }, '(exit 3)'],
+  ]) {
+    const refused = launch(fixture(), { env });
+    assert.deepEqual([refused.code, refused.record.status, refused.exec], [1, 'refused', undefined], refused.recordText);
+    assert.equal(refused.record.blockers.length, 1);
+    assert.match(refused.record.blockers[0], /^bounded-tools: /);
+    assert.ok(refused.record.blockers[0].includes(quoted), refused.record.blockers[0]);
+  }
+  const hung = launch(fixture(), { env: { STUB_HANG: 'sandbox' }, flags: { timeout: '1' } });
+  assert.deepEqual([hung.code, hung.record.status, hung.exec], [1, 'timeout', undefined], hung.recordText);
+  assert.match(hung.record.transport_failure, /^codex sandbox probe timed out after \d+s$/);
+});
+
+test('a fake codex under a fake CODEX_HOME runs with its release mounted, and is refused before the phase anywhere else in it', () => {
+  for (const layout of ['standalone', 'login-bin', 'outside']) {
+    const f = fixture();
+    const login = join(f.home, '.codex');
+    const release = join(login, 'packages/standalone/releases/9.9.9-x86_64-unknown-linux-musl');
+    let target = join(f.bin, 'codex'); // (c) the existing fixture
+    if (layout === 'standalone') { // (a)
+      install(join(release, 'bin/codex'), STUB);
+      symlinkSync(release, join(login, 'packages/standalone/current'));
+      target = join(login, 'packages/standalone/current/bin/codex');
+    } else if (layout === 'login-bin') target = install(join(login, 'bin/codex'), STUB); // (b)
+    const local = join(f.home, '.local/bin');
+    mkdirSync(local, { recursive: true });
+    symlinkSync(target, join(local, 'codex'));
+    const PATH = `${local}:${f.bin}:${process.env.PATH}`;
+    const run = launch(f, { env: { PATH } });
+    // Every Codex call starts the resolved binary itself, so an update that switches `current` mid-launch cannot swap it.
+    for (const entry of run.log) assert.equal(entry.bin, realpathSync(target), `${layout} ${entry.argv[0]}`);
+    if (layout === 'login-bin') {
+      assert.deepEqual([run.code, run.record.status, run.exec, run.log.map((entry) => entry.argv[0])], [1, 'refused', undefined, ['--version', 'sandbox']]);
+      assert.deepEqual(run.record.blockers, [run.record.blockers[0]]);
+      assert.ok(run.record.blockers[0].startsWith('bounded-tools: ')
+        && run.record.blockers[0].includes(`(bwrap: execvp ${realpathSync(target)}: No such file or directory)`), run.record.blockers[0]);
+      continue;
+    }
+    assert.deepEqual([run.code, run.record.status], [0, 'completed'], `${layout}: ${run.recordText}`);
+    // The table develop builds, plus exactly one read-only entry for the standalone release; the scratch directory varies per run.
+    const table = filesystemOf(run.exec.argv);
+    for (const [key, mode] of Object.entries(table)) if (mode === 'write') delete table[key];
+    assert.deepEqual(table, { ':minimal': 'read', ...Object.fromEntries(toolchainDirs(PATH, { HOME: f.home, CODEX_HOME: login }).map((dir) => [dir, 'read'])),
+      ':workspace_roots': 'read', [join(realpathSync(f.repo), '.git')]: 'read', ...(layout === 'standalone' ? { [realpathSync(release)]: 'read' } : {}) }, layout);
+  }
+});
+
+test('a relative or empty PATH component never selects codex, and a phase with no other codex is refused before any call', () => {
+  const f = fixture();
+  // PATH holds only these links besides the components under test, so no host codex can answer.
+  const tools = join(f.root, 'tools');
+  const other = join(f.root, 'other');
+  mkdirSync(tools);
+  install(join(other, 'codex'), STUB);
+  for (const [name, file] of [['git', GIT], ['node', process.execPath]]) symlinkSync(file, join(tools, name));
+  // `bin` and the empty component both name the fixture's stub through the working directory.
+  for (const [PATH, cwd] of [[`bin:${tools}`, f.root], [`:${tools}`, f.bin], [`bin:${other}:${tools}`, f.root], [`:${other}:${tools}`, f.bin]]) {
+    rmSync(join(f.root, 'stub.log'), { force: true });
+    const [argv, options] = launchSpec(f, { env: { PATH } });
+    const result = spawnSync('node', argv, { ...options, cwd });
+    const record = JSON.parse(readFileSync(join(f.root, 'record.json'), 'utf8'));
+    const log = existsSync(join(f.root, 'stub.log')) ? readFileSync(join(f.root, 'stub.log'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+    if (PATH.includes(other)) {
+      assert.deepEqual([result.status, record.status], [0, 'completed'], `${PATH}: ${JSON.stringify(record)}`);
+      assert.deepEqual(log.map((entry) => [entry.argv[0], entry.bin]), ['--version', 'sandbox', 'exec'].map((call) => [call, realpathSync(join(other, 'codex'))]), PATH);
+    } else {
+      assert.deepEqual([result.status, record.status, log], [1, 'refused', []], `${PATH}: ${JSON.stringify(record)}`);
+      assert.deepEqual(record.blockers, ['codex: no executable codex in an absolute PATH directory; check the installed CLI']);
+    }
+  }
 });
 
 // The real boundary, with synthetic markers only: a credential file and an environment marker outside the worker, and an
