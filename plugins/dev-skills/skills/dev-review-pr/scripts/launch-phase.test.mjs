@@ -627,6 +627,31 @@ test('a fake codex under a fake CODEX_HOME runs with its release mounted, and is
   }
 });
 
+test('a relative or empty PATH component never selects codex, and a phase with no other codex is refused before any call', () => {
+  const f = fixture();
+  // PATH holds only these links besides the components under test, so no host codex can answer.
+  const tools = join(f.root, 'tools');
+  const other = join(f.root, 'other');
+  mkdirSync(tools);
+  install(join(other, 'codex'), STUB);
+  for (const [name, file] of [['git', GIT], ['node', process.execPath]]) symlinkSync(file, join(tools, name));
+  // `bin` and the empty component both name the fixture's stub through the working directory.
+  for (const [PATH, cwd] of [[`bin:${tools}`, f.root], [`:${tools}`, f.bin], [`bin:${other}:${tools}`, f.root], [`:${other}:${tools}`, f.bin]]) {
+    rmSync(join(f.root, 'stub.log'), { force: true });
+    const [argv, options] = launchSpec(f, { env: { PATH } });
+    const result = spawnSync('node', argv, { ...options, cwd });
+    const record = JSON.parse(readFileSync(join(f.root, 'record.json'), 'utf8'));
+    const log = existsSync(join(f.root, 'stub.log')) ? readFileSync(join(f.root, 'stub.log'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+    if (PATH.includes(other)) {
+      assert.deepEqual([result.status, record.status], [0, 'completed'], `${PATH}: ${JSON.stringify(record)}`);
+      assert.deepEqual(log.map((entry) => [entry.argv[0], entry.bin]), ['--version', 'sandbox', 'exec'].map((call) => [call, realpathSync(join(other, 'codex'))]), PATH);
+    } else {
+      assert.deepEqual([result.status, record.status, log], [1, 'refused', []], `${PATH}: ${JSON.stringify(record)}`);
+      assert.deepEqual(record.blockers, ['codex: no executable codex in an absolute PATH directory; check the installed CLI']);
+    }
+  }
+});
+
 // The real boundary, with synthetic markers only: a credential file and an environment marker outside the worker, and an
 // edit, a diff and a check inside it. Skipped where unprivileged namespaces or bubblewrap are unavailable.
 test('the bounded shell hides the caller\'s credentials and environment, and confines writes to the worktree', (t) => {

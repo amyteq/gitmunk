@@ -105,6 +105,8 @@ export function toolchainDirs(path, env) {
 // The first executable `codex` on PATH after symlinks, and its release directory when it sits where Codex's standalone
 // installer puts it, inside the login directory. Codex's sandbox runs its own binary again for every command, so that one
 // directory is mounted read-only; only this exact layout qualifies, so no other part of the login is ever exposed.
+// As in toolchainDirs, relative and empty PATH components are skipped: they resolve against a working directory that may
+// hold PR content, so they never select the CLI that runs outside the worker.
 export function resolveCodex(path, env) {
   const exe = path.split(':').filter(isAbsolute).map((dir) => real(join(dir, 'codex')))
     .find((file) => { try { accessSync(file, constants.X_OK); return statSync(file).isFile(); } catch { return false; } }) ?? null;
@@ -359,6 +361,8 @@ async function runPhase(request) {
 
   // Every Codex call starts the binary resolved here, so an update that switches releases mid-launch cannot swap it.
   const resolved = route.cli === 'codex' ? resolveCodex(env.PATH ?? '', env) : {};
+  // Without one, a PATH lookup of `codex` would search the relative components resolveCodex skips.
+  if (resolved.exe === null) { record.blockers.push('codex: no executable codex in an absolute PATH directory; check the installed CLI'); return finish('refused'); }
   const cli = resolved.exe ?? route.cli;
   const version = await runBounded(cli, ['--version'], { env, timeoutSeconds: probeSeconds, label: `${route.cli} --version` });
   record.cli_version = version.code === 0 ? version.stdout.trim().split('\n').at(-1) : 'unverified';
