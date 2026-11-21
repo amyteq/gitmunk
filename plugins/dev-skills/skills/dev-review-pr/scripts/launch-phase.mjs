@@ -386,9 +386,10 @@ async function runPhase(request) {
     rmSync(home, { recursive: true, force: true });
     if (timeouts.length) return finish('timeout');
     if (probe.code !== 0) {
-      // Codex warns first when CODEX_HOME is a temporary directory, so the cause is the first line that is not a warning.
+      // Codex warns first when CODEX_HOME is a temporary directory, so the first line that is not a warning follows the first line.
       const lines = probe.stderr.trim().split('\n');
-      const cause = (lines.find((line) => !line.startsWith('WARNING:')) ?? lines[0]).slice(0, 160) || `exit ${probe.code}`;
+      const cause = [...new Set([lines[0], lines.find((line) => !line.startsWith('WARNING:'))])].filter(Boolean)
+        .map((line) => line.slice(0, 160)).join('; ') || `exit ${probe.code}`;
       record.blockers.push(`bounded-tools: codex sandbox could not run a command under the phase's permission profile (${cause})`);
       return finish('refused');
     }

@@ -577,8 +577,8 @@ test('a Codex phase starts only after codex sandbox runs true under the phase\'s
   assert.deepEqual(claude.log.map((entry) => entry.argv[0]), ['--version', '-p'], 'a Claude phase keeps its bounded-shell probe only');
   for (const [env, quoted] of [
     [{ STUB_SANDBOX_EXIT: '2', STUB_SANDBOX_ERR: "error: unrecognized subcommand 'sandbox'\n\nUsage: codex [OPTIONS] [PROMPT]" }, "(error: unrecognized subcommand 'sandbox')"],
-    [{ STUB_SANDBOX_EXIT: '1', STUB_SANDBOX_ERR: 'WARNING: proceeding, even though we could not create PATH aliases\nbwrap: execvp /x/codex: No such file or directory' },
-      '(bwrap: execvp /x/codex: No such file or directory)'],
+    [{ STUB_SANDBOX_EXIT: '1', STUB_SANDBOX_ERR: `WARNING: ${'w'.repeat(200)}\nWARNING: second\nbwrap: execvp /x/codex: No such file or directory` },
+      `(WARNING: ${'w'.repeat(151)}; bwrap: execvp /x/codex: No such file or directory)`],
     [{ STUB_SANDBOX_EXIT: '1', STUB_SANDBOX_ERR: 'x'.repeat(200) }, `(${'x'.repeat(160)})`],
     [{ STUB_SANDBOX_EXIT: '3' }, '(exit 3)'],
   ]) {
