@@ -2,7 +2,7 @@
 
 For trackers marked `cat=meetings`, in English or Chinese. The digest covers the **whole meeting** and goes into the **meeting's own body**; no comment is added.
 
-A processed meeting looks like this: its body opens with a digest readable at a glance, the original notes are folded below unchanged, its TODOs are merged into the tracker's TODO list without duplicates, the tracker's Meeting Ledger has a row for it, its title starts with `✅️`, and it is closed.
+A processed meeting looks like this: its body opens with a digest readable at a glance, the original notes are folded below unchanged, its TODOs are merged into the tracker's TODO list without duplicates, the tracker's Meeting Ledger has a row for it, its title starts with `✅️`, and it is closed. Above the digest, right under the done mark, one back-ref line links to the tracker (`> 📋 已登记到台账 [#N · …](…)` in a Chinese meeting; SKILL.md step 3.3).
 
 ## 1. Read
 
