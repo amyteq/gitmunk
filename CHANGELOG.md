@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `dev-skills` 0.3.0-beta.1: `dev-track`'s `meetings` digest gives every TODO row a permanent ID, `D<discussion>-T<k>` (#47). The `ID` column comes first in the English and the Chinese TODO table, also with one row, and `k` counts from 1 in row order. A redraft keeps every published ID, a new row takes the next `k`, and a number is never reused or renumbered. A tracker item's source link names its row (`[MM-DD D39-T2](meeting link)`), one link per row, so a digest row leads to its item through the Tracker column and an item back to its rows. Earlier digests and source links stay as they are, and a `redo` still never changes a body.
+- `dev-skills` 0.2.3: `dev-track`'s `meetings` digest gives every TODO row a permanent ID, `D<discussion>-T<k>` (#47). The `ID` column comes first in the English and the Chinese TODO table, also with one row, and `k` counts from 1 in row order. A redraft keeps every published ID, a new row takes the next `k`, and a number is never reused or renumbered. A tracker item's source link names its row (`[MM-DD D39-T2](meeting link)`), one link per row, so a digest row leads to its item through the Tracker column and an item back to its rows. Earlier digests and source links stay as they are, and a `redo` still never changes a body.
 
 ## 0.5.1
 
