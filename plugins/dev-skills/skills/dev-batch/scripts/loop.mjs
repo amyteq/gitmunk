@@ -223,7 +223,11 @@ export function tick(ctx) {
       if (alias) Object.assign(rec, { account: alias, id: agents[alias].find((x) => x.name === rec.name && ours(x)).id });
     }
     const list = agents[rec.account];
-    if (!list) { if (!ENDED.has(rec.state)) rec.state = 'unknown'; continue; }
+    if (!list) { // unreadable: its sessions are unknown, but one already stopped (`rm --stop`, `launch`) ends without a listing (§16)
+      if (!ENDED.has(rec.state)) rec.state = 'unknown';
+      else if (!rec.endedAt) { rec.endedAt = iso(now); ended.push(rec); }
+      continue;
+    }
     const agent = rec.id ? list.find((x) => x.id === rec.id) : list.find((x) => x.name === rec.name && ours(x));
     const was = rec.state;
     // A readable account that does not list it: gone, unless it was launched so recently that it is still registering.

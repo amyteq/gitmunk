@@ -593,6 +593,16 @@ test('a restart within the registration grace keeps the usage-limit mark of a se
   }
 });
 
+test('a session rm --stop stopped is measured before completion even while its account cannot be read (§16)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'removed' })] });
+  w.agent('er-i41r', { state: 'working', stage: 'refine', issue: 41 });
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records.map((x) => ({ ...x, state: 'stopped' })))); // as `rm --stop` leaves it
+  w.unreadable.add(w.accts[0].dir);
+  assert.equal(w.tick(T(11)).complete, true);
+  assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => [m.name, m.outcome]), [['er-i41r', 'removed']]);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(w.dir, 'summary.json'), 'utf8')).measures.costPerSessionByStage), ['refine']); // in the summary
+});
+
 test('a limited session keeps its cap slot until it is stopped for its replacement (§8, §12)', () => {
   const w = world({ rows: [row(1, 43), row(2, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'], cap: 1 });
   w.issues[41] = { refined: true };
