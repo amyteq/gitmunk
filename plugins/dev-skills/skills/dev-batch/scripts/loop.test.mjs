@@ -574,6 +574,25 @@ for (const crash of ['stop', 'launch']) {
   }
 }
 
+test('a restart within the registration grace keeps the usage-limit mark of a session stopped and no longer listed (§12)', () => {
+  for (const stage of ['implement', 'merge']) {
+    const w = stage === 'merge' ? limitedMerge() : world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'] });
+    if (stage === 'implement') {
+      w.issues[41] = { refined: true };
+      w.logs[w.agent('er-i41a', { alias: 'A1', state: 'blocked', stage: 'implement', issue: 41 })] = "You've hit your session limit · resets 4pm (UTC)\n";
+    }
+    const claude = w.claude;
+    w.claude = (cmd, args, o) => { const r = claude(cmd, args, o); if (args[0] === 'stop') throw new Error('crash'); return r; };
+    assert.throws(() => w.tick(T(10) + 30_000), /crash/); // the limit 30 s after its launch (10:00), stopped, then the loop dies
+    w.claude = claude;
+    for (const list of Object.values(w.agents)) list.length = 0; // the stopped session is no longer listed
+    assert.deepEqual(w.tick(T(10) + 45_000).launched, []); // still within its grace: not yet taken as gone
+    const r = w.tick(T(10, 5));
+    assert.deepEqual([stage, r.launched.length, w.sessions().at(-1).attempt], [stage, 1, 1]);
+    assert.deepEqual(w.events().filter((e) => e.type === 'merge-stopped' || e.type === 'stage-failed'), []);
+  }
+});
+
 test('a limited session keeps its cap slot until it is stopped for its replacement (§8, §12)', () => {
   const w = world({ rows: [row(1, 43), row(2, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'], cap: 1 });
   w.issues[41] = { refined: true };

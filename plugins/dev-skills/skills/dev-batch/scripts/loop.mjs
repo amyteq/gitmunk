@@ -231,7 +231,7 @@ export function tick(ctx) {
     rec.id = agent?.id ?? rec.id; // a session recorded before its launch, found by name
     rec.sessionId = agent?.sessionId ?? rec.sessionId;
     rec.idleAt = rec.state === 'working' ? null : rec.idleAt ?? iso(now); // I4: when it left `working`, for owner answers
-    if (rec.state === 'working') delete rec.limited; // resumed: a later end is its own
+    if (agent?.state === 'working') delete rec.limited; // listed as resumed (not merely registering): a later end is its own
     // §12: blocked on a usage limit → limited, and its account cools until the stated reset.
     const until = rec.state === 'blocked' && limitCooling(sessions.logs(cli(rec.account), rec.id ?? rec.name) ?? '', now);
     if (until) {
