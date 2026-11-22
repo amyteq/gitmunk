@@ -77,7 +77,7 @@ A tracker that still carries the older `<!-- dev-meeting-notes:tracker -->` mark
 
 Run from the repository root. Create one scratch directory and reuse its literal path as `$S`: `mktemp -d "${TMPDIR:-/tmp}/dev-track.XXXXXX"`. Define `H() { node "${CLAUDE_SKILL_DIR}/scripts/track.mjs" "$@"; }`; exit `1` refuses and `2` means it did not run, and both stop the step with a report. `OWNER`/`REPO` come from `--repo`, else `gh repo view --json owner,name`.
 
-**Discussion text never reaches a shell command line** — no title, section heading, attachment URL or anything else read out of a discussion. Extract it into a file with `jq`, `grep` or `sed` and pass the file: `H` and `gh -F` read a value written as `@path`, and `H download` reads attachment URLs from a file. Inline stays only what this skill writes itself: numbers, dates, a status emoji, `--label`, a `--unlink` pattern, and a section name a playbook names literally (`Transcript`, `all`).
+**Discussion text never reaches a shell command line** — no title, section heading, attachment URL or anything else read out of a discussion. Extract it into a file with `jq`, `grep` or `sed` and pass the file: `H` and `gh -F` read a value written as `@path`, and `H download` reads attachment URLs from a file. Inline stays only what this skill writes itself: numbers, dates, a status emoji, `--label`, `--backref-label`, a `--unlink` pattern, and a section name a playbook names literally (`Transcript`, `all`).
 
 ### 1. Locate
 
@@ -126,9 +126,11 @@ For each entry of `pending`, in `$S/<number>/`:
    ```
 
 2. **Draft** what the [playbook](#playbooks) and `--prompt` ask for: `digest.md` (only if the playbook writes one), the tracker's new body `tracker.md` (its current body with only the playbook's parts changed), and the status emoji.
-3. **Body and title**: `H body --source source.md --tracker T --date TODAY [--digest digest.md] [--fold SECTION|all] [--label TEXT] [--unlink REGEX]… [--drop SECTION]… --out body.md`, then `H title --title @title.src.txt --status EMOJI [--base "NEW TITLE"] > title.txt`. A heading read out of the discussion goes through a file (`--fold @fold.txt`, `--drop @drop.txt`):
+3. **Body and title**: `H body --source source.md --tracker T --date TODAY --tracker-title @$S/tracker-title.txt --tracker-url @$S/tracker-url.txt [--backref-label TEXT] [--digest digest.md] [--fold SECTION|all] [--label TEXT] [--unlink REGEX]… [--drop SECTION]… --out body.md`, then `H title --title @title.src.txt --status EMOJI [--base "NEW TITLE"] > title.txt`. Under the done mark the body gets one back-ref line to the tracker, such as `> 📋 Registered in tracker [#12 · Tracking - Ideas](https://github.com/example-org/example-repo/discussions/12)`, unless the part of the original that the new body shows already has a `>` line linking the tracker URL; the JSON says `"backref": "added"` or `"present"`, and a URL other than `https://<host>/<owner>/<repo>/discussions/T` is refused. `--backref-label` is `Registered in tracker` (the default) or `已登记到台账`: the digest's language when the playbook writes a digest, else the language of the discussion's body. The tracker's title and URL are extracted once per run from F1's `locate.json`, and a heading read out of the discussion goes through a file too (`--fold @fold.txt`, `--drop @drop.txt`):
 
    ```bash
+   jq -j '.tracker.title' $S/locate.json > $S/tracker-title.txt
+   jq -j '.tracker.url' $S/locate.json > $S/tracker-url.txt
    grep -n '^## ' $S/NUMBER/source.md                             # the headings, with line numbers
    sed -n '7s/^## //p' $S/NUMBER/source.md > $S/NUMBER/drop.txt   # 7: the line of the heading to fold or drop
    ```
@@ -175,9 +177,9 @@ Reply in the invoker's language with one table: discussion | what was done | tra
 | `meetings` | [`references/meetings.md`](references/meetings.md) | Digest in place with the original folded, TODOs merged into the tracker's checkbox list, one Meeting Ledger row, `✅️` title |
 | anything else | the default below | Register only |
 
-**Default**: the body gets only the done mark (`H body` without `--digest`/`--fold`); the tracker gets one ledger row (its existing columns, else the F2 template's) with status `✅`; the title gets `✅`.
+**Default**: the body gets only the done mark and the back-ref line (`H body` without `--digest`/`--fold`); the tracker gets one ledger row (its existing columns, else the F2 template's) with status `✅`; the title gets `✅`.
 
-A digest follows the language of its discussion; tracker entries follow the tracker's language. `--prompt` is natural language mapped onto the options: "Fold the Transcript, drop the timestamped recording links from the Summary and keep one recording link" is `--fold Transcript --unlink 'fathom\.video'`, with the digest keeping one recording link.
+A digest and the back-ref label follow the language of their discussion; tracker entries follow the tracker's language. `--prompt` is natural language mapped onto the options: "Fold the Transcript, drop the timestamped recording links from the Summary and keep one recording link" is `--fold Transcript --unlink 'fathom\.video'`, with the digest keeping one recording link.
 
 ## Write boundary
 

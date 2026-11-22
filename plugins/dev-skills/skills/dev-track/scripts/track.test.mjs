@@ -3,13 +3,14 @@
 // Every input is a fixture; no GitHub call is made.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { brief, download, hasDuplicate, isDone, locate, rebuild, retitle, setTracker, trackerOf } from './track.mjs';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, 'track.mjs');
@@ -198,14 +199,25 @@ test('a legacy mark and a new one for the same category are duplicates', () => {
 
 // Rebuild
 
+// Every processed body links back to its tracker (#48): `H body` gets the tracker's title and URL.
+const TITLE = 'Tracking - Ideas';
+const trackerUrl = (n) => `https://github.com/example-org/example-repo/discussions/${n}`;
+const BACK = (n, label = 'Registered in tracker', title = TITLE) => `> 📋 ${label} [#${n} · ${title}](${trackerUrl(n)})`;
+const MARK = (n, date) => `<!-- dev-track:done · #${n} · ${date} -->`;
+const HEAD = (n, date) => `${MARK(n, date)}\n\n${BACK(n)}\n\n`;
+const build = (source, n, date, options = {}) =>
+  rebuild(source, n, date, { trackerTitle: TITLE, trackerUrl: trackerUrl(n), ...options });
+const backrefs = (body, n) => body.split('\n').filter((line) => line.startsWith('>')
+  && [`](${trackerUrl(n)})`, `](${trackerUrl(n)} `].some((link) => line.includes(link)));
+
 const FATHOM = 'Intro line\r\n\r\n## Summary\r\nVIEW RECORDING - 30 mins: https://fathom.video/share/abc\r\n\r\n'
   + '- [Pricing agreed](https://fathom.video/share/abc?timestamp=12.5) by both\r\n\r\n'
   + '## Transcript\r\n  0:01 - Host\r\n    hello [x](https://example.com)\r\n';
 
 test('a Fathom-shaped body unlinks the summary and folds the transcript verbatim', () => {
-  const { body } = rebuild(FATHOM, 21, '2026-11-13', { digest: '## Digest\n[Recording](https://fathom.video/share/abc)',
+  const { body } = build(FATHOM, 21, '2026-11-13', { digest: '## Digest\n[Recording](https://fathom.video/share/abc)',
     folds: ['Transcript'], unlinks: ['fathom\\.video'] });
-  assert.ok(body.startsWith('<!-- dev-track:done · #21 · 2026-11-13 -->\n\n## Digest\n'
+  assert.ok(body.startsWith(`${HEAD(21, '2026-11-13')}## Digest\n`
     + '[Recording](https://fathom.video/share/abc)\n\nIntro line'), body);
   assert.ok(body.includes('- Pricing agreed by both'));
   assert.ok(!body.includes('VIEW RECORDING'));
@@ -215,42 +227,167 @@ test('a Fathom-shaped body unlinks the summary and folds the transcript verbatim
 
 test('Chinese notes fold whole with a Chinese label', () => {
   const source = '\n\n  缩进行\n## 会议待办\n- [ ] 修复端口 [链接](https://example.com)\n';
-  const { body } = rebuild(source, 41, '2026-11-13', { digest: '## 会议摘要（2026-11-04）\n', folds: ['all'], label: '原始记录' });
+  const { body } = build(source, 41, '2026-11-13', { digest: '## 会议摘要（2026-11-04）\n', folds: ['all'], label: '原始记录' });
   assert.ok(body.endsWith(`<details>\n<summary>原始记录</summary>\n${source}\n</details>\n`), body);
 });
 
 test('blank lines and trailing spaces of the original survive', () => {
   const source = '\n\nalpha  \n\n';
   for (const options of [{}, { folds: ['all'] }, { unlinks: ['fathom\\.video'] }]) {
-    assert.ok(rebuild(source, 1, '2026-11-13', options).body.includes(source), JSON.stringify(options));
+    assert.ok(build(source, 1, '2026-11-13', options).body.includes(source), JSON.stringify(options));
   }
-  const kept = rebuild('## Summary\nx  \n\n\n## Transcript\ny\n', 1, '2026-11-13', { folds: ['Transcript'] }).body;
+  const kept = build('## Summary\nx  \n\n\n## Transcript\ny\n', 1, '2026-11-13', { folds: ['Transcript'] }).body;
   assert.ok(kept.includes('## Summary\nx  \n\n\n'));
   // --drop/--fold match the stripped name, but a heading that stays keeps its own trailing spaces
-  assert.equal(rebuild('## Keep  \nbody\n## Drop\nold\n', 1, '2026-11-13', { drops: ['Drop'] }).body,
-    '<!-- dev-track:done · #1 · 2026-11-13 -->\n\n## Keep  \nbody\n');
-  assert.equal(rebuild('## Drop\nold\n## Keep  ', 1, '2026-11-13', { drops: ['Drop'] }).body, // no final newline
-    '<!-- dev-track:done · #1 · 2026-11-13 -->\n\n## Keep  \n');
+  assert.equal(build('## Keep  \nbody\n## Drop\nold\n', 1, '2026-11-13', { drops: ['Drop'] }).body,
+    `${HEAD(1, '2026-11-13')}## Keep  \nbody\n`);
+  assert.equal(build('## Drop\nold\n## Keep  ', 1, '2026-11-13', { drops: ['Drop'] }).body, // no final newline
+    `${HEAD(1, '2026-11-13')}## Keep  \n`);
 });
 
 test('Chinese section names fold and drop', () => {
   const source = '## 旧摘要\nold\n## 转写稿\n说话人 1：你好\n';
-  const { body } = rebuild(source, 41, '2026-11-13', { digest: '## 会议摘要\nnew', folds: ['转写稿'], drops: ['旧摘要'] });
+  const { body } = build(source, 41, '2026-11-13', { digest: '## 会议摘要\nnew', folds: ['转写稿'], drops: ['旧摘要'] });
   assert.ok(!body.includes('old'));
   assert.ok(body.includes('<summary>转写稿</summary>\n\n说话人 1：你好\n\n</details>'));
 });
 
-test('a mark alone keeps the body byte for byte', () => {
+test('the default playbook adds the mark and the back-ref, and keeps the body byte for byte', () => {
+  // AC1(a), AC3(a): a blockquote that links elsewhere is no back-ref
   const source = '> 跟踪 issue：#12\n\n\n## 被测版本\n| a |\n';
-  assert.equal(rebuild(source, 42, '2026-11-13').body, `<!-- dev-track:done · #42 · 2026-11-13 -->\n\n${source}`);
+  const result = build(source, 42, '2026-11-13');
+  assert.deepEqual([result.body, result.backref], [`${HEAD(42, '2026-11-13')}${source}`, 'added']);
+  // leading blank lines are the original's own, as they were right after the mark
+  assert.equal(build('\n\nalpha  \n\n', 42, '2026-11-13').body, `${MARK(42, '2026-11-13')}\n\n${BACK(42)}\n\nalpha  \n\n`);
+  assert.equal(build('', 42, '2026-11-13').body, `${MARK(42, '2026-11-13')}\n\n${BACK(42)}\n`);
+  assert.equal(BACK(42), '> 📋 Registered in tracker [#42 · Tracking - Ideas](https://github.com/example-org/example-repo/discussions/42)');
+});
+
+test('the meetings shapes put the back-ref between the mark and the digest, and change nothing else', () => {
+  // AC1(b): today's bodies for the same inputs, captured before the back-ref existed
+  const shapes = [
+    [FATHOM, { digest: '## Digest\n[Recording](https://fathom.video/share/abc)\n', folds: ['Transcript'], unlinks: ['fathom\\.video'] },
+      '<!-- dev-track:done · #12 · 2026-11-13 -->\n\n## Digest\n[Recording](https://fathom.video/share/abc)\n\nIntro line\n\n'
+      + '## Summary\n\n- Pricing agreed by both\n\n<details>\n<summary>Transcript</summary>\n\n  0:01 - Host\n'
+      + '    hello [x](https://example.com)\n\n</details>\n'],
+    ['\n\n  缩进行\n## 会议待办\n- [ ] 修复端口 [链接](https://example.com)\n',
+      { digest: '## 会议摘要（2026-11-04）\n', folds: ['all'], label: '原始记录' },
+      '<!-- dev-track:done · #12 · 2026-11-13 -->\n\n## 会议摘要（2026-11-04）\n\n<details>\n<summary>原始记录</summary>\n\n\n'
+      + '  缩进行\n## 会议待办\n- [ ] 修复端口 [链接](https://example.com)\n\n</details>\n'],
+  ];
+  for (const [source, options, today] of shapes) {
+    const { body } = build(source, 12, '2026-11-13', options);
+    assert.ok(body.startsWith(`${HEAD(12, '2026-11-13')}## `), body);
+    assert.equal(body.replace(`\n\n${BACK(12)}`, ''), today);
+  }
+});
+
+test('the tracker title is escaped so the back-ref holds one link', () => {
+  // AC1(c)
+  const title = 'Tracking [beta] \\ - Ideas]';
+  const { body } = build('x\n', 12, '2026-11-13', { trackerTitle: title });
+  const line = body.split('\n')[2];
+  assert.equal(line, BACK(12, 'Registered in tracker', 'Tracking \\[beta\\] \\\\ - Ideas\\]'));
+  const links = [];
+  const walk = (node) => { if (node.type === 'link') links.push(node); node.children?.forEach(walk); };
+  walk(fromMarkdown(line));
+  assert.deepEqual(links.map((link) => [link.url, link.children.map((child) => child.value).join('')]),
+    [[trackerUrl(12), `#12 · ${title}`]]);
+  assert.equal(build('x\n', 12, '2026-11-13', { trackerTitle: 'one\ntwo' }).action, 'refuse'); // would split the line
+});
+
+test('a tracker URL other than this tracker\'s discussion URL refuses', () => {
+  // AC1(d)
+  for (const url of [trackerUrl(13), trackerUrl(12).replace('https:', 'http:'), `${trackerUrl(12)}/`, `${trackerUrl(12)}0`,
+    trackerUrl(12).replace('/12', '/012'), `${trackerUrl(12)}?x=1`, `${trackerUrl(12)}#top`, `${trackerUrl(12)})`,
+    'https://github.com/example-org/example-repo/issues/12', 'https://github.com/example-org/discussions/12',
+    'https://github.com/example org/example-repo/discussions/12', 'https://github.com/a(b)/example-repo/discussions/12',
+    'https://github.com/<x>/example-repo/discussions/12', ` ${trackerUrl(12)}`, '', undefined,
+    // a query, fragment, backslash or dot segment moves /discussions/12 out of the repository's path
+    'https://github.com/example-org/example-repo?view/discussions/12', 'https://github.com/example-org/example-repo#readme/discussions/12',
+    'https://github.com/example-org/example\\repo/discussions/12', 'https://github.com/../example-repo/discussions/12',
+    'https://github.com/example-org/%2e%2e/discussions/12']) {
+    const result = build('x\n', 12, '2026-11-13', { trackerUrl: url });
+    assert.equal(result.action, 'refuse', String(url));
+    assert.match(result.reason, /tracker URL/, String(url));
+  }
+  for (const url of ['https://ghe.example/org/repo/discussions/12', 'https://ghe.example:8443/my_org/repo.js/discussions/12']) {
+    assert.equal(build('x\n', 12, '2026-11-13', { trackerUrl: url }).action, 'proceed', url);
+  }
 });
 
 test('rebuild refuses a bad date, a done or tracker body, a missing section and an oversize body', () => {
-  assert.equal(rebuild('x', 1, '11-13').action, 'refuse');
-  assert.equal(rebuild('<!-- dev-meeting-notes:done · #41 -->\nx', 1, '2026-11-13').action, 'refuse');
-  assert.equal(rebuild(setTracker('x', 'tests', '测试记录'), 1, '2026-11-13').action, 'refuse');
-  assert.match(rebuild('## Summary\nx', 1, '2026-11-13', { folds: ['Transcript'] }).reason, /Transcript/);
-  assert.match(rebuild('x'.repeat(70000), 1, '2026-11-13').reason, /65536/);
+  // AC1(f)
+  assert.equal(build('x', 1, '11-13').action, 'refuse');
+  assert.equal(build('<!-- dev-meeting-notes:done · #41 -->\nx', 1, '2026-11-13').action, 'refuse');
+  assert.equal(build(setTracker('x', 'tests', '测试记录'), 1, '2026-11-13').action, 'refuse');
+  assert.match(build('## Summary\nx', 1, '2026-11-13', { folds: ['Transcript'] }).reason, /Transcript/);
+  assert.match(build('x'.repeat(70000), 1, '2026-11-13').reason, /65536/);
+  // a body that fits without the back-ref line but not with it
+  const fits = 'x'.repeat(65536 - [...`${MARK(1, '2026-11-13')}\n\n`].length - 1);
+  const over = build(`${fits}\n`, 1, '2026-11-13');
+  assert.equal(over.action, 'refuse');
+  assert.match(over.reason, new RegExp(`has ${65536 + [...`${BACK(1)}\n\n`].length} characters; GitHub allows 65536`));
+});
+
+test('a back-ref the shown body already holds is not added again', () => {
+  // AC2(a): added by hand, in any wording, keeping every byte
+  for (const line of [BACK(12), `> Ledger: [tracker](${trackerUrl(12)})`, `>[#12](${trackerUrl(12)} "ledger")`]) {
+    const source = `Notes\n\n${line}\n\nmore\n`;
+    const result = build(source, 12, '2026-11-13');
+    assert.equal(result.body, `${MARK(12, '2026-11-13')}\n\n${source}`, line);
+    assert.equal(result.backref, 'present');
+    assert.equal(backrefs(result.body, 12).length, 1);
+  }
+  // a reference link counts too: full, collapsed and shortcut
+  for (const line of ['> [tracker][ledger]', '> [ledger][]', '> [ledger]']) {
+    const source = `Notes\n\n${line}\n\n[ledger]: <${trackerUrl(12)}>\n`;
+    const result = build(source, 12, '2026-11-13');
+    assert.deepEqual([result.body, result.backref], [`${MARK(12, '2026-11-13')}\n\n${source}`, 'present'], line);
+  }
+  // a label defined twice links its first definition, as CommonMark reads it
+  const twice = (a, b) => `> [ledger]\n\n[ledger]: ${trackerUrl(a)}\n[ledger]: ${trackerUrl(b)}\n`;
+  assert.deepEqual([build(twice(12, 13), 12, '2026-11-13').backref, build(twice(13, 12), 12, '2026-11-13').backref],
+    ['present', 'added']);
+  // still shown after --unlink and next to a dropped section
+  const source = `## Summary\n${BACK(12)}\n## Old digest\nold\n`;
+  const result = build(source, 12, '2026-11-13', { drops: ['Old digest'], unlinks: ['fathom\\.video'] });
+  assert.equal(result.body, `${MARK(12, '2026-11-13')}\n\n## Summary\n${BACK(12)}\n`);
+});
+
+test('a back-ref that is not shown, or is not a quoted link to this tracker, does not count', () => {
+  // AC2(b) fenced, AC2(d) another tracker, and shapes D3 does not count
+  for (const source of [`\`\`\`markdown\n${BACK(12)}\n\`\`\`\n`, `${BACK(13).replace('#13', '#12')}\n`, `${BACK(13)}\n`,
+    `See [ledger](${trackerUrl(12)})\n`, `- ${BACK(12)}\n`, `> \`${BACK(12)}\`\n`, `> ${trackerUrl(12)}\n`,
+    `See [ledger]\n\n[ledger]: ${trackerUrl(12)}\n`, `> [ledger]\n\n[ledger]: ${trackerUrl(13)}\n`, `> [ledger]: ${trackerUrl(12)}\n`]) {
+    const result = build(source, 12, '2026-11-13');
+    assert.equal(result.body, `${HEAD(12, '2026-11-13')}${source}`, source);
+    assert.equal(result.backref, 'added');
+  }
+  // a quoted link only to a tracker URL in a longer path is not this tracker's
+  assert.equal(build(`> [x](${trackerUrl(12)}/x)\n`, 12, '2026-11-13').backref, 'added');
+});
+
+test('a back-ref inside a fold is hidden, so one is added above the digest', () => {
+  // AC2(c): the fold keeps its copy unchanged
+  const source = `## Summary\ns\n## Transcript\n${BACK(12)}\n`;
+  for (const folds of [['all'], ['Transcript']]) {
+    const { body, backref } = build(source, 12, '2026-11-13', { digest: '## Digest\nd\n', folds });
+    assert.ok(body.startsWith(`${HEAD(12, '2026-11-13')}## Digest\nd\n`), body);
+    assert.equal(backref, 'added');
+    assert.equal(backrefs(body, 12).length, 2, body);
+    assert.ok(body.includes(`<summary>${folds[0] === 'all' ? 'Original notes' : 'Transcript'}</summary>\n`), body);
+    assert.ok(body.includes(folds[0] === 'all' ? source : `${BACK(12)}\n\n</details>`), body);
+  }
+  // a dropped section is not shown either
+  assert.equal(build(`## Old\n${BACK(12)}\n## Keep\nk\n`, 12, '2026-11-13', { drops: ['Old'] }).body,
+    `${HEAD(12, '2026-11-13')}## Keep\nk\n`);
+});
+
+test('the back-ref label follows the discussion language', () => {
+  // AC3(b): the title stays as it is
+  const { body } = build('会议记录\n', 12, '2026-11-13', { backrefLabel: '已登记到台账', trackerTitle: '台账 - 会议记录' });
+  assert.equal(body, `${MARK(12, '2026-11-13')}\n\n> 📋 已登记到台账 [#12 · 台账 - 会议记录](${trackerUrl(12)})\n\n会议记录\n`);
 });
 
 // Small helpers
@@ -324,7 +461,7 @@ test('every real mark stays live', () => {
 });
 
 test('a quoted mark neither refuses a rebuild nor is removed', () => {
-  assert.equal(rebuild(FENCED, 42, '2026-11-13').body, `<!-- dev-track:done · #42 · 2026-11-13 -->\n\n${FENCED}`);
+  assert.equal(build(FENCED, 42, '2026-11-13').body, `${HEAD(42, '2026-11-13')}${FENCED}`);
   const marked = setTracker(FENCED, 'tests', '测试记录');
   assert.equal(setTracker(marked), FENCED); // --remove retires only the real mark
 });
@@ -336,7 +473,7 @@ test('a mark after an inner fence line is still an example', () => {
       assert.equal(isDone({ body }), false, body);
       assert.equal(trackerOf({ body }), null, body);
       assert.equal(setTracker(setTracker(body, 'tests', '测试记录')), body);
-      assert.equal(rebuild(body, 42, '2026-11-14').action, 'proceed', body);
+      assert.equal(build(body, 42, '2026-11-14').action, 'proceed', body);
     }
   }
 });
@@ -363,8 +500,8 @@ test('a list code block does not shift what counts as code', () => {
   }
   const kept = `## Notes\n${LIST}\`\`\`\n## Old digest\nquoted\n\`\`\`\n`;
   const source = `${kept}## Old digest\nreal old\n## Keep\nimportant\n`;
-  assert.equal(rebuild(source, 21, '2026-11-14', { drops: ['Old digest'] }).body,
-    `<!-- dev-track:done · #21 · 2026-11-14 -->\n\n${kept}## Keep\nimportant\n`);
+  assert.equal(build(source, 21, '2026-11-14', { drops: ['Old digest'] }).body,
+    `${HEAD(21, '2026-11-14')}${kept}## Keep\nimportant\n`);
 });
 
 test('a list fence closed at column zero reads as GitHub does', () => {
@@ -375,19 +512,22 @@ test('a list fence closed at column zero reads as GitHub does', () => {
 test('a fenced heading is not a section, and neither is a setext one', () => {
   const example = '```markdown\n## Transcript\nquoted\n```python\n## Old digest\n```\n';
   const source = `## Summary\ns\n${example}## Transcript\nreal\n`;
-  const { body } = rebuild(source, 21, '2026-11-14', { folds: ['Transcript'] });
+  const { body } = build(source, 21, '2026-11-14', { folds: ['Transcript'] });
   assert.equal(body.split('<details>').length - 1, 1);
   assert.ok(body.includes(`## Summary\ns\n${example}`));
   assert.ok(body.includes('<summary>Transcript</summary>\n\nreal\n\n</details>'));
-  const dropped = rebuild(`## Notes\n${example}## Old digest\nold\n`, 21, '2026-11-14', { drops: ['Old digest'] });
-  assert.equal(dropped.body, `<!-- dev-track:done · #21 · 2026-11-14 -->\n\n## Notes\n${example}`);
-  assert.equal(rebuild(`## Notes\n${example}`, 21, '2026-11-14', { drops: ['Old digest'] }).action, 'refuse');
-  assert.equal(rebuild('Old digest\n---\nx\n', 21, '2026-11-14', { drops: ['Old digest'] }).action, 'refuse');
+  const dropped = build(`## Notes\n${example}## Old digest\nold\n`, 21, '2026-11-14', { drops: ['Old digest'] });
+  assert.equal(dropped.body, `${HEAD(21, '2026-11-14')}## Notes\n${example}`);
+  assert.equal(build(`## Notes\n${example}`, 21, '2026-11-14', { drops: ['Old digest'] }).action, 'refuse');
+  assert.equal(build('Old digest\n---\nx\n', 21, '2026-11-14', { drops: ['Old digest'] }).action, 'refuse');
 });
 
 // CLI
 
 const page = (nodes) => ({ data: { repository: { discussions: { nodes } } } });
+// `jq -j` writes no final newline.
+const trackerArgs = (n, title = TITLE) => ['--tracker-title', `@${file(`tracker-title-${n}.txt`, title)}`,
+  '--tracker-url', `@${file(`tracker-url-${n}.txt`, trackerUrl(n))}`];
 
 test('locate reads slurped pages and sets the exit code', () => {
   const pages = file('pages.json', JSON.stringify([page(ZH.slice(0, 3)), page(ZH.slice(3))]));
@@ -403,8 +543,48 @@ test('titles and section names are read from files', () => {
   assert.deepEqual([run.status, run.stdout], [0, '✅️ $(printf SHELL) 1104会议纪要']);
   const source = file('s.md', '## $(printf SHELL)\nx\n'), out = join(scratch, 'o.md');
   const head = file('fold.txt', '$(printf SHELL)\n');
-  const body = cli('body', '--source', source, '--tracker', '1', '--date', '2026-11-13', '--fold', `@${head}`, '--out', out);
+  const body = cli('body', '--source', source, '--tracker', '1', '--date', '2026-11-13', '--fold', `@${head}`,
+    ...trackerArgs(1), '--out', out);
   assert.deepEqual([body.status, readFileSync(out, 'utf8').includes('<summary>$(printf SHELL)</summary>')], [0, true]);
+});
+
+test('the tracker title and URL are read from files, as jq -j writes them', () => {
+  // AC4(c), AC3(b) through the CLI
+  const source = file('br.md', 'x\n'), out = join(scratch, 'br.out.md');
+  const title = '$(printf SHELL) [台账]';
+  const run = cli('body', '--source', source, '--tracker', '12', '--date', '2026-11-13', ...trackerArgs(12, title),
+    '--backref-label', '已登记到台账', '--out', out);
+  assert.deepEqual([run.status, JSON.parse(run.stdout).backref], [0, 'added'], run.stderr);
+  assert.equal(readFileSync(out, 'utf8'),
+    `${MARK(12, '2026-11-13')}\n\n${BACK(12, '已登记到台账', '$(printf SHELL) \\[台账\\]')}\n\nx\n`);
+});
+
+test('a wrong tracker URL exits 1 and a missing title or URL exits 2, writing nothing', () => {
+  // AC1(d), AC1(e)
+  const source = file('bad.md', 'x\n'), out = join(scratch, 'bad.out.md');
+  const base = ['body', '--source', source, '--tracker', '12', '--date', '2026-11-13', '--out', out];
+  // the files are read as jq -j wrote them: surrounding whitespace is part of the value, not trimmed away
+  for (const [title, url] of [[TITLE, trackerUrl(13)], [TITLE, trackerUrl(12).replace('https:', 'http:')],
+    [TITLE, `${trackerUrl(12)}\n`], [TITLE, ` ${trackerUrl(12)}`], [`\n${TITLE}`, trackerUrl(12)], [`${TITLE}\n`, trackerUrl(12)]]) {
+    const run = cli(...base, '--tracker-title', `@${file('bad-title.txt', title)}`, '--tracker-url', `@${file('bad-url.txt', url)}`);
+    assert.deepEqual([run.status, JSON.parse(run.stdout).action, existsSync(out)], [1, 'refuse', false], `${title} ${url}`);
+  }
+  const [, titleFile, , urlFile] = trackerArgs(12);
+  for (const given of [['--tracker-title', titleFile], ['--tracker-url', urlFile], []]) {
+    const run = cli(...base, ...given);
+    assert.deepEqual([run.status, existsSync(out)], [2, false], given.join(' '));
+    assert.match(run.stderr, /body needs .*--tracker-(?:title|url)/);
+  }
+});
+
+test('step 3.3 passes the tracker title and URL as files extracted with jq -j', () => {
+  // AC4(c), AC3(c)
+  const skill = readFileSync(join(here, '..', 'SKILL.md'), 'utf8');
+  for (const line of ["jq -j '.tracker.title' $S/locate.json > $S/tracker-title.txt",
+    "jq -j '.tracker.url' $S/locate.json > $S/tracker-url.txt",
+    '--tracker-title @$S/tracker-title.txt --tracker-url @$S/tracker-url.txt', 'Registered in tracker', '已登记到台账']) {
+    assert.ok(skill.includes(line), line);
+  }
 });
 
 test('locate reads the repository categories', () => {
@@ -417,22 +597,22 @@ test('locate reads the repository categories', () => {
 
 test('a bad --unlink regex exits 2', () => {
   const source = file('unlink.md', 'x\n');
-  assert.equal(cli('body', '--source', source, '--tracker', '1', '--date', '2026-11-13', '--unlink', '[',
+  assert.equal(cli('body', '--source', source, '--tracker', '1', '--date', '2026-11-13', '--unlink', '[', ...trackerArgs(1),
     '--out', join(scratch, 'unlink.out.md')).status, 2);
 });
 
 test('zero and negative numbers exit 2', () => {
   const pages = file('zh.json', JSON.stringify(page(ZH))), source = file('n.md', 'x\n');
   for (const argv of [['locate', '--pages', pages, '--number', '-1'], ['locate', '--pages', pages, '--cat', 'tests', '--only', '0'],
-    ['body', '--source', source, '--tracker', '0', '--date', '2026-11-13', '--out', join(scratch, 'n.out.md')]]) {
+    ['body', '--source', source, '--tracker', '0', '--date', '2026-11-13', ...trackerArgs(1), '--out', join(scratch, 'n.out.md')]]) {
     assert.equal(cli(...argv).status, 2, argv.join(' '));
   }
 });
 
 test('body and tracker commands', () => {
   const source = file('bt.md', 'x\n'), out = join(scratch, 'bt.out.md');
-  const body = cli('body', '--source', source, '--tracker', '42', '--date', '2026-11-13', '--out', out);
-  assert.deepEqual([body.status, readFileSync(out, 'utf8')], [0, '<!-- dev-track:done · #42 · 2026-11-13 -->\n\nx\n']);
+  const body = cli('body', '--source', source, '--tracker', '42', '--date', '2026-11-13', ...trackerArgs(42), '--out', out);
+  assert.deepEqual([body.status, readFileSync(out, 'utf8')], [0, `${HEAD(42, '2026-11-13')}x\n`]);
   assert.equal(cli('tracker', '--source', source, '--cat', '测试', '--category', '测试记录', '--out', out).status, 1);
   assert.equal(cli('tracker', '--source', source, '--cat', 'tests', '--out', out).status, 2);
   assert.equal(cli('tracker', '--source', source, '--cat', 'tests', '--category', '测试记录', '--out', out).status, 0);

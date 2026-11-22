@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- `dev-batch` skill (#44, #45): runs a batch of issues through refine, implement, review and squash merge as background sessions across accounts, with one ledger in the source issue or discussion and merges only under the owner's authorization line. `dev-skills` 0.3.0-beta.1 (ten skills). The translations in `i18n/` follow in their own update.
+- `dev-batch` skill (#44, #45): runs a batch of issues through refine, implement, review and squash merge as background sessions across accounts, with one ledger in the source issue or discussion and merges only under the owner's authorization line. `dev-skills` 0.3.0 (ten skills). The translations in `i18n/` follow in their own update.
+- `dev-skills` 0.2.4: `dev-track` links each processed discussion back to its tracker (#48). Under the invisible done mark, `H body` adds one visible line, `> 📋 Registered in tracker [#N · <tracker title>](<tracker URL>)`, or `已登记到台账` for a Chinese discussion, in both the default and `meetings` playbooks. It is skipped when the part of the body that stays visible already has a `>` line linking the tracker URL, so a hand-made back-ref is not doubled. The tracker title and URL come from `locate.json` as files (`--tracker-title @…`, `--tracker-url @…`). A URL other than `https://<host>/<owner>/<repo>/discussions/N` is refused, and `[`, `]` and `\` in the title are escaped. Discussions processed earlier keep their bodies, because a `redo` still never rewrites one.
+- `dev-skills` 0.2.3: `dev-track`'s `meetings` digest gives every TODO row a permanent ID, `D<discussion>-T<k>` (#47). The `ID` column comes first in the English and the Chinese TODO table, also with one row, and `k` counts from 1 in row order. A redraft keeps every published ID, a new row takes the next `k`, and a number is never reused or renumbered. A tracker item's source link names its row (`[MM-DD D39-T2](meeting link)`), one link per row, so a digest row leads to its item through the Tracker column and an item back to its rows. Earlier digests and source links stay as they are, and a `redo` still never changes a body.
 
 ## 0.5.1
 

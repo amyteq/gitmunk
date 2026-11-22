@@ -1,6 +1,6 @@
 {
   "name": "dev-skills",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Helpers and tests for the dev-review-pr, dev-refine-issue, dev-explain, dev-interview, dev-compact, dev-merge, dev-track, dev-analyse-rp, dev-refine-story and dev-batch agent skills.",
   "type": "module",

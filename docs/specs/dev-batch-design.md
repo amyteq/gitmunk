@@ -339,7 +339,7 @@ The skill records enough for a later evaluation skill to measure each batch with
 
 ## 19. Rollout
 
-A task branch from `develop` and one PR into `develop` (the beta channel), tracked by #44. `dev-skills` goes to `0.3.0-beta.1`; `CHANGELOG.md`, the plugin README's skill table and the root README's skill table gain `dev-batch`. Translations under `i18n/` are left to their own update. After the merge, the owner runs `/dev-batch setup` once for the configured accounts.
+A task branch from `develop` and one PR into `develop` (the beta channel), tracked by #44. `dev-skills` goes to `0.3.0`; `CHANGELOG.md`, the plugin README's skill table and the root README's skill table gain `dev-batch`. Translations under `i18n/` are left to their own update. After the merge, the owner runs `/dev-batch setup` once for the configured accounts.
 
 ## 20. Calls made in this design (for the owner to check)
 

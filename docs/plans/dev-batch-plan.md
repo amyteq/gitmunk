@@ -458,7 +458,7 @@ test('CLAUDE_CODE_AUTO_COMPACT_WINDOW in the environment gives a warning');
 
 **Files:**
 - Modify:
-  - `plugins/dev-skills/.claude-plugin/plugin.json` (version `0.3.0-beta.1`; description lists `dev-batch`);
+  - `plugins/dev-skills/.claude-plugin/plugin.json` (version `0.3.0`; description lists `dev-batch`);
   - `plugins/dev-skills/package.json` (description lists `dev-batch`);
   - `plugins/dev-skills/README.md` ("Nine agent skills", a table row);
   - `README.md` (skill table row);
