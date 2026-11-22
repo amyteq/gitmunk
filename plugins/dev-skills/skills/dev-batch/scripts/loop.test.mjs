@@ -88,6 +88,7 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
     if (args[0] === 'logs') return { code: 0, stdout: w.logs[args[1]] ?? '', stderr: '' };
     if (args[0] === 'stop') { if (w.stopFails) return { code: 1, stdout: '', stderr: 'stop failed' }; const a = list.find((x) => x.id === args[1]); if (a) a.state = 'stopped'; return { code: a ? 0 : 1, stdout: '', stderr: '' }; }
     if (args[0] === '--bg') {
+      w.onLaunch?.(args[args.indexOf('--name') + 1]);
       if (w.launchFails) return { code: 1, stdout: '', stderr: 'launch failed' };
       const id = (0xa0000000 + ++ids).toString(16);
       if (!w.hideLaunches) list.push({ id, sessionId: `session-${id}`, name: args[args.indexOf('--name') + 1], state: 'working', cwd: '/w', startedAt: '' });
@@ -396,6 +397,51 @@ test('another batch\'s merge lock stays held while its merge session runs, even 
   assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).key, 'i40');
 });
 
+test('a merge session is recorded before it launches; another batch\'s recorded one keeps the lock until its account shows it ended (R9)', () => {
+  const w = world({ rows: [row(1, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+  const other = join(dirname(w.dir), 'i99'); // stopped right after launching er-pr70m: recorded, not yet listed
+  mkdirSync(other);
+  writeFileSync(join(other, 'settings.json'), JSON.stringify({ accounts: w.accts }));
+  writeFileSync(join(other, 'sessions.json'), JSON.stringify([{ name: 'er-pr70m', stage: 'merge', issue: 7, pr: 70, account: 'A1', id: null,
+    startedAt: new Date(T(10)).toISOString(), state: 'working' }]));
+  writeFileSync(w.lock, JSON.stringify({ key: 'i99', issue: 7, at: '2026-11-19T10:00:00.000Z' }));
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  assert.deepEqual(w.tick(T(10, 1)).launched, []); // still registering
+  w.agent('er-pr70m', { state: 'working', record: false });
+  assert.deepEqual(w.tick(T(10, 5)).launched, []);
+  w.set('er-pr70m', 'done');
+  const atLaunch = [];
+  w.onLaunch = (name) => atLaunch.push(w.sessions().find((x) => x.name === name)?.state);
+  assert.deepEqual(w.tick(T(10, 10)).launched, ['er-pr51m']);
+  assert.deepEqual(atLaunch, ['working']); // on disk before `claude --bg` ran
+});
+
+test('a reclaim removes only the exact lock it judged free, never the one a faster batch took meanwhile (R9)', () => {
+  const w = world({ rows: [row(1, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+  const other = join(dirname(w.dir), 'i99'); // stopped, its merge session ended
+  const b1 = join(other, 'B1');
+  mkdirSync(b1, { recursive: true });
+  w.agents[b1] = [{ id: 'b1', sessionId: 'session-b1', name: 'er-pr70m', state: 'done', cwd: '/w', startedAt: '' }];
+  writeFileSync(join(other, 'settings.json'), JSON.stringify({ accounts: [{ alias: 'B1', dir: b1 }] }));
+  writeFileSync(join(other, 'sessions.json'), JSON.stringify([{ name: 'er-pr70m', stage: 'merge', issue: 7, pr: 70, account: 'B1', id: 'b1', state: 'done' }]));
+  writeFileSync(w.lock, JSON.stringify({ key: 'i99', issue: 7, at: '2026-11-19T10:00:00.000Z' }));
+  mkdirSync(join(dirname(w.dir), 'i77')); // the faster batch, still running
+  writeFileSync(join(dirname(w.dir), 'i77', 'lease.json'), JSON.stringify({ host: 'test-host', pid: process.pid }));
+  const replacement = { key: 'i77', issue: 9, at: '2026-11-19T10:00:30.000Z' };
+  const { claude } = w;
+  let raced = false; // i77 reclaims i99's lock and takes its own while this batch still reads i99's accounts
+  w.claude = (cmd, args, opts) => {
+    if (args[0] === 'agents' && opts.env.CLAUDE_CONFIG_DIR === b1 && !raced) { raced = true; rmSync(w.lock); writeFileSync(w.lock, JSON.stringify(replacement)); }
+    return claude(cmd, args, opts);
+  };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.deepEqual([raced, JSON.parse(readFileSync(w.lock, 'utf8')), existsSync(`${w.lock}.reclaim`)], [true, replacement, false]);
+  assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', 'waiting for the merge lock']]);
+});
+
 test('a higher-priority issue takes the free slot before a lower Batch, and the ledger shows its priority', () => {
   const w = world({ rows: [row(1, 41), row(2, 43, { batch: 2 })], cap: 1 });
   w.issues[43] = { labels: ['enhancement', 'priority:P0'] };
@@ -598,6 +644,31 @@ test('the last merge session still in its closeout keeps the batch open until it
   assert.deepEqual([r.complete, w.status()[41], w.ledger().header.loop, existsSync(join(w.dir, 'summary.json'))], [false, 'merged', 'running', false]);
   w.set('er-pr50m', 'done');
   r = w.tick(T(10, 5));
+  assert.deepEqual([r.complete, r.stopped], [true, ['er-pr50m']]);
+  assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => `${m.name} ${m.outcome}`), ['er-pr50m fact reached']);
+  assert.deepEqual(w.pending().map((e) => e.type), ['batch-complete']);
+});
+
+test('the batch stays open while its last session is unknown or its stop failed, until it is stopped and measured (I8)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'removed', session: 'er-i43a' })] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true, merged: true } };
+  w.agent('er-pr50m', { state: 'working', stage: 'merge', issue: 41, pr: 50 });
+  // Only another machine listed er-i43a at takeover: no account here can show it or its metrics, so it does not hold the batch.
+  w.records.push({ name: 'er-i43a', stage: 'implement', issue: 43, pr: null, attempt: 1, account: null, id: null, sessionId: null,
+    startedAt: new Date(T(9)).toISOString(), endedAt: null, state: 'unknown' });
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  const summary = join(w.dir, 'summary.json');
+  assert.equal(w.tick(T(10)).complete, false);
+  w.unreadable.add(w.accts[0].dir);
+  let r = w.tick(T(10, 5));
+  assert.deepEqual([r.complete, w.sessions()[0].state, existsSync(summary)], [false, 'unknown', false]);
+  w.unreadable.clear();
+  w.set('er-pr50m', 'done');
+  w.stopFails = true;
+  r = w.tick(T(10, 10));
+  assert.deepEqual([r.complete, r.stopped, w.sessions()[0].state, existsSync(summary)], [false, [], 'done', false]);
+  w.stopFails = false;
+  r = w.tick(T(10, 15));
   assert.deepEqual([r.complete, r.stopped], [true, ['er-pr50m']]);
   assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => `${m.name} ${m.outcome}`), ['er-pr50m fact reached']);
   assert.deepEqual(w.pending().map((e) => e.type), ['batch-complete']);

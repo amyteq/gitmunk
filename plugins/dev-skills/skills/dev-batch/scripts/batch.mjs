@@ -443,15 +443,18 @@ function launchStage(dir, flags) {
       ...[...lists.values()].flatMap((l) => (Array.isArray(l) ? l.map((x) => x.name) : []))]);
     const name = nextFreeName(sessionName({ abbr: s.abbr, stage, issue, pr }), taken);
     const lock = stage === 'merge' && takeMergeLock(dir, issue);
+    const startedAt = new Date(now).toISOString();
+    const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working' };
+    writeJson(join(dir, 'sessions.json'), [...records, rec]); // R9: recorded before it launches, as the loop does
     const launched = sessions.launch(cli(account), { name, model: s.model, effort: s.effort, autocompact: stage === 'merge' ? null : s.autocompact,
       mcp: s.mcp ?? 'none', scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt });
     if (launched.error) {
+      writeJson(join(dir, 'sessions.json'), records);
       if (lock) rmSync(lock, { force: true });
       refuse('launch-failed', { detail: launched.error });
     }
-    const startedAt = new Date(now).toISOString();
     writeJson(join(dir, 'sessions.json'), [...records.map((r) => (old.includes(r) && !ENDED.has(r.state) ? { ...r, state: 'stopped', endedAt: r.endedAt ?? startedAt } : r)),
-      { name, stage, issue, pr, attempt: 1, account: account.alias, id: launched.id, sessionId: null, startedAt, endedAt: null, state: 'working' }]);
+      { ...rec, id: launched.id }]);
     changeLedger(dir, (l) => Object.assign(l.rows.find((r) => r.issue === issue), { status: STAGES[stage], pr, session: name, next: '' }));
     events.appendEvent(dir, { type: 'launch', task: issue, stage, session: name, account: account.alias, detail: 'relaunched by the coordinator' }, now);
     return { launched: name, account: account.alias, tick: tickNow(dir) };

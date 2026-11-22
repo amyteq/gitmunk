@@ -110,7 +110,7 @@ Each event names its `type`, `task` and `detail`. ⛔ rows wait for you: nothing
 | `ledger-region` | The ledger markers are missing, doubled or unclosed: nothing launches or is written | Ask the owner to restore the region; the last written copy is `ledger.last.md` |
 | `loop-error` | The loop crashed (the stack is in `detail`) | Report it and `start` once; if it recurs, stop and report |
 | `loop-not-running` | `wait` found no live loop holding the lease of this active, unpaused batch (killed, or the machine restarted) | Run `B start`, then report it to the owner |
-| `batch-complete` | Every row is ✅ or ⏭️ and no session of the batch still works; the loop wrote the final roll call and exited | `clear`, report the headline numbers, and arm no further `wait` |
+| `batch-complete` | Every row is ✅ or ⏭️ and every session of the batch has ended; the loop wrote the final roll call and exited | `clear`, report the headline numbers, and arm no further `wait` |
 
 ### Asking the owner
 

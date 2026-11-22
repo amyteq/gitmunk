@@ -52,7 +52,11 @@ const w = fixture();
 const cfg = env.CLAUDE_CONFIG_DIR;
 if (argv[0] === 'auth') process.stdout.write(JSON.stringify({ loggedIn: !w.loggedOut.includes(cfg) }));
 else if (argv[0] === 'agents') process.stdout.write(JSON.stringify(w.agents[cfg] ?? []));
-else if (argv[0] === '--bg') process.stdout.write('Started background session c0ffee01\\n');
+else if (argv[0] === '--bg') {
+  // what the batch had recorded when the launch ran
+  try { fs.copyFileSync(env.XDG_STATE_HOME + '/dev-batch/example-org/example-repo/i40/sessions.json', env.STUB_FIXTURE + '.launch'); } catch {}
+  process.stdout.write('Started background session c0ffee01\\n');
+}
 `;
 
 // A repository with issue #40 (and #50) as possible sources, stub gh and claude on PATH, and accounts A1… in a temp dir.
@@ -556,6 +560,8 @@ test('launch replaces a stuck unknown session record and relaunches the stage', 
   assert.equal(r.out.launched, 'er-i41r2');
   // The stuck record is retired, not deleted, so its name stays taken.
   assert.deepEqual(json(w.file('sessions.json')).map((x) => [x.name, x.state, x.account]), [['er-i41r', 'stopped', null], ['er-i41r2', 'working', 'A1']]);
+  // R9: the new session was recorded before `claude --bg` ran.
+  assert.deepEqual(json(join(w.root, 'world.json.launch')).map((x) => [x.name, x.state]), [['er-i41r', 'unknown'], ['er-i41r2', 'working']]);
   const [launch] = w.calls('claude', '--bg');
   assert.match(launch.argv.at(-1), /^\/dev-refine-issue 41\n/);
   assert.equal(launch.cwd, w.checkout); // I9: wherever the command was run from

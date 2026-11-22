@@ -53,19 +53,36 @@ function acquireLock(dir, issue, now) {
     throw e;
   }
 }
-// Another batch's lock is free once that batch's loop is gone (no lease, or its pid is gone on this host) and its merge
-// session no longer runs, as that batch's own accounts list it; a session they cannot show keeps the lock.
+// Another batch's lock is free once that batch's loop is gone (no lease, or its pid is gone on this host) and every
+// merge session of the lock's issue in its sessions.json, which records a session before it launches, has ended as that
+// batch's own accounts list it. An unreadable sessions.json, a session they cannot show, or one still registering keeps it.
 function otherLockFree(dir, holder, ctx) {
   const other = join(dirname(dir), holder.key);
   const lease = readJson(join(other, 'lease.json'), null);
   if (lease && !(lease.host === ctx.host && !pidAlive(lease.pid))) return false;
   const accounts = readJson(join(other, 'settings.json'), {}).accounts ?? [];
-  return readJson(join(other, 'sessions.json'), []).every((r) => {
+  const records = existsSync(join(other, 'sessions.json')) ? readJson(join(other, 'sessions.json'), null) : [];
+  return Array.isArray(records) && records.every((r) => {
     if (r.issue !== holder.issue || r.stage !== 'merge' || ENDED.has(r.state)) return true;
     const acc = accounts.find((a) => a.alias === r.account);
     const list = acc && sessions.listAgents({ configDir: acc.dir, run: ctx.claude });
-    return Array.isArray(list) && !list.some((x) => (r.id ? x.id === r.id : x.name === r.name) && (x.state === 'working' || x.state === 'blocked'));
+    if (!Array.isArray(list)) return false;
+    const agent = list.find((x) => (r.id ? x.id === r.id : x.name === r.name));
+    return agent ? agent.state !== 'working' && agent.state !== 'blocked' : !registering(r, ctx.now);
   });
+}
+// Removes a gone batch's lock only while it is still exactly `holder`. merge.lock.reclaim serializes reclaimers, so a
+// slower one never removes the lock a faster one took after reclaiming; each batch's own lock needs no mutex (its lease).
+// shortcut: a crash inside it leaves merge.lock.reclaim and later reclaims wait; delete it by hand, as for the lock.
+function reclaimLock(dir, holder) {
+  const mutex = `${lockFile(dir)}.reclaim`;
+  try { writeFileSync(mutex, '', { flag: 'wx' }); } catch (e) { if (e.code === 'EEXIST') return false; throw e; }
+  try {
+    const now = readLock(dir);
+    if (!now || !['key', 'issue', 'at'].every((k) => now[k] === holder[k])) return false;
+    releaseLock(dir);
+    return true;
+  } finally { rmSync(mutex, { force: true }); }
 }
 
 // §7: the owner edits that count, applied to the rows the loop decided last; anything else in the region is the loop's.
@@ -212,7 +229,8 @@ export function tick(ctx) {
   const liveRow = (issue) => rows.some((r) => r.issue === issue && !FINISHED.has(r.status));
   const ownFree = (issue) => rows.some((r) => r.issue === issue && r.status === 'merged')
     || (!liveRow(issue) && !records.some((x) => x.issue === issue && x.stage === 'merge' && LIVE.has(x.state)));
-  if (holder && (holder.key === key ? ownFree(holder.issue) : holder.key && otherLockFree(dir, holder, ctx))) { releaseLock(dir); holder = null; }
+  if (holder?.key === key && ownFree(holder.issue)) { releaseLock(dir); holder = null; }
+  else if (holder?.key && holder.key !== key && otherLockFree(dir, holder, ctx)) holder = reclaimLock(dir, holder) ? null : readLock(dir);
   const byIssue = new Map(rows.map((r) => [r.issue, r]));
   const facts = new Map(active.map((r) => [r.issue, issueFacts(fetched.value, r.issue, { repo: s.repo, login: s.login, pr: r.pr,
     sessions: records.filter((x) => x.issue === r.issue) })]));
@@ -334,9 +352,13 @@ export function tick(ctx) {
     const name = nextFreeName(first, taken);
     const opts = { name, model: s.model, effort: s.effort, autocompact: stage === 'merge' ? null : s.autocompact, mcp: s.mcp ?? 'none', // missing fails closed
       scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt };
+    const rec = { name, stage, issue, pr, attempt, account: choice.alias, id: null, sessionId: null, startedAt: iso(now), endedAt: null, state: 'working' };
+    records.push(rec);
+    writeJson(at('sessions.json'), records); // R9: recorded before it launches, so a crash never leaves a merge session unrecorded
     let launched;
     try { launched = sessions.launch(cli(choice.alias), opts); } catch (e) { launched = { error: e.message }; }
     if (launched.error) {
+      records.splice(records.indexOf(rec), 1);
       if (lockNeeded) releaseLock(dir);
       keep();
       st.launchFailures++;
@@ -352,7 +374,7 @@ export function tick(ctx) {
     st.launchFailures = 0;
     taken.add(name);
     free--;
-    records.push({ name, stage, issue, pr, attempt, account: choice.alias, id: launched.id, sessionId: null, startedAt: iso(now), endedAt: null, state: 'working' });
+    rec.id = launched.id;
     d.next.session = name;
     out.launched.push(name);
     ev({ type: 'launch', task: issue, stage, session: name, account: choice.alias, detail: sessions.launchArgs(opts) }, `#${issue} ${stage}: ${name} on ${choice.alias}`);
@@ -370,9 +392,10 @@ export function tick(ctx) {
   }
   flush();
   const newRows = decided.map((d) => d.next);
-  // §14, I8: a working session (a merge still in its closeout, a removed row's worker) keeps the loop until it ends,
-  // so the loop stops it once idle and records its metrics.
-  const complete = newRows.length > 0 && newRows.every((r) => FINISHED.has(r.status)) && !records.some((x) => x.state === 'working');
+  // §14, I8: every session keeps the loop until it has ended, so the loop stops it once idle and records its metrics:
+  // one still working, one whose account is unreadable, one whose stop failed. A session only another machine's
+  // accounts list (takeover, no account here) has no metrics this machine can collect, so it does not.
+  const complete = newRows.length > 0 && newRows.every((r) => FINISHED.has(r.status)) && records.every((x) => ENDED.has(x.state) || !x.account);
   let summary = null;
   let headline = null;
   if (complete) {
