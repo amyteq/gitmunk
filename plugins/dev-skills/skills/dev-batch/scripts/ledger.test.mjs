@@ -102,6 +102,14 @@ test('unreadable task cell with no previous row is dropped with a problem', () =
   assert.equal(ledger.rows.length, 2);
 });
 
+test('a row without its leading pipe is read, and any other table line is reported, never dropped', () => {
+  const text = renderLedger(example(), { eol: '\n' }).replace('| 2 | #42 Import', '2 | #42 Import');
+  const { ledger, problems } = parseLedger(text);
+  assert.deepEqual([problems, ledger.rows.map((r) => [r.n, r.issue, r.status])], [[], [[1, 41, 'merged'], [2, 42, 'reviewing'], [3, 43, 'owner']]]);
+  const broken = parseLedger(text.replace('2 | #42 Import from CSV', '2 | Import from CSV'), { previous: example() });
+  assert.deepEqual([broken.problems, broken.ledger.rows.map((r) => r.issue)], [[{ row: 2, reason: 'unreadable task cell' }], [41, 42, 43]]);
+});
+
 test('owner edits', () => {
   const last = example();
   last.rows.push(row(4, 44, { status: 'blocked' }), row(5, 45, { status: 'implementing' }), row(6, 46, { status: 'hold' }));

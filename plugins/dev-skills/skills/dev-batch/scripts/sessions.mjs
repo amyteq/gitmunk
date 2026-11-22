@@ -2,7 +2,15 @@
 // One account (config directory) per call; spawns argument arrays, never a shell.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
+
+// C29, §14: a session listed under a batch's name is the batch's only when it runs in the batch's checkout (or a worktree
+// under it): names alone collide across repositories that share an account and an abbreviation.
+export function inCheckout(checkout, agent) {
+  if (!checkout || typeof agent?.cwd !== 'string' || !agent.cwd) return false;
+  const rel = relative(checkout, agent.cwd);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
 
 const defaultRun = (cmd, args, { env, cwd } = {}) => {
   const r = spawnSync(cmd, args, { env, cwd, encoding: 'utf8' });

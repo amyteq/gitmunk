@@ -605,16 +605,16 @@ test('launch keeps the cap and adds no second session to an account of unknown u
   assert.deepEqual(w.calls('claude', '--bg'), []);
 });
 
-test('clear stops only idle sessions whose stage is finished', () => {
+test('clear stops only idle sessions whose stage is finished, and binds an id-less record only in its checkout (C29)', () => {
   const w = world();
   w.init();
   const last = parseLedger(readFileSync(w.file('ledger.last.md'), 'utf8')).ledger;
   last.rows[0].status = 'implementing';
-  last.rows[1].status = 'refining';
+  last.rows[1].status = 'implementing'; // #42's refine is finished, but the idle er-i42r listed is another checkout's
   writeFileSync(w.file('ledger.last.md'), renderLedger(last));
   const rec = (name, stage, issue) => ({ name, stage, issue, pr: null, attempt: 1, account: 'A1', id: name, sessionId: null, startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'done' });
-  writeFileSync(w.file('sessions.json'), JSON.stringify([rec('er-i41r', 'refine', 41), rec('er-i41a', 'implement', 41), rec('er-i42r', 'refine', 42)]));
-  w.set((x) => { x.agents[w.accts[0].dir] = [['er-i41r', 'done'], ['er-i41a', 'working'], ['er-i42r', 'done'], ['er-i40c', 'done']].map(([name, state]) => ({ id: name, name, state })); });
+  writeFileSync(w.file('sessions.json'), JSON.stringify([rec('er-i41r', 'refine', 41), rec('er-i41a', 'implement', 41), { ...rec('er-i42r', 'refine', 42), id: null }]));
+  w.set((x) => { x.agents[w.accts[0].dir] = [['er-i41r', 'done'], ['er-i41a', 'working'], ['er-i42r', 'done'], ['er-i40c', 'done']].map(([name, state]) => ({ id: name, name, state, cwd: name === 'er-i42r' ? '/other' : w.checkout })); });
   const r = w.cli('clear');
   assert.deepEqual([r.code, r.out], [0, { stopped: 1 }]);
   assert.deepEqual(w.calls('claude', 'stop').map((c) => c.argv[1]), ['er-i41r']);

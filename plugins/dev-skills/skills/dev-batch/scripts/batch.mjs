@@ -379,7 +379,7 @@ function rm(dir, flags) {
       const kept = readJson(join(dir, 'sessions.json'), []).filter((rec) => {
         if (rec.issue !== issue || ENDED.has(rec.state)) return true;
         const account = s.accounts.find((a) => a.alias === rec.account);
-        if (account && sessions.stop(cli(account), rec.id ?? rec.name)) { stopped.push(rec.name); return false; }
+        if (account && rec.id && sessions.stop(cli(account), rec.id)) { stopped.push(rec.name); return false; } // by id only (C29)
         stopFailed.push(rec.name);
         return true;
       });
@@ -556,7 +556,7 @@ function clear(dir) {
     const list = sessions.listAgents(cli(a));
     if (!Array.isArray(list)) continue; // unreadable account: its sessions are unknown
     for (const rec of records.filter((r) => r.account === a.alias && finished(r))) {
-      const agent = list.find((x) => (rec.id ? x.id === rec.id : x.name === rec.name));
+      const agent = list.find((x) => (rec.id ? x.id === rec.id : x.name === rec.name && sessions.inCheckout(s.cwd, x)));
       if (IDLE.has(agent?.state) && sessions.stop(cli(a), agent.id)) stopped++;
     }
   }

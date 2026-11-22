@@ -70,7 +70,7 @@ export function parseLedger(regionText, { previous } = {}) {
       });
     } else if (line.startsWith('Owner authorization')) ledger.authorization = line;
     else if (line.startsWith('Roll call:')) ledger.header.waiting = Number(/❗ (\d+)/.exec(line)?.[1] ?? 0);
-    else if (line.trimStart().startsWith('|')) {
+    else if (line.includes('|')) { // a row, its leading pipe optional; unreadable cells are reported, never dropped
       const c = cells(line);
       if (/^:?-+:?$/.test(c[0]) || c[0] === '#' || c[0] === 'Time (UTC)') continue;
       if (inLog) { ledger.log.push({ time: c[0], event: c.slice(1).join(' | ') }); continue; }

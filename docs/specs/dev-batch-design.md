@@ -286,7 +286,7 @@ Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in 
 
 ## 14. `clear` and memory
 
-The loop stops a session as soon as its stage's GitHub fact is observed and the session is idle or ended (`claude stop`, which keeps the transcript and worktree), and every idle session of a ✅ merged or ⏭️ removed row, such as a merge session that was still closing out when the merge was seen. `clear` does the same sweep on demand for every session this batch launched and reports how many it stopped. It never stops a working session, the coordinator, or a session it did not launch.
+The loop stops a session as soon as its stage's GitHub fact is observed and the session is idle or ended (`claude stop`, which keeps the transcript and worktree), and every idle session of a ✅ merged or ⏭️ removed row, such as a merge session that was still closing out when the merge was seen. `clear` does the same sweep on demand for every session this batch launched and reports how many it stopped. It never stops a working session, the coordinator, or a session it did not launch. A session counts as the batch's by the id its launch returned; one matched only by name (adoption, takeover, a record whose launch never returned its id) must also run in the batch's checkout, because names collide across repositories that share an account and an abbreviation.
 
 ## 15. Codex as the coordinator host
 

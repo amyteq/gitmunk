@@ -99,8 +99,8 @@ function otherLockFree(dir, holder, ctx) {
     const acc = accounts.find((a) => a.alias === r.account);
     const list = acc && sessions.listAgents({ configDir: acc.dir, run: ctx.claude });
     if (!Array.isArray(list)) return false;
-    const agent = list.find((x) => (r.id ? x.id === r.id : x.name === r.name));
-    return agent ? agent.state !== 'working' && agent.state !== 'blocked' : !registering(r, ctx.now);
+    const listed = list.filter((x) => (r.id ? x.id === r.id : x.name === r.name)); // by name: any one running keeps it
+    return listed.length ? listed.every((x) => x.state !== 'working' && x.state !== 'blocked') : !registering(r, ctx.now);
   });
 }
 
@@ -207,6 +207,7 @@ export function tick(ctx) {
   const records = readJson(at('sessions.json'), []);
   const account = new Map(s.accounts.map((a) => [a.alias, a]));
   const cli = (alias) => ({ configDir: account.get(alias).dir, run: ctx.claude });
+  const ours = (x) => sessions.inCheckout(s.cwd, x); // binding by name needs the batch's checkout (C29)
   const agents = Object.fromEntries(s.accounts.map((a) => { const l = sessions.listAgents(cli(a.alias)); return [a.alias, Array.isArray(l) ? l : null]; }));
   const unreadable = s.accounts.filter((a) => !agents[a.alias]).map((a) => a.alias);
   for (const alias of unreadable) {
@@ -217,12 +218,12 @@ export function tick(ctx) {
   const ended = []; // ended by themselves this tick: metrics in step 6
   for (const rec of records) {
     if (!rec.account && !ENDED.has(rec.state)) { // reconcile found it on no readable account: match it by name once one lists it
-      const alias = Object.keys(agents).find((a) => agents[a]?.some((x) => x.name === rec.name));
-      if (alias) Object.assign(rec, { account: alias, id: agents[alias].find((x) => x.name === rec.name).id });
+      const alias = Object.keys(agents).find((a) => agents[a]?.some((x) => x.name === rec.name && ours(x)));
+      if (alias) Object.assign(rec, { account: alias, id: agents[alias].find((x) => x.name === rec.name && ours(x)).id });
     }
     const list = agents[rec.account];
     if (!list) { if (!ENDED.has(rec.state)) rec.state = 'unknown'; continue; }
-    const agent = rec.id ? list.find((x) => x.id === rec.id) : list.find((x) => x.name === rec.name);
+    const agent = rec.id ? list.find((x) => x.id === rec.id) : list.find((x) => x.name === rec.name && ours(x));
     const was = rec.state;
     // A readable account that does not list it: gone, unless it was launched so recently that it is still registering.
     rec.state = agent?.state ?? (ENDED.has(was) ? was : registering(rec, now) ? 'working' : 'stopped');
@@ -270,7 +271,7 @@ export function tick(ctx) {
       next: { ...row, status: r.status, pr: r.pr, head: r.head, next: r.next, priority: f.priority } };
   };
   // Decided in dispatch order, so the merge lock goes to the first eligible row in that order (Q1); kept in row order.
-  const decision = new Map(dispatchOrder(rows.map((row) => ({ row, batch: row.batch, priority: facts.get(row.issue)?.priority ?? row.priority })))
+  const decision = new Map(dispatchOrder(rows.map((row) => ({ row, batch: row.batch, priority: facts.has(row.issue) ? facts.get(row.issue).priority : row.priority })))
     .map(({ row }) => [row, decideRow(row)]));
   const decided = rows.map((row) => decision.get(row));
 
@@ -315,7 +316,7 @@ export function tick(ctx) {
   const recorded = new Set(records.map((x) => x.name));
   const adoptable = new Map(); // live sessions that no record knows, by name
   for (const [alias, list] of Object.entries(agents)) {
-    for (const x of list ?? []) if ((x.state === 'working' || x.state === 'blocked') && !recorded.has(x.name)) adoptable.set(x.name, { alias, agent: x });
+    for (const x of list ?? []) if ((x.state === 'working' || x.state === 'blocked') && !recorded.has(x.name) && ours(x)) adoptable.set(x.name, { alias, agent: x });
   }
   const taken = new Set([...recorded, ...Object.values(agents).flatMap((l) => (l ?? []).map((x) => x.name)), ...rows.map((r) => r.session).filter(Boolean)]);
   const abbr = s.abbr ?? deriveAbbr(s.repo.split('/')[1]);
@@ -475,7 +476,7 @@ function leftWorking(ctx, s, now) {
     const mine = working.filter((r) => r.account === a.alias);
     const list = mine.length ? sessions.listAgents({ configDir: a.dir, run: ctx.claude }) : null;
     return Array.isArray(list) && mine.some((r) => {
-      const agent = list.find((x) => (r.id ? x.id === r.id : x.name === r.name));
+      const agent = list.find((x) => (r.id ? x.id === r.id : x.name === r.name && sessions.inCheckout(s.cwd, x)));
       return agent ? agent.state !== 'working' : !registering(r, now);
     });
   });
@@ -541,8 +542,9 @@ export function reconcile(ctx) {
     for (const row of parseLedger(body.slice(found.start, found.end)).ledger.rows) {
       const stage = STAGE_OF[row.status];
       if (!row.session || !stage || records.some((x) => x.name === row.session)) continue;
-      const [alias, list] = lists.find(([, l]) => Array.isArray(l) && l.some((x) => x.name === row.session)) ?? [null, null];
-      const agent = list?.find((x) => x.name === row.session);
+      const named = (x) => x.name === row.session && sessions.inCheckout(s.cwd, x); // C29: in this batch's checkout
+      const [alias, list] = lists.find(([, l]) => Array.isArray(l) && l.some(named)) ?? [null, null];
+      const agent = list?.find(named);
       const firstName = sessionName({ abbr, stage, issue: row.issue, pr: row.pr, attempt: 1 });
       const retry = row.session.startsWith(firstName) ? row.session.slice(firstName.length) : '';
       records.push({ name: row.session, stage, issue: row.issue, pr: row.pr, attempt: /^\d+$/.test(retry) ? Number(retry) : 1, account: alias,

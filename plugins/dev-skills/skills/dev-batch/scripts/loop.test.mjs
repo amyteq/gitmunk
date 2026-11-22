@@ -53,7 +53,7 @@ function world({ rows, accounts = ['A1'], cap = 4, root = tempDir(), key = 'i40'
     writeFileSync(join(d, 'dev-batch-usage.json'), JSON.stringify({ at: 0, five_hour: { used_percentage: 10 }, seven_day: { used_percentage: 10 } }));
     return { alias, dir: d };
   });
-  const settings = { ...resolveSettings({ cap: String(cap) }, { HOME: root }).values, accounts: accts, abbr: 'er', repo: REPO, src: { kind: 'issue', number: 40 }, login: LOGIN, authorization: AUTH };
+  const settings = { ...resolveSettings({ cap: String(cap) }, { HOME: root }).values, accounts: accts, abbr: 'er', repo: REPO, src: { kind: 'issue', number: 40 }, login: LOGIN, authorization: AUTH, cwd: '/w' };
   writeFileSync(join(dir, 'settings.json'), JSON.stringify(settings));
   const region = renderLedger({ header: { coordinator: 'er-i40c', alias: 'A1', loop: 'running', cap, merge: 'auto', changed: '2026-11-19 09:00 UTC', waiting: 0 }, authorization: AUTH, rows, log: [] });
   writeFileSync(join(dir, 'ledger.last.md'), region);
@@ -97,9 +97,9 @@ function world({ rows, accounts = ['A1'], cap = 4, root = tempDir(), key = 'i40'
   };
   const acct = (alias) => accts.find((a) => a.alias === alias);
   // An agent listed by `claude agents`; `record` also puts it in the batch's sessions.json.
-  w.agent = (name, { alias = 'A1', state = 'done', record = true, stage, issue, pr = null } = {}) => {
+  w.agent = (name, { alias = 'A1', state = 'done', record = true, stage, issue, pr = null, cwd = '/w' } = {}) => {
     const id = (0xb0000000 + ++ids).toString(16);
-    w.agents[acct(alias).dir].push({ id, sessionId: `session-${id}`, name, state, cwd: '/w', startedAt: '' });
+    w.agents[acct(alias).dir].push({ id, sessionId: `session-${id}`, name, state, cwd, startedAt: '' });
     if (record) {
       w.records.push({ name, stage, issue, pr, attempt: 1, account: alias, id, sessionId: `session-${id}`, startedAt: new Date(T(10)).toISOString(), endedAt: null, state });
       writeFileSync(join(dir, 'sessions.json'), JSON.stringify(w.records));
@@ -365,6 +365,16 @@ test('two rows ready to merge: the lock goes to the higher priority, then the lo
     assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m']);
     assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', 'waiting for the merge lock'], ['merging', '']]);
   }
+});
+
+test('a removed priority label ranks P2 for the merge lock, not the rank the ledger last showed (Q1)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50', priority: 0 }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true } }; // its P0 label was removed since the last tick
+  w.issues[43] = { refined: true, labels: ['P1'], pr: { number: 51, approved: true } };
+  w.agent('er-pr50', { stage: 'review', issue: 41, pr: 50 });
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m']);
+  assert.deepEqual(w.ledger().rows.map((r) => [r.issue, r.priority, r.next]), [[41, undefined, 'waiting for the merge lock'], [43, 1, '']]);
 });
 
 test('a removed row whose merge session still runs keeps the merge lock until the session ends (R9)', () => {
@@ -754,6 +764,33 @@ test('reconcile for takeover adopts listed sessions and keeps unlisted ones unkn
   assert.deepEqual([r.stopped, r.launched], [['er-pr51'], ['er-pr51m']]); // an approval with no merge gets a merge
   assert.deepEqual(w.status(), { 41: 'implementing', 43: 'merging' }); // nothing relaunched over the unknown session
   assert.deepEqual(w.pending().map((e) => [e.type, e.session]), [['session-unknown', 'er-i41a']]);
+});
+
+test('a session of another checkout under the same name is never adopted, bound or stopped by this batch (C29)', () => {
+  const w = world({ rows: [row(1, 41), row(2, 43, { status: 'refining', session: 'er-i43r' })] });
+  // Another repository sharing the account and the abbreviation runs er-i41r (working) and er-i43r (idle).
+  w.agent('er-i41r', { state: 'working', record: false, cwd: '/other' });
+  w.agent('er-i43r', { state: 'done', record: false, cwd: '/other' });
+  // This batch recorded its own er-i43r before launching it, then stopped before the launch returned.
+  w.records.push({ name: 'er-i43r', stage: 'refine', issue: 43, pr: null, attempt: 1, account: 'A1', id: null, sessionId: null,
+    startedAt: new Date(T(9)).toISOString(), endedAt: null, state: 'working' });
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  w.issues[43] = { refined: true }; // this batch's refine fact, which would stop a bound idle session
+  const r = w.tick(T(10));
+  assert.deepEqual([r.launched, r.stopped], [['er-i41r2', 'er-i43a'], []]); // its own refine fact moves #43 on
+  assert.deepEqual(w.claudeCalls.filter((c) => c.args[0] === 'stop'), []);
+  assert.deepEqual(w.sessions().map((x) => [x.name, x.id, x.state]).slice(0, 1), [['er-i43r', null, 'stopped']]);
+  assert.deepEqual(w.events().filter((e) => e.type === 'adopt'), []);
+});
+
+test('reconcile adopts a session the ledger names only from this batch\'s checkout (C29)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' })] });
+  rmSync(join(w.dir, 'ledger.last.md'));
+  w.issues[41] = { refined: true };
+  w.agent('er-i41a', { state: 'working', record: false, cwd: '/other' });
+  const r = reconcile(w.ctx(T(11)));
+  assert.deepEqual([r.adopted, r.unknown, r.launched], [[], ['er-i41a'], []]);
+  assert.deepEqual(w.sessions().map((x) => [x.name, x.account, x.state]), [['er-i41a', null, 'unknown']]);
 });
 
 test('reconcile keeps a session of an unreadable account matchable until the account answers', () => {

@@ -27,7 +27,7 @@ Fields that do not apply are absent.
 | Type | When |
 |---|---|
 | `launch` | A stage session started. A coordinator's `launch` has the detail "relaunched by the coordinator" |
-| `adopt` | A live session already listed under the stage's name was adopted instead of launched |
+| `adopt` | A live session already listed under the stage's name, in the batch's checkout, was adopted instead of launched |
 | `launch-failed` | `claude` refused a launch; three in a row raise `batch-paused` |
 | `stage-done` | GitHub's facts finished a stage (`merge` when the PR merged) |
 | `stop`, `stop-failed` | The loop stopped, or failed to stop, a session whose stage is finished |
