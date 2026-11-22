@@ -532,6 +532,20 @@ test('add puts rows where asked and holds follow-ups; rm removes a row; both wri
   assert.equal(existsSync(w.file('lease.json')), false);
 });
 
+test('rm --stop keeps the stopped session, so its metrics are recorded (§16)', () => {
+  const w = world();
+  w.init();
+  w.cli('pause');
+  writeFileSync(w.file('sessions.json'), JSON.stringify([{ name: 'er-i41r', stage: 'refine', issue: 41, pr: null, attempt: 1, account: 'A1', id: 'er-i41r',
+    sessionId: 'session-41', startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'working' }]));
+  w.set((x) => { x.agents[w.accts[0].dir] = [{ id: 'er-i41r', name: 'er-i41r', state: 'stopped', cwd: w.checkout }]; }); // as listed once stopped
+  const r = w.cli('rm', '--task', '41', '--stop');
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(r.out.stopped, ['er-i41r']);
+  assert.deepEqual(json(w.file('sessions.json')).map((x) => [x.name, x.state, x.metrics]), [['er-i41r', 'stopped', true]]);
+  assert.deepEqual(readFileSync(w.file('metrics.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).map((m) => [m.name, m.outcome]), [['er-i41r', 'removed']]);
+});
+
 test('add refuses an issue that is already closed and writes nothing (NB1)', () => {
   const w = world();
   w.init();

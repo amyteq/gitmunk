@@ -376,14 +376,14 @@ function rm(dir, flags) {
     const stopped = [];
     const stopFailed = [];
     if (flags.stop) { // without --stop a running session finishes its stage
-      const kept = readJson(join(dir, 'sessions.json'), []).filter((rec) => {
-        if (rec.issue !== issue || ENDED.has(rec.state)) return true;
+      const records = readJson(join(dir, 'sessions.json'), []);
+      for (const rec of records) {
+        if (rec.issue !== issue || ENDED.has(rec.state)) continue;
         const account = s.accounts.find((a) => a.alias === rec.account);
-        if (account && rec.id && sessions.stop(cli(account), rec.id)) { stopped.push(rec.name); return false; } // by id only (C29)
-        stopFailed.push(rec.name);
-        return true;
-      });
-      writeJson(join(dir, 'sessions.json'), kept);
+        // By id only (C29). The record stays, without endedAt, so the tick below records its end and metrics (§16).
+        if (account && rec.id && sessions.stop(cli(account), rec.id)) { stopped.push(rec.name); rec.state = 'stopped'; } else stopFailed.push(rec.name);
+      }
+      writeJson(join(dir, 'sessions.json'), records);
     }
     return { removed: issue, stopped, stopFailed, tick: tickNow(dir) };
   });
