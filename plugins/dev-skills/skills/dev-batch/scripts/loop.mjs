@@ -21,8 +21,9 @@ const GRACE_MS = 120_000; // a session `claude agents` does not list yet is stil
 const STATUS_OF = { refine: 'refining', implement: 'implementing', review: 'reviewing', merge: 'merging' };
 const STAGE_OF = Object.fromEntries(Object.entries(STATUS_OF).map(([stage, status]) => [status, stage]));
 const PIPELINE = ['refining', 'implementing', 'reviewing', 'merging', 'merged'];
-export const RUNNING = new Set(['working', 'blocked', 'unknown']); // holds a cap slot; a limited session is being replaced
-const LIVE = new Set([...RUNNING, 'limited']); // may still merge: a limited session resumes by itself after the reset
+// Holds a cap slot. A limited session resumes by itself after the reset, so it holds its slot until it is stopped (§12).
+export const RUNNING = new Set(['working', 'blocked', 'unknown', 'limited']);
+const LIVE = RUNNING; // may still merge
 const ENDED = new Set(['stopped', 'failed']);
 const IDLE = new Set(['done', 'blocked', 'limited']); // stoppable; never working or unknown
 const FINISHED = new Set(['merged', 'removed']);
@@ -127,13 +128,13 @@ function applyOwnerEdits(baseRows, edits, current, ev) {
 }
 
 // §16: one metrics.jsonl line per session, read from its transcript and its subagents' when it stops or ends.
-function writeMetrics(dir, rec, account, settings, outcome, row) {
+function writeMetrics(dir, rec, account, outcome, row) {
   const path = account && rec.sessionId ? sessions.transcriptPath(account.dir, rec.sessionId) : null;
   const lines = (file) => readFileSync(file, 'utf8').split('\n');
   const subs = path && join(path.slice(0, -'.jsonl'.length), 'subagents');
   const subagents = subs && existsSync(subs) ? readdirSync(subs).filter((n) => n.endsWith('.jsonl')).map((n) => lines(join(subs, n))) : [];
   const record = sessionRecord({ session: { ...rec, id: rec.sessionId }, row, outcome, summary: summarizeTranscript(path ? lines(path) : [], subagents),
-    settings: { ...settings, autocompact: rec.stage === 'merge' ? null : settings.autocompact } });
+    settings: { effort: rec.effort ?? null, autocompact: rec.autocompact ?? null } }); // as launched; null when the loop did not launch it
   appendFileSync(join(dir, 'metrics.jsonl'), `${JSON.stringify(record)}\n`);
   rec.metrics = true;
 }
@@ -240,7 +241,7 @@ export function tick(ctx) {
           `#${rec.issue} ${rec.name}: usage limit on ${rec.account}`);
       }
     }
-    if (ENDED.has(rec.state) && !rec.endedAt) { rec.endedAt = iso(now); ended.push(rec); }
+    if (ENDED.has(rec.state) && !rec.endedAt) { rec.endedAt = iso(now); if (was === 'limited') rec.limited = true; ended.push(rec); }
   }
 
   // 5. advance every active row. The merge lock is followed in memory while deciding, so two rows never both take
@@ -281,10 +282,11 @@ export function tick(ctx) {
       ev({ type: 'stop-failed', task: rec.issue, stage: rec.stage, session: rec.name, account: rec.account });
       return;
     }
-    Object.assign(rec, { state: 'stopped', endedAt: iso(now) });
+    // `limited`: it ended on a usage limit, so its stage relaunches at the same attempt (§12).
+    Object.assign(rec, { state: 'stopped', endedAt: iso(now), ...(rec.state === 'limited' && { limited: true }) });
     out.stopped.push(rec.name);
     ev({ type: 'stop', task: rec.issue, stage: rec.stage, session: rec.name, account: rec.account });
-    writeMetrics(dir, rec, account.get(rec.account), s, outcome, row);
+    writeMetrics(dir, rec, account.get(rec.account), outcome, row);
   };
   for (const d of decided) {
     for (const a of d.actions) {
@@ -299,7 +301,7 @@ export function tick(ctx) {
   }
   for (const rec of ended) {
     const row = decided.find((d) => d.row.issue === rec.issue)?.next ?? { issue: rec.issue };
-    if (!rec.metrics) writeMetrics(dir, rec, account.get(rec.account), s, outcomeOf(rec, row.status), row);
+    if (!rec.metrics) writeMetrics(dir, rec, account.get(rec.account), outcomeOf(rec, row.status), row);
   }
   // The lock follows the rows: released on unlock, taken for a live merge session that lacks it.
   for (const d of decided) {
@@ -332,7 +334,8 @@ export function tick(ctx) {
     if (!a) continue;
     const issue = d.row.issue;
     const keep = () => { d.next = { ...d.next, status: d.row.status === 'waiting' ? 'queued' : d.row.status, next: d.row.next }; };
-    if (paused || free <= 0 || noAccount) { keep(); continue; }
+    const limited = records.filter((x) => x.issue === issue && x.state === 'limited'); // stopped below; the launch takes its slot
+    if (paused || free + limited.length <= 0 || noAccount) { keep(); continue; }
     const { stage, attempt } = a;
     const pr = d.next.pr;
     const first = sessionName({ abbr, stage, issue, pr, attempt });
@@ -369,10 +372,17 @@ export function tick(ctx) {
     st.atCap = false;
     const claim = stage === 'merge' && claimLock(dir, issue, now);
     if (stage === 'merge' && !claim) { keep(); continue; } // another batch took it first
+    // §12, R9: a limited session resumes by itself after its reset, so it is stopped before its replacement launches.
+    // A failed stop is retried on the next tick; until then nothing launches for the row, and a lock it claimed stays
+    // with it, since a limited merge session may still merge.
+    for (const old of limited) stopSession(old, 'retried', d.next);
+    if (limited.some((x) => x.state === 'limited')) { keep(); continue; }
+    free += limited.length;
     const name = nextFreeName(first, taken);
     const opts = { name, model: s.model, effort: s.effort, autocompact: stage === 'merge' ? null : s.autocompact, mcp: s.mcp ?? 'none', // missing fails closed
       scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt };
-    const rec = { name, stage, issue, pr, attempt, account: choice.alias, id: null, sessionId: null, startedAt: iso(now), endedAt: null, state: 'working' };
+    const rec = { name, stage, issue, pr, attempt, account: choice.alias, id: null, sessionId: null, startedAt: iso(now), endedAt: null, state: 'working',
+      effort: opts.effort, autocompact: opts.autocompact }; // §16: its metrics report the settings it launched with
     records.push(rec);
     writeJson(at('sessions.json'), records); // R9: recorded before it launches, so a crash never leaves a merge session unrecorded
     let launched;
@@ -398,8 +408,6 @@ export function tick(ctx) {
     d.next.session = name;
     out.launched.push(name);
     ev({ type: 'launch', task: issue, stage, session: name, account: choice.alias, detail: sessions.launchArgs(opts) }, `#${issue} ${stage}: ${name} on ${choice.alias}`);
-    // §12: a limited session resumes by itself after the reset, so stop it once its replacement runs.
-    for (const old of records) if (old.issue === issue && old.stage === stage && old.state === 'limited') stopSession(old, 'retried', d.next);
   }
   writeJson(at('sessions.json'), records);
 

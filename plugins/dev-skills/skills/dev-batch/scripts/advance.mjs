@@ -110,7 +110,7 @@ export function advance({ row, facts, sessions, settings, authorized, mergeLock,
     if (s && !answered && q && Date.parse(q.at) > Date.parse(s.startedAt)) return halt('owner', decision, 'owner-question');
     if (want !== stage || !s) return goTo(want);
     if (s.state === 'blocked') return halt('blocked', `${s.name} needs input`, 'session-blocked');
-    if (s.state === 'limited') return launch(stage, s.attempt); // §12: a usage limit is not a failed attempt
+    if (s.state === 'limited' || s.limited) return launch(stage, s.attempt); // §12: a usage limit, even once stopped, is not a failed attempt
     // Idle or ended without the stage's fact.
     if (stage === 'merge') return halt('merging', `merge stopped: ${s.name} ended without merging`, 'merge-stopped'); // no retry without a new fact
     if (stage === 'review' && facts.pr.reviewEnded) return halt('blocked', `review ended ${facts.pr.reviewEnded}`, `review-${facts.pr.reviewEnded}`);

@@ -514,6 +514,56 @@ test('a usage-limited session moves to the other account', () => {
   assert.equal(w.ledger().rows[0].session, 'er-i41a2');
 });
 
+// A merge session of #41 on A1 that hit its usage limit (A2 is free).
+function limitedMerge(over = {}) {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' })], accounts: ['A1', 'A2'], ...over });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true } };
+  const id = w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 });
+  w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+  return w;
+}
+
+test('a limited session is stopped before its replacement launches; while the stop fails nothing launches (§12, R9)', () => {
+  const w = limitedMerge();
+  w.stopFails = true;
+  for (const m of [0, 5]) assert.deepEqual(w.tick(T(12, m)).launched, []); // retried every tick, never launched beside it
+  assert.deepEqual(w.events().filter((e) => e.type === 'stop-failed').map((e) => e.session), ['er-pr50m', 'er-pr50m']);
+  w.stopFails = false;
+  const r = w.tick(T(12, 10));
+  assert.deepEqual([r.stopped, r.launched], [['er-pr50m'], ['er-pr50m2']]);
+  assert.deepEqual(w.sessions().map((s) => [s.name, s.state, s.attempt]), [['er-pr50m', 'stopped', 1], ['er-pr50m2', 'working', 1]]);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 41);
+});
+
+test('a replacement that fails to launch after its limited session stopped is relaunched at the same attempt (§12)', () => {
+  const w = limitedMerge();
+  w.launchFails = true;
+  assert.deepEqual(w.tick(T(12)).stopped, ['er-pr50m']);
+  w.launchFails = false;
+  assert.deepEqual(w.tick(T(12, 5)).launched, ['er-pr50m2']); // not `merge-stopped`: a usage limit is not a failed attempt
+  assert.deepEqual(w.ledger().rows.map((x) => [x.status, x.session]), [['merging', 'er-pr50m2']]);
+});
+
+test('a limited session keeps its cap slot until it is stopped for its replacement (§8, §12)', () => {
+  const w = world({ rows: [row(1, 43), row(2, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'], cap: 1 });
+  w.issues[41] = { refined: true };
+  const id = w.agent('er-i41a', { alias: 'A1', state: 'blocked', stage: 'implement', issue: 41 });
+  w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+  const r = w.tick(T(12)); // #43 comes first, but the slot is #41's: only its replacement takes it
+  assert.deepEqual([r.stopped, r.launched], [['er-i41a'], ['er-i41a2']]);
+  assert.deepEqual(w.status(), { 43: 'queued', 41: 'implementing' });
+});
+
+test('metrics report the effort and autocompact a session launched with, not later settings (§16)', () => {
+  const w = world({ rows: [row(1, 41)] });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i41r']);
+  const settings = JSON.parse(readFileSync(join(w.dir, 'settings.json'), 'utf8'));
+  writeFileSync(join(w.dir, 'settings.json'), JSON.stringify({ ...settings, effort: 'high', autocompact: '200k' }));
+  w.set('er-i41r', 'stopped');
+  w.tick(T(10, 5));
+  assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => [m.name, m.effort, m.autocompact]), [['er-i41r', 'xhigh', '300k']]);
+});
+
 test('owner revokes the authorization line', () => {
   const w = world({ rows: [row(1, 41), row(2, 43)], cap: 1 });
   assert.deepEqual(w.tick(T(10)).launched, ['er-i41r']);

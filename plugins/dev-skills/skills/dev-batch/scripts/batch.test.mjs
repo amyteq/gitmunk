@@ -52,6 +52,7 @@ const w = fixture();
 const cfg = env.CLAUDE_CONFIG_DIR;
 if (argv[0] === 'auth') process.stdout.write(JSON.stringify({ loggedIn: !w.loggedOut.includes(cfg) }));
 else if (argv[0] === 'agents') process.stdout.write(JSON.stringify(w.agents[cfg] ?? []));
+else if (argv[0] === 'stop' && w.stopFails) process.exit(1);
 else if (argv[0] === '--bg') {
   // what the batch had recorded when the launch ran
   try { fs.copyFileSync(env.XDG_STATE_HOME + '/dev-batch/example-org/example-repo/i40/sessions.json', env.STUB_FIXTURE + '.launch'); } catch {}
@@ -590,6 +591,24 @@ test('a merge launch claims the merge lock as the loop does: renews its own, ref
   assert.deepEqual([atLaunch.key, atLaunch.issue], ['i40', 41]);
   assert.notEqual(atLaunch.at, own.at); // renewed, so a reclaimer that read it before never removes it
   assert.ok(atLaunch.id);
+});
+
+test('launch stops the row\'s limited session before it launches, and refuses while that stop fails (§12, R9)', () => {
+  const w = world();
+  w.init();
+  w.cli('pause');
+  writeFileSync(w.file('sessions.json'), JSON.stringify([{ name: 'er-i41r', stage: 'refine', issue: 41, pr: null, attempt: 1, account: 'A1', id: 'er-i41r',
+    sessionId: null, startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'limited' }]));
+  w.set((x) => { x.stopFails = true; });
+  let r = w.cli('launch', '--task', '41', '--stage', 'refine');
+  assert.deepEqual([r.code, r.out?.error], [1, 'stop-failed'], r.text);
+  assert.deepEqual(w.calls('claude', '--bg'), []);
+  w.set((x) => { x.stopFails = false; });
+  r = w.cli('launch', '--task', '41', '--stage', 'refine');
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(w.calls('claude', 'stop').map((c) => c.argv[1]), ['er-i41r', 'er-i41r']);
+  // Stopped before `claude --bg` ran, so it can never resume beside its replacement.
+  assert.deepEqual(json(join(w.root, 'world.json.launch')).map((x) => [x.name, x.state]), [['er-i41r', 'stopped'], ['er-i41r2', 'working']]);
 });
 
 test('launch keeps the cap and adds no second session to an account of unknown usage', () => {

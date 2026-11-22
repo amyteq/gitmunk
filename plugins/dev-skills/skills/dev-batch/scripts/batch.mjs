@@ -403,8 +403,9 @@ function launchStage(dir, flags) {
     const records = readJson(join(dir, 'sessions.json'), []);
     const old = records.filter((r) => r.issue === issue && r.stage === stage);
     if (old.some((r) => r.state === 'working')) refuse('session-working', { detail: `${old.findLast((r) => r.state === 'working').name} is still working` });
-    // §8, §12: the loop's limits. The records this launch retires free their slot.
-    const running = records.filter((r) => loop.RUNNING.has(r.state) && !old.includes(r));
+    // §8, §12: the loop's limits. The records this launch retires, and the row's limited sessions it stops, free their slot.
+    const limited = records.filter((r) => r.issue === issue && r.state === 'limited');
+    const running = records.filter((r) => loop.RUNNING.has(r.state) && !old.includes(r) && !limited.includes(r));
     if (running.length >= s.cap) refuse('at-cap', { detail: `cap ${s.cap}: ${running.map((r) => r.name).join(', ')} hold every slot` });
     const body = readSource({ repo: s.repo, src: s.src, gh }).body;
     const found = findRegion(body);
@@ -436,9 +437,19 @@ function launchStage(dir, flags) {
     // The repository's one-merge lock (§9), claimed as the loop claims it: refused while another row or batch holds it.
     const claim = stage === 'merge' && (loop.claimLock(dir, issue, now) ?? refuse('merge-lock-held', { lock: readJson(join(dirname(dir), 'merge.lock'), {}) }));
     const startedAt = new Date(now).toISOString();
-    const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working' };
+    // §12, R9: a limited session resumes by itself after its reset, so it is stopped first, as the loop does.
+    for (const r of limited) {
+      const home = s.accounts.find((a) => a.alias === r.account);
+      if (!(home && r.id && sessions.stop(cli(home), r.id))) { // by id only (C29); a lock it claimed stays, as in the loop
+        writeJson(join(dir, 'sessions.json'), records); // the ones already stopped
+        refuse('stop-failed', { detail: `${r.name} is limited and could not be stopped; launch again once it is` });
+      }
+      Object.assign(r, { state: 'stopped', limited: true }); // no endedAt yet: the next tick records its end and metrics
+    }
+    const autocompact = stage === 'merge' ? null : s.autocompact;
+    const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working', effort: s.effort, autocompact };
     writeJson(join(dir, 'sessions.json'), [...records, rec]); // R9: recorded before it launches, as the loop does
-    const launched = sessions.launch(cli(account), { name, model: s.model, effort: s.effort, autocompact: stage === 'merge' ? null : s.autocompact,
+    const launched = sessions.launch(cli(account), { name, model: s.model, effort: s.effort, autocompact,
       mcp: s.mcp ?? 'none', scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt });
     if (launched.error) {
       writeJson(join(dir, 'sessions.json'), records);

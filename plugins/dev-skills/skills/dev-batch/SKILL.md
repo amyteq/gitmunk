@@ -118,7 +118,7 @@ Post one comment on the task's issue whose first line is `<!-- dev-batch:owner i
 
 ### Relaunching a stage
 
-`B launch` refuses with `session-working` while a session of that stage is recorded as working, and with `at-cap` while other running sessions fill every `cap` slot. To stop one, run `claude stop <id>` with `CLAUDE_CONFIG_DIR` set to its account's directory (the id from `claude agents --json`). Then run `B tick`, so the loop records the stop, and `B launch`. A ⛔ stalled row that the owner sets back to 🆕 while its session still works stalls again at once.
+`B launch` refuses with `session-working` while a session of that stage is recorded as working, with `at-cap` while other running sessions fill every `cap` slot, and with `stop-failed` while a limited session of the row cannot be stopped. To stop one, run `claude stop <id>` with `CLAUDE_CONFIG_DIR` set to its account's directory (the id from `claude agents --json`). Then run `B tick`, so the loop records the stop, and `B launch`. A ⛔ stalled row that the owner sets back to 🆕 while its session still works stalls again at once.
 
 **Follow-ups.** Register a follow-up issue (a deferred finding, a split) with `B add --tasks <file> --hold "follow-up, not queued"`. It stays ⏸️ until the owner sets it to 🆕.
 

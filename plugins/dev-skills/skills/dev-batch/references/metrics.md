@@ -30,7 +30,7 @@ Fields that do not apply are absent.
 | `adopt` | A live session already listed under the stage's name, in the batch's checkout, was adopted instead of launched |
 | `launch-failed` | `claude` refused a launch; three in a row raise `batch-paused` |
 | `stage-done` | GitHub's facts finished a stage (`merge` when the PR merged) |
-| `stop`, `stop-failed` | The loop stopped, or failed to stop, a session whose stage is finished |
+| `stop`, `stop-failed` | The loop stopped, or failed to stop, a session whose stage is finished or a limited session before its replacement launches |
 | `limit` | A session hit a usage limit; its account cools ([accounts.md](accounts.md#usage-limits)) |
 | `owner-edit` | An owner edit of the region: `order`, `deps`, `batch`, `hold`, `answered`, `release`, `deleted` or `authorization`, with the issue and new value |
 | `owner-question` | A worker asked the owner; the row is 👤 |
@@ -59,7 +59,7 @@ One record per session that the loop launched, written when the loop stops the s
 |---|---|
 | `name`, `stage`, `task`, `pr`, `account`, `sessionId` | The session, its row and its account alias |
 | `models` | The model ids seen in the transcript |
-| `effort`, `autocompact` | The settings it ran with (`autocompact` is null for a merge) |
+| `effort`, `autocompact` | The settings it launched with, from its session record (`autocompact` is null for a merge); null for a session the batch adopted rather than launched |
 | `startedAt`, `endedAt` | The first and last transcript timestamps |
 | `activeSeconds` | The gaps between API requests, each capped at 300 s, summed |
 | `requests` | API requests, deduplicated by message id |
