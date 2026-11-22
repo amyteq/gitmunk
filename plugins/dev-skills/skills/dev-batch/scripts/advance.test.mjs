@@ -28,6 +28,12 @@ test('order: (B1, row 3) comes before (B2, row 1)', () => {
   assert.deepEqual(dispatchOrder(rows).map((r) => r.n), [2, 3, 1]);
 });
 
+test('order: issue priority first, unlabelled ranks as P2, then Batch and row', () => {
+  const rows = [row(1, 41), row(2, 42, { batch: 3, priority: 0 }), row(3, 43, { priority: 3 }), row(4, 44, { batch: 2, priority: 1 }),
+    row(5, 45, { priority: 2 }), row(6, 46, { priority: null })];
+  assert.deepEqual(dispatchOrder(rows).map((r) => r.n), [2, 4, 1, 5, 6, 3]);
+});
+
 test('dispatchable: a dep outside the batch is met, a merged row is met, an unmerged row is not', () => {
   const rows = [row(1, 41, { status: 'merged' }), row(2, 42, { status: 'reviewing' }), row(3, 43, { deps: [99] }), row(4, 44, { deps: [41] }), row(5, 45, { deps: [42] })];
   const by = new Map(rows.map((r) => [r.issue, r]));

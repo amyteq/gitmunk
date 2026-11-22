@@ -206,7 +206,7 @@ export function tick(ctx) {
   const merged = new Set(rows.filter((r) => r.status === 'merged' || facts.get(r.issue)?.pr?.merged).map((r) => r.issue));
   const decided = rows.map((row) => {
     const f = facts.get(row.issue);
-    if (!f) return { row, batch: row.batch, actions: [], next: row };
+    if (!f) return { row, batch: row.batch, priority: row.priority, actions: [], next: row };
     const mergeLock = !holder ? 'free' : holder.key === key && holder.issue === row.issue ? 'mine' : 'held';
     let r = advance({ row, facts: f, sessions: records.filter((x) => x.issue === row.issue), settings: decide, authorized, mergeLock, now: iso(now) });
     // Deps unmet: nothing launches, but facts such as a hand merge still apply.
@@ -216,7 +216,8 @@ export function tick(ctx) {
     }
     if (!holder && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
-    return { row, batch: row.batch, facts: f, actions: r.actions, next: { ...row, status: r.status, pr: r.pr, head: r.head, next: r.next } };
+    return { row, batch: row.batch, priority: f.priority, facts: f, actions: r.actions,
+      next: { ...row, status: r.status, pr: r.pr, head: r.head, next: r.next, priority: f.priority } };
   });
 
   // 6. Stop sessions whose stage is finished; write the metrics of every session that stopped or ended.

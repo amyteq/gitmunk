@@ -93,10 +93,11 @@ export function parseLedger(regionText, { previous } = {}) {
         status = previous?.rows.find((r) => r.issue === issue)?.status ?? null;
       }
       const pr = /^#(\d+)(?:\s*·\s*`([^`]*)`)?/.exec(c[5] ?? '');
+      const priority = /\bP(\d)\b/.exec(c[3] ?? ''); // shown from the issue's label; the loop sets it again every tick
       ledger.rows.push({
         n, issue, title: task[2], deps: [...(c[2] ?? '').matchAll(/#(\d+)/g)].map((m) => Number(m[1])),
         batch: Number(/\d+/.exec(c[3] ?? '')?.[0]), status, pr: pr ? Number(pr[1]) : null, head: pr?.[2] ?? null,
-        session: dash(c[6] ?? '') || null, next: dash(c.slice(7).join(' | ')),
+        session: dash(c[6] ?? '') || null, next: dash(c.slice(7).join(' | ')), ...(priority && { priority: Number(priority[1]) }),
       });
     }
   }
@@ -113,7 +114,7 @@ export function renderLedger(ledger, { eol = '\n' } = {}) {
     ...(ledger.authorization == null ? [] : [ledger.authorization]),
     `Roll call: ${roll}`, '', LEGEND, '',
     '| # | Task | Deps | Batch | Status | PR · head | Session | Next |', '|---|---|---|---|---|---|---|---|',
-    ...rows.map((r) => `| ${r.n} | #${r.issue} ${escapeCell(r.title)} | ${r.deps.map((d) => `#${d}`).join(', ') || '—'} | B${r.batch} | ${STATUS[r.status]} | ${
+    ...rows.map((r) => `| ${r.n} | #${r.issue} ${escapeCell(r.title)} | ${r.deps.map((d) => `#${d}`).join(', ') || '—'} | B${r.batch}${r.priority == null ? '' : ` · P${r.priority}`} | ${STATUS[r.status]} | ${
       r.pr == null ? '—' : `#${r.pr}${r.head ? ` · \`${r.head}\`` : ''}`} | ${r.session ?? '—'} | ${escapeCell(r.next) || '—'} |`),
     '', '<details><summary>Log</summary>', '', '| Time (UTC) | Event |', '|---|---|',
     ...ledger.log.slice(-LOG_KEEP).map((e) => `| ${e.time} | ${escapeCell(e.event)} |`),

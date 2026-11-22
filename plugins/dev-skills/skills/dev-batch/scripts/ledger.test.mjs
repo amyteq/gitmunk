@@ -25,6 +25,19 @@ test('round trip', () => {
   assert.deepEqual(ledger, example());
 });
 
+test('a labelled priority shows in the Batch cell and reads back; none shows nothing', () => {
+  const l = example();
+  l.rows[0].priority = 0;
+  l.rows[1].priority = null;
+  const text = renderLedger(l);
+  assert.match(text, /\| 1 \| #41 Export tasks as CSV \| — \| B1 · P0 \| ✅ \|/);
+  assert.match(text, /\| #41 \| B2 \| 🔄 \|/);
+  const { ledger } = parseLedger(text);
+  assert.equal(ledger.rows[0].priority, 0);
+  assert.equal(ledger.rows[0].batch, 1);
+  assert.equal('priority' in ledger.rows[1], false);
+});
+
 test('splice keeps every byte outside the region', () => {
   const region = (eol) => renderLedger(example(), { eol });
   const body = 'intro\r\n\r\ntail text  \r\n';

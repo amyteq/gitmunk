@@ -21,7 +21,7 @@ const PR_FIELDS = `fragment pr on PullRequest {
   reviews(last: 50) { nodes { state submittedAt authorAssociation url author { login } commit { oid } } }
 }`;
 
-const ISSUE_FIELDS = `body state stateReason authorAssociation editor { login }
+const ISSUE_FIELDS = `body state stateReason authorAssociation editor { login } labels(first: 20) { nodes { name } }
   comments(last: 100) { totalCount nodes { databaseId body authorAssociation createdAt url author { login } } }
   closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { ...pr } }
   timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20) { nodes { ... on CrossReferencedEvent { willCloseTarget source { ... on PullRequest { ...pr } } } } }`;
@@ -182,6 +182,18 @@ function goalLine(body) {
   return null;
 }
 
+// §9: the issue's priority from its labels, 0 the highest: `P0`–`P9`, `priority:P1`, `priority/high`, `high priority`.
+// Several labels take the highest; none is null, which dispatch ranks as P2. A bare `high` or `low` is not a priority.
+const LEVEL = { critical: 0, urgent: 0, blocker: 0, highest: 0, high: 1, medium: 2, normal: 2, low: 3, lowest: 4 };
+export function priorityOf(labels) {
+  const levels = labels.map((label) => {
+    const s = String(label).trim().toLowerCase();
+    const m = /^(?:priority\s*[:/_-]?\s*)?p(\d)$/.exec(s) ?? /^priority\s*[:/_-]?\s*([a-z]+)$/.exec(s) ?? /^([a-z]+)[\s_-]+priority$/.exec(s);
+    return !m ? undefined : /^\d$/.test(m[1]) ? Number(m[1]) : LEVEL[m[1]];
+  }).filter((n) => n !== undefined);
+  return levels.length ? Math.min(...levels) : null;
+}
+
 const REPORT = /^<!-- dev-review-pr: \S+ round=(\d+) phase=([a-z-]+) -->$/;
 const REVIEW_PHASES = new Set(['review', 'closing-review', 'final-review']);
 
@@ -263,7 +275,7 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
   const goal = line && [...line.matchAll(/https:\/\/github\.com\/\S+?#issuecomment-\d+/g)].some((m) => m[0] === taskUrl) ? line : null;
 
   return {
-    task, goal, verdict, ownerQuestion, ownerAnswer, pr, closedAs,
+    task, goal, verdict, ownerQuestion, ownerAnswer, pr, closedAs, priority: priorityOf((node.labels?.nodes ?? []).map((l) => l.name)),
     lastActivity: newest([...comments.map((c) => c.createdAt), pr?.lastActivity]),
   };
 }

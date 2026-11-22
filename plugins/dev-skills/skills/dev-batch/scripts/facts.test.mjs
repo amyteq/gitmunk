@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { createComment, discussionCommentNode, factsQuery, fetchFacts, issueFacts, readSource, sourceKind, sourceUrl, writeSource, GithubUnavailable } from './facts.mjs';
+import { createComment, discussionCommentNode, factsQuery, fetchFacts, issueFacts, priorityOf, readSource, sourceKind, sourceUrl, writeSource, GithubUnavailable } from './facts.mjs';
 
 const REPO = 'example-org/example-repo';
 const LOGIN = 'bot-user';
@@ -21,6 +21,21 @@ const report = (round, phase, verdict, head = SHA1, at = '2026-01-03T00:00:00Z')
   authorAssociation: 'OWNER', createdAt: at, url: `https://github.com/example-org/example-repo/pull/50#issuecomment-${round}`, author: { login: LOGIN },
 });
 const pr = (node) => node.closedByPullRequestsReferences.nodes[0];
+
+test('priorityOf: common label conventions, the highest wins, none is null', () => {
+  const cases = [
+    [['P0'], 0], [['priority:P1'], 1], [['priority: P2', 'bug'], 2], [['Priority/High'], 1], [['priority-critical'], 0],
+    [['high priority'], 1], [['priority:low', 'P1'], 1], [['priority: medium'], 2], [['bug', 'enhancement'], null],
+    [['priority'], null], [['priority:p10'], null], [['high'], null], [[], null],
+  ];
+  for (const [labels, want] of cases) assert.equal(priorityOf(labels), want, JSON.stringify(labels));
+});
+
+test('issueFacts reads the priority from the issue labels; the query asks for them', () => {
+  assert.equal(facts(build()).priority, null); // the fixture has no labels field
+  assert.equal(facts(build((n) => { n.labels = { nodes: [{ name: 'enhancement' }, { name: 'priority:P0' }] }; })).priority, 0);
+  assert.match(factsQuery(REPO, [41]).query, /labels\(first: 20\) \{ nodes \{ name \} \}/);
+});
 
 test('ready verdict at the current revision', () => {
   const f = facts(build());

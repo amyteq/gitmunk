@@ -33,7 +33,7 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 - **Coordinator line**: the coordinator's account alias, its session name, the loop's state (🟢 running, 🟡 paused, 🔴 stopped), `cap`, `merge`, and the time of the last write.
 - **Owner authorization line**: present only when the owner recorded it; the full template is in [prompts.md](prompts.md#authorization-line).
 - **Roll call**: the count per status, and the judgment events waiting for the coordinator (❗).
-- **Columns**: row order, the task issue and title, its dependencies, its Batch layer, Status, the PR and its short head, the latest session, and Next (a review round, a wait reason or a decision link).
+- **Columns**: row order, the task issue and title, its dependencies, its Batch layer (with the issue's priority label, if any), Status, the PR and its short head, the latest session, and Next (a review round, a wait reason or a decision link).
 - **Log**: the last 20 events, folded. The full history is `events.jsonl` in the state directory.
 - Only aliases (A1, A2), session names and GitHub links reach GitHub. Account paths, session ids and the event log stay local.
 
@@ -57,7 +57,11 @@ With `merge=off`, an approval-eligible row stays 👤 "waiting for merge authori
 
 ## Dispatch order
 
-When a slot frees, the loop takes the dispatchable row with the lowest Batch, then the earliest row. A row is dispatchable when every dependency that is a row of this ledger is merged; a dependency outside the ledger counts as met. Batch is a priority, not a barrier: a B2 row whose dependencies are merged can start while an unrelated B1 row is still in review. Strict order comes from adding a dependency or putting rows on ⏸️ hold.
+When a slot frees, the loop takes the dispatchable row whose issue has the highest priority, then the lowest Batch, then the earliest row. This holds for every stage's launch; a running session is never stopped for a higher-priority row.
+
+The priority comes from the issue's labels at every tick: `P0`–`P9`, `priority:P1`, `priority/high`, `high priority` and similar. `critical` or `urgent` is P0, `high` P1, `medium` or `normal` P2 and `low` P3. Several labels take the highest, and a bare `high` or `low` is not a priority. An issue without one ranks as P2. A labelled priority shows in the Batch cell (`B2 · P0`); change it on the issue, because the loop overwrites the cell.
+
+A row is dispatchable when every dependency that is a row of this ledger is merged; a dependency outside the ledger counts as met. Batch is a priority among rows of equal issue priority, not a barrier: a B2 row whose dependencies are merged can start while an unrelated B1 row is still in review. Strict order comes from adding a dependency or putting rows on ⏸️ hold.
 
 ## Owner edits that count
 

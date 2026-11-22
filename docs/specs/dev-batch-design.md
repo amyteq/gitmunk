@@ -2,13 +2,14 @@
 title: "dev-batch: design"
 skill: dev-batch
 plugin: dev-skills
-version: 0.2.0
+version: 0.2.1
 status: implemented
 created: 2026-11-18
-updated: 2026-11-19
+updated: 2026-11-22
 issue: 44
 pr: 45
 history:
+  - "0.2.1 (2026-11-22): owner comment on PR #45 (Several enhancements): dispatch by issue priority from labels before Batch (§7)"
   - "0.2.0 approved by the owner (2026-11-18); implementation plan in docs/plans/dev-batch-plan.md"
   - "0.2.0 (2026-11-18): owner review of 0.1.0 (design accepted; file renamed without a date; this frontmatter). Follow-up proposals: sub-command argument hint with one ask round, `setup`, `autocompact` default 300k, `mcp=none` for workers, logs and metrics for later evaluation, what to watch after go-live"
   - "0.1.0 (2026-11-18): first draft"
@@ -175,7 +176,7 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 |---|---|---|---|---|---|---|---|
 | 1 | #41 Export tasks as CSV | — | B1 | ✅ | #52 · `4f2a9c1` | ex-pr52m | — |
 | 2 | #42 Import from CSV | #41 | B2 | 🔄 | #55 · `9b0e7d3` | ex-pr55 | round 2 of 10 |
-| 3 | #43 Bulk delete | — | B1 | 👤 | — | ex-i43r | [decision on #43](<link>) |
+| 3 | #43 Bulk delete | — | B1 · P1 | 👤 | — | ex-i43r | [decision on #43](<link>) |
 
 <details><summary>Log</summary>
 
@@ -187,7 +188,7 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 <!-- /dev-batch:ledger -->
 ```
 
-- **Dispatch order.** When a slot frees, the loop takes the eligible row with the lowest Batch, then the earliest row order. Batch is a priority, not a barrier: only Deps hold a task back, so a B2 row whose dependencies (those that are rows of this ledger; one outside it counts as met) are merged can start while an unrelated B1 row is still in review. Strict order comes from adding a dependency or putting rows on ⏸️ hold.
+- **Dispatch order.** When a slot frees, the loop takes the eligible row whose issue has the highest priority, then the lowest Batch, then the earliest row order. The priority comes from the issue's labels at every tick (`P0`–`P9`, `priority:P1`, `priority/high`, `high priority` and similar; `critical` or `urgent` is P0, `high` P1, `medium` or `normal` P2, `low` P3; several labels take the highest). An issue without one ranks as P2, and a labelled priority shows in the Batch cell (`B2 · P0`). The owner changes it on the issue, not in the ledger. A running session is never stopped for a higher-priority row; the priority decides only which launch takes the next free slot, for every stage. Batch is a priority among rows of equal issue priority, not a barrier: only Deps hold a task back, so a B2 row whose dependencies (those that are rows of this ledger; one outside it counts as met) are merged can start while an unrelated B1 row is still in review. Strict order comes from adding a dependency or putting rows on ⏸️ hold.
 - **Owner edits that count**, read at every tick: row order, Deps, Batch, setting a row to ⏸️ (hold), setting a ⏸️ row to 🆕 (release), setting 👤 or ⛔ back to 🆕 (answered or unblocked: the loop re-checks the GitHub facts and redoes only the missing step, never restarting from refine), deleting a row (same as `rm`), and editing or deleting the authorization line (see §11). The loop owns Status for every other transition, and PR · head, Session and Next. Any other change inside the region — by anyone, including `/dev-merge` editing ledger rows of a tracker — is overwritten by the next write. The owner and the workers usually share one GitHub login, so the loop recognises owner edits by what changed, not by who changed it.
 - **Write only on change.** The loop edits the source only when the region's content changes; `changed` records that time. Each edit fires `issues: edited` / `discussion: edited` workflows, so there is no heartbeat write. The loop's liveness is its local lease (§10).
 - **Machine fields stay local.** Account paths, session ids and the event log live in the state directory; the ledger shows only aliases (A1, A2), session names and GitHub links. That keeps machine paths and account identities off GitHub.

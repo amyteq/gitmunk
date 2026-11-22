@@ -26,8 +26,10 @@ export function dispatchable(row, rowsByIssue, mergedIssues) {
     && row.deps.every((d) => mergedIssues.has(d) || !rowsByIssue.has(d) || rowsByIssue.get(d).status === 'merged');
 }
 
-// Lowest Batch first, then row order. Array.sort is stable, so ties keep the ledger's row order.
-export const dispatchOrder = (rows) => [...rows].sort((a, b) => a.batch - b.batch);
+// The highest issue priority first (an issue without a priority label ranks as P2), then the lowest Batch, then row
+// order. Array.sort is stable, so ties keep the ledger's row order.
+const rank = (priority) => priority ?? 2;
+export const dispatchOrder = (rows) => [...rows].sort((a, b) => rank(a.priority) - rank(b.priority) || a.batch - b.batch);
 
 // ---- The stage state machine ----
 

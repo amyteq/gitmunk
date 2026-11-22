@@ -479,6 +479,18 @@ test('CLAUDE_CODE_AUTO_COMPACT_WINDOW in the environment gives a warning');
   Expected: all pass.
 - [ ] **Step 3: Commit, push, and update PR #45's body** (parts table, checks run with results, the live checks still owed: §18's list).
 
+### Task 16: Dispatch by issue priority (owner comment on PR #45, 2026-11-22)
+
+**Files:**
+- Modify: `scripts/facts.mjs` (`labels` in the facts query, `priorityOf`, `IssueFacts.priority`), `scripts/advance.mjs` (`dispatchOrder`), `scripts/ledger.mjs` (the Batch cell shows `· P<n>`), `scripts/loop.mjs` (the decided row carries the priority); their tests; design §7; `references/ledger.md`.
+
+**Interfaces:**
+- `priorityOf(labels: string[]) → 0..9 | null`: `P0`–`P9`, `priority:P1`, `priority/high`, `high priority` and similar; the highest of several; null without one.
+- `dispatchOrder(rows)`: sorted by `(priority ?? 2, batch, row order)`.
+
+- [x] **Step 1: Failing tests.** `priorityOf` conventions; `issueFacts` reads the labels and the query asks for them; `order: issue priority first, unlabelled ranks as P2, then Batch and row`; the Batch cell round trip; the loop gives a P0 row in B2 the only slot before an unlabelled B1 row.
+- [x] **Steps 2–5:** run (FAIL), implement, run (PASS), commit.
+
 ---
 
 ## After the plan: live checks (owner-run, §18)
