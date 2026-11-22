@@ -544,6 +544,36 @@ test('a replacement that fails to launch after its limited session stopped is re
   assert.deepEqual(w.ledger().rows.map((x) => [x.status, x.session]), [['merging', 'er-pr50m2']]);
 });
 
+// The loop dies at `crash` ('stop': right after stopping the limited session; 'launch': after recording the replacement,
+// before `claude --bg`), then restarts once the registration grace is over.
+for (const crash of ['stop', 'launch']) {
+  for (const stage of ['implement', 'merge']) {
+    test(`a crash at the ${crash} of a usage-limit handoff still relaunches the ${stage} at the same attempt (§12)`, () => {
+      const w = stage === 'merge' ? limitedMerge() : world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'] });
+      if (stage === 'implement') {
+        w.issues[41] = { refined: true };
+        w.logs[w.agent('er-i41a', { alias: 'A1', state: 'blocked', stage: 'implement', issue: 41 })] = "You've hit your session limit · resets 4pm (UTC)\n";
+      }
+      const claude = w.claude;
+      if (crash === 'stop') {
+        w.claude = (cmd, args, o) => { const r = claude(cmd, args, o); if (args[0] === 'stop') throw new Error('crash'); return r; };
+        assert.throws(() => w.tick(T(12)), /crash/);
+        w.claude = claude;
+      } else { // what was on disk as `claude --bg` started, which never started a session
+        let disk = null;
+        Object.assign(w, { launchFails: true, onLaunch: () => { disk = readFileSync(join(w.dir, 'sessions.json'), 'utf8'); } });
+        w.tick(T(12));
+        writeFileSync(join(w.dir, 'sessions.json'), disk);
+        Object.assign(w, { launchFails: false, onLaunch: null });
+      }
+      const r = w.tick(T(12, 5));
+      assert.equal(r.launched.length, 1, JSON.stringify(w.ledger().rows));
+      assert.deepEqual([w.sessions().at(-1).attempt, w.ledger().rows[0].status], [1, stage === 'merge' ? 'merging' : 'implementing']);
+      assert.deepEqual(w.events().filter((e) => e.type === 'merge-stopped' || e.type === 'stage-failed'), []);
+    });
+  }
+}
+
 test('a limited session keeps its cap slot until it is stopped for its replacement (§8, §12)', () => {
   const w = world({ rows: [row(1, 43), row(2, 41, { status: 'implementing', session: 'er-i41a' })], accounts: ['A1', 'A2'], cap: 1 });
   w.issues[41] = { refined: true };

@@ -55,7 +55,7 @@ const prFacts = (over = {}) => ({ ...READY, pr: { number: 55, state: 'OPEN', mer
   evidence: { ok: false }, round: null, phase: null, reviewEnded: null, lastActivity: T(11), ...over } });
 const APPROVED = prFacts({ evidence: { ok: true } });
 const MERGED = prFacts({ state: 'MERGED', merged: true, evidence: { ok: true } });
-const ses = (name, stage, state, over = {}) => ({ name, stage, state, startedAt: T(10), endedAt: null, attempt: 1, ...over });
+const ses = (name, stage, state, over = {}) => ({ name, id: `id-${name}`, stage, state, startedAt: T(10), endedAt: null, attempt: 1, ...over });
 const launch = (stage, attempt = 1) => ({ type: 'launch', stage, attempt });
 const stop = (session) => ({ type: 'stop', session });
 const event = (kind, judgment) => ({ type: 'event', kind, judgment });
@@ -155,6 +155,11 @@ const cases = [
     { status: 'blocked', next: 'er-i41a needs input', actions: [event('session-blocked', true)] }],
   ['session limited → relaunch the stage, attempt not counted (§12)', { row: at('implementing'), facts: READY, sessions: [ses('er-i41a', 'implement', 'failed'), ses('er-i41a2', 'implement', 'limited', { attempt: 2 })] },
     { status: 'implementing', actions: [launch('implement', 2)] }],
+  ['session stopped for its replacement after a usage limit → relaunch, attempt not counted (§12)',
+    { row: at('implementing'), facts: READY, sessions: [ses('er-i41a', 'implement', 'failed'), ses('er-i41a2', 'implement', 'stopped', { attempt: 2, limited: true })] },
+    { status: 'implementing', actions: [launch('implement', 2)] }],
+  ['a merge recorded but never launched (no id) → relaunch the merge, not merge-stopped', { row: at('merging'), facts: APPROVED, sessions: [ses('er-pr55m', 'merge', 'stopped', { id: null })], mergeLock: 'mine' },
+    { status: 'merging', actions: [launch('merge')] }],
   ['session unknown → no launch, no stop, status kept (Review Focus 3)', { row: at('implementing'), facts: READY, sessions: [ses('er-i41r', 'refine', 'done'), ses('er-i41a', 'implement', 'unknown')] },
     { status: 'implementing' }],
   ['queued, the stage session unknown → stays queued', { row: at('queued'), facts: READY, sessions: [ses('er-i41a', 'implement', 'unknown')] }, { status: 'queued' }],

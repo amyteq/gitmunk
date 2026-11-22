@@ -231,17 +231,19 @@ export function tick(ctx) {
     rec.id = agent?.id ?? rec.id; // a session recorded before its launch, found by name
     rec.sessionId = agent?.sessionId ?? rec.sessionId;
     rec.idleAt = rec.state === 'working' ? null : rec.idleAt ?? iso(now); // I4: when it left `working`, for owner answers
+    if (rec.state === 'working') delete rec.limited; // resumed: a later end is its own
     // §12: blocked on a usage limit → limited, and its account cools until the stated reset.
     const until = rec.state === 'blocked' && limitCooling(sessions.logs(cli(rec.account), rec.id ?? rec.name) ?? '', now);
     if (until) {
       rec.state = 'limited';
+      rec.limited = true; // kept once it is stopped or ends, so its stage relaunches at the same attempt (§12)
       st.cooling[rec.account] = Math.max(st.cooling[rec.account] ?? 0, until);
       if (was !== 'limited') {
         ev({ type: 'limit', task: rec.issue, stage: rec.stage, session: rec.name, account: rec.account, detail: `usage limit; ${rec.account} cools until ${iso(until)}` },
           `#${rec.issue} ${rec.name}: usage limit on ${rec.account}`);
       }
     }
-    if (ENDED.has(rec.state) && !rec.endedAt) { rec.endedAt = iso(now); if (was === 'limited') rec.limited = true; ended.push(rec); }
+    if (ENDED.has(rec.state) && !rec.endedAt) { rec.endedAt = iso(now); ended.push(rec); }
   }
 
   // 5. advance every active row. The merge lock is followed in memory while deciding, so two rows never both take
@@ -282,8 +284,7 @@ export function tick(ctx) {
       ev({ type: 'stop-failed', task: rec.issue, stage: rec.stage, session: rec.name, account: rec.account });
       return;
     }
-    // `limited`: it ended on a usage limit, so its stage relaunches at the same attempt (§12).
-    Object.assign(rec, { state: 'stopped', endedAt: iso(now), ...(rec.state === 'limited' && { limited: true }) });
+    Object.assign(rec, { state: 'stopped', endedAt: iso(now) });
     out.stopped.push(rec.name);
     ev({ type: 'stop', task: rec.issue, stage: rec.stage, session: rec.name, account: rec.account });
     writeMetrics(dir, rec, account.get(rec.account), outcome, row);
@@ -375,6 +376,7 @@ export function tick(ctx) {
     // §12, R9: a limited session resumes by itself after its reset, so it is stopped before its replacement launches.
     // A failed stop is retried on the next tick; until then nothing launches for the row, and a lock it claimed stays
     // with it, since a limited merge session may still merge.
+    if (limited.length) writeJson(at('sessions.json'), records); // their `limited` mark is on disk before they stop
     for (const old of limited) stopSession(old, 'retried', d.next);
     if (limited.some((x) => x.state === 'limited')) { keep(); continue; }
     free += limited.length;
