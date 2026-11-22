@@ -2,7 +2,7 @@
 
 This guide covers installing, updating and removing the gitmunk plugins in Claude Code and Codex, and where the Ask workflows are set up. The README's [Install](../README.md#install) section keeps only the shortest commands.
 
-gitmunk is one marketplace with two plugins: `dev-skills` (nine skills, for Claude Code and Codex) and `dev-hooks` (guardrail hooks, for Claude Code only). Both come from one of two channels: stable from the head of `main`, and beta from the head of `develop`.
+gitmunk is one marketplace with two plugins: `dev-skills` (ten skills, for Claude Code and Codex) and `dev-hooks` (guardrail hooks, for Claude Code only). Both come from one of two channels: stable from the head of `main`, and beta from the head of `develop`.
 
 ## Installer
 
