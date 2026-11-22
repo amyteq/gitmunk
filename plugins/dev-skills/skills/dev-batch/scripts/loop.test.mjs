@@ -44,9 +44,8 @@ function issueNode(n, { refined = false, verdict = 'ready', pr = null, mention =
 }
 
 // A batch on issue #40 with its state directory, a stub `gh` (source body + facts) and a stub `claude` (agents per account).
-function world({ rows, accounts = ['A1'], cap = 4 }) {
-  const root = tempDir();
-  const dir = join(root, 'state', 'example-org', 'example-repo', 'i40');
+function world({ rows, accounts = ['A1'], cap = 4, root = tempDir(), key = 'i40' }) {
+  const dir = join(root, 'state', 'example-org', 'example-repo', key);
   mkdirSync(dir, { recursive: true });
   const accts = accounts.map((alias) => {
     const d = join(root, alias);
@@ -60,7 +59,7 @@ function world({ rows, accounts = ['A1'], cap = 4 }) {
   writeFileSync(join(dir, 'ledger.last.md'), region);
   let ids = 0;
   const w = {
-    dir, accts, lock: join(dirname(dir), 'merge.lock'), body: `Intro text.\n\n${region}\n\nOutro text.\n`, issues: {},
+    root, dir, accts, lock: join(dirname(dir), 'merge.lock'), body: `Intro text.\n\n${region}\n\nOutro text.\n`, issues: {},
     agents: Object.fromEntries(accts.map((a) => [a.dir, []])), records: [], logs: {},
     ghDown: false, writeFails: false, launchFails: false, stopFails: false, hideLaunches: false, unreadable: new Set(), reads: 0, onRead: null, edits: [], claudeCalls: [],
   };
@@ -442,6 +441,33 @@ test('a reclaim removes only the exact lock it judged free, never the one a fast
   assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', 'waiting for the merge lock']]);
 });
 
+test('a stopped batch that restarts and launches a merge under its own lock keeps it from a reclaimer that judged it earlier (R9)', () => {
+  const w = world({ rows: [row(1, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+  // i99 stopped after recording its merge session and before launching it: no lease, the record unlisted and past its grace.
+  const z = world({ rows: [row(1, 7, { status: 'reviewing', pr: 70, session: 'er-pr70' })], root: w.root, key: 'i99', accounts: ['B1'] });
+  z.issues[7] = { refined: true, pr: { number: 70, approved: true } };
+  z.records.push({ name: 'er-pr70m', stage: 'merge', issue: 7, pr: 70, attempt: 1, account: 'B1', id: null, sessionId: null,
+    startedAt: new Date(T(9)).toISOString(), endedAt: null, state: 'working' });
+  writeFileSync(join(z.dir, 'sessions.json'), JSON.stringify(z.records));
+  writeFileSync(w.lock, JSON.stringify({ key: 'i99', issue: 7, at: new Date(T(9)).toISOString() }));
+  const { claude } = w;
+  let restarted = null; // i99 restarts and ticks while this batch still reads i99's account
+  w.claude = (cmd, args, opts) => {
+    if (opts.env.CLAUDE_CONFIG_DIR !== z.accts[0].dir) return claude(cmd, args, opts);
+    if (args[0] === 'agents' && !restarted) {
+      writeFileSync(join(z.dir, 'lease.json'), JSON.stringify({ host: 'test-host', pid: process.pid }));
+      restarted = z.tick(T(10));
+    }
+    return z.claude(cmd, args, opts);
+  };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.equal(restarted.launched.length, 1);
+  assert.deepEqual([JSON.parse(readFileSync(w.lock, 'utf8')).key, existsSync(`${w.lock}.guard`)], ['i99', false]);
+  assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', 'waiting for the merge lock']]);
+});
+
 test('a higher-priority issue takes the free slot before a lower Batch, and the ledger shows its priority', () => {
   const w = world({ rows: [row(1, 41), row(2, 43, { batch: 2 })], cap: 1 });
   w.issues[43] = { labels: ['enhancement', 'priority:P0'] };
@@ -697,6 +723,16 @@ test('a session launched under 120 s ago and not yet listed stays working', () =
   assert.equal(w.sessions()[0].state, 'working');
   w.tick(T(10, 2)); // two minutes and still not listed: gone
   assert.equal(w.sessions()[0].state, 'stopped');
+});
+
+test('a session recorded before its launch and found by name gets its id, so the 15 s check does not tick early', async () => {
+  const w = world({ rows: [row(1, 41, { status: 'refining', session: 'er-i41r' })] });
+  const id = w.agent('er-i41r', { state: 'working', stage: 'refine', issue: 41 });
+  w.records[0].id = null; // the loop stopped after the launch, before it recorded the id
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  const { ticks } = await w.run({ clock: (n) => T(10, 5) + n * 15_000, stopAt: (n) => n === 4 });
+  assert.equal(ticks.length, 1);
+  assert.equal(w.sessions()[0].id, id);
 });
 
 test('the 15 s check does not count a session still registering as left working', async () => {

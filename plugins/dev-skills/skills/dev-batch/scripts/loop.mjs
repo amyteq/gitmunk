@@ -1,6 +1,7 @@
 // The batch loop (spec §7, §9–§13, §16). `tick` reads the source and GitHub's facts and every account's sessions,
 // advances each row, stops and launches sessions, writes events and metrics, and splices the ledger back. `run`
 // repeats it under the lease; `reconcile` prepares a takeover. Every decision lives in the pure modules.
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { advance, dispatchable, dispatchOrder } from './advance.mjs';
@@ -43,15 +44,46 @@ const writeJson = (path, value) => writeAtomic(path, `${JSON.stringify(value, nu
 const lockFile = (dir) => join(dirname(dir), 'merge.lock');
 // shortcut: an unreadable lock (a crash inside the exclusive create) counts as held; delete the file by hand if a batch waits on it.
 const readLock = (dir) => (existsSync(lockFile(dir)) ? readJson(lockFile(dir), {}) : null);
-const releaseLock = (dir) => rmSync(lockFile(dir), { force: true });
-function acquireLock(dir, issue, now) {
+// Each write stamps a new `id`, so a holder judged from an earlier read never matches a lock written since.
+const newLock = (dir, issue, now) => ({ key: basename(dir), issue, at: iso(now), id: randomUUID() });
+const sameLock = (a, b) => !!a && !!b && ['key', 'issue', 'at', 'id'].every((k) => a[k] === b[k]);
+function createLock(dir, lock) {
   try {
-    writeFileSync(lockFile(dir), JSON.stringify({ key: basename(dir), issue, at: iso(now) }), { flag: 'wx' });
+    writeFileSync(lockFile(dir), JSON.stringify(lock), { flag: 'wx' });
     return true;
   } catch (e) {
     if (e.code === 'EEXIST') return false;
     throw e;
   }
+}
+const acquireLock = (dir, issue, now) => createLock(dir, newLock(dir, issue, now));
+// Every change to an existing lock (a claim, a release, a reclaim) runs under merge.lock.guard, one at a time across
+// batches, and re-reads the lock inside it; only the exclusive create needs no guard. → fn's result, or null while busy.
+// shortcut: a crash inside it leaves merge.lock.guard and every merge waits; delete it by hand, as for an unreadable lock.
+function guarded(dir, fn) {
+  const guard = `${lockFile(dir)}.guard`;
+  try { writeFileSync(guard, '', { flag: 'wx' }); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
+  try { return fn(); } finally { rmSync(guard, { force: true }); }
+}
+// Removes the lock only while it is still exactly `holder`, never one written since (a replacement, or a renewed claim).
+export function dropLock(dir, holder) {
+  return guarded(dir, () => {
+    if (!sameLock(readLock(dir), holder)) return false;
+    rmSync(lockFile(dir), { force: true });
+    return true;
+  }) ?? false;
+}
+// Every merge launch claims the lock first: a free lock is created, the batch's own lock for the issue is renewed, so a
+// reclaimer that judged it from an earlier read leaves it. → { lock, fresh } or null (held elsewhere, or busy).
+export function claimLock(dir, issue, now) {
+  return guarded(dir, () => {
+    const held = readLock(dir);
+    if (held && !(held.key === basename(dir) && held.issue === issue)) return null;
+    const lock = newLock(dir, issue, now);
+    if (held) writeAtomic(lockFile(dir), JSON.stringify(lock));
+    else if (!createLock(dir, lock)) return null;
+    return { lock, fresh: !held };
+  });
 }
 // Another batch's lock is free once that batch's loop is gone (no lease, or its pid is gone on this host) and every
 // merge session of the lock's issue in its sessions.json, which records a session before it launches, has ended as that
@@ -70,19 +102,6 @@ function otherLockFree(dir, holder, ctx) {
     const agent = list.find((x) => (r.id ? x.id === r.id : x.name === r.name));
     return agent ? agent.state !== 'working' && agent.state !== 'blocked' : !registering(r, ctx.now);
   });
-}
-// Removes a gone batch's lock only while it is still exactly `holder`. merge.lock.reclaim serializes reclaimers, so a
-// slower one never removes the lock a faster one took after reclaiming; each batch's own lock needs no mutex (its lease).
-// shortcut: a crash inside it leaves merge.lock.reclaim and later reclaims wait; delete it by hand, as for the lock.
-function reclaimLock(dir, holder) {
-  const mutex = `${lockFile(dir)}.reclaim`;
-  try { writeFileSync(mutex, '', { flag: 'wx' }); } catch (e) { if (e.code === 'EEXIST') return false; throw e; }
-  try {
-    const now = readLock(dir);
-    if (!now || !['key', 'issue', 'at'].every((k) => now[k] === holder[k])) return false;
-    releaseLock(dir);
-    return true;
-  } finally { rmSync(mutex, { force: true }); }
 }
 
 // §7: the owner edits that count, applied to the rows the loop decided last; anything else in the region is the loop's.
@@ -207,6 +226,7 @@ export function tick(ctx) {
     const was = rec.state;
     // A readable account that does not list it: gone, unless it was launched so recently that it is still registering.
     rec.state = agent?.state ?? (ENDED.has(was) ? was : registering(rec, now) ? 'working' : 'stopped');
+    rec.id = agent?.id ?? rec.id; // a session recorded before its launch, found by name
     rec.sessionId = agent?.sessionId ?? rec.sessionId;
     rec.idleAt = rec.state === 'working' ? null : rec.idleAt ?? iso(now); // I4: when it left `working`, for owner answers
     // §12: blocked on a usage limit → limited, and its account cools until the stated reset.
@@ -229,8 +249,7 @@ export function tick(ctx) {
   const liveRow = (issue) => rows.some((r) => r.issue === issue && !FINISHED.has(r.status));
   const ownFree = (issue) => rows.some((r) => r.issue === issue && r.status === 'merged')
     || (!liveRow(issue) && !records.some((x) => x.issue === issue && x.stage === 'merge' && LIVE.has(x.state)));
-  if (holder?.key === key && ownFree(holder.issue)) { releaseLock(dir); holder = null; }
-  else if (holder?.key && holder.key !== key && otherLockFree(dir, holder, ctx)) holder = reclaimLock(dir, holder) ? null : readLock(dir);
+  if (holder?.key && (holder.key === key ? ownFree(holder.issue) : otherLockFree(dir, holder, ctx))) holder = dropLock(dir, holder) ? null : readLock(dir);
   const byIssue = new Map(rows.map((r) => [r.issue, r]));
   const facts = new Map(active.map((r) => [r.issue, issueFacts(fetched.value, r.issue, { repo: s.repo, login: s.login, pr: r.pr,
     sessions: records.filter((x) => x.issue === r.issue) })]));
@@ -284,7 +303,7 @@ export function tick(ctx) {
   // The lock follows the rows: released on unlock, taken for a live merge session that lacks it.
   for (const d of decided) {
     const h = d.actions.some((a) => a.type === 'unlock') && readLock(dir);
-    if (h?.key === key && h.issue === d.row.issue) releaseLock(dir);
+    if (h?.key === key && h.issue === d.row.issue) dropLock(dir, h);
   }
   for (const d of decided) if (d.actions.some((a) => a.type === 'lock') && !d.actions.some((a) => a.type === 'launch')) acquireLock(dir, d.row.issue, now);
 
@@ -347,8 +366,8 @@ export function tick(ctx) {
       continue;
     }
     st.atCap = false;
-    const lockNeeded = stage === 'merge' && !((h) => h?.key === key && h.issue === issue)(readLock(dir));
-    if (lockNeeded && !acquireLock(dir, issue, now)) { keep(); continue; } // another batch took it first
+    const claim = stage === 'merge' && claimLock(dir, issue, now);
+    if (stage === 'merge' && !claim) { keep(); continue; } // another batch took it first
     const name = nextFreeName(first, taken);
     const opts = { name, model: s.model, effort: s.effort, autocompact: stage === 'merge' ? null : s.autocompact, mcp: s.mcp ?? 'none', // missing fails closed
       scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt };
@@ -359,7 +378,7 @@ export function tick(ctx) {
     try { launched = sessions.launch(cli(choice.alias), opts); } catch (e) { launched = { error: e.message }; }
     if (launched.error) {
       records.splice(records.indexOf(rec), 1);
-      if (lockNeeded) releaseLock(dir);
+      if (claim?.fresh) dropLock(dir, claim.lock);
       keep();
       st.launchFailures++;
       ev({ type: 'launch-failed', task: issue, stage, session: name, account: choice.alias, detail: launched.error }, `#${issue} ${stage}: ${name} failed to launch on ${choice.alias}`);
@@ -456,7 +475,7 @@ function leftWorking(ctx, s, now) {
     const mine = working.filter((r) => r.account === a.alias);
     const list = mine.length ? sessions.listAgents({ configDir: a.dir, run: ctx.claude }) : null;
     return Array.isArray(list) && mine.some((r) => {
-      const agent = list.find((x) => x.id === r.id);
+      const agent = list.find((x) => (r.id ? x.id === r.id : x.name === r.name));
       return agent ? agent.state !== 'working' : !registering(r, now);
     });
   });

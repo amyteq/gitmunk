@@ -389,15 +389,6 @@ function rm(dir, flags) {
   });
 }
 
-// The repository's one-merge lock (§9) as the loop keeps it: refused while another row or batch holds it.
-function takeMergeLock(dir, issue) {
-  const path = join(dirname(dir), 'merge.lock');
-  const held = existsSync(path) ? readJson(path, {}) : null;
-  if (held && !(held.key === basename(dir) && held.issue === issue)) refuse('merge-lock-held', { lock: held });
-  if (!held) writeFileSync(path, JSON.stringify({ key: basename(dir), issue, at: new Date().toISOString() }), { flag: 'wx' });
-  return held ? null : path;
-}
-
 // A coordinator's judgment-driven relaunch. It retires every earlier record of the row's stage, including one stuck as
 // `unknown`, so the loop follows the new session; the retired names stay taken (§9: a name is never reused).
 function launchStage(dir, flags) {
@@ -442,7 +433,8 @@ function launchStage(dir, flags) {
     const taken = new Set([...records.map((r) => r.name), ...base.rows.map((r) => r.session).filter(Boolean),
       ...[...lists.values()].flatMap((l) => (Array.isArray(l) ? l.map((x) => x.name) : []))]);
     const name = nextFreeName(sessionName({ abbr: s.abbr, stage, issue, pr }), taken);
-    const lock = stage === 'merge' && takeMergeLock(dir, issue);
+    // The repository's one-merge lock (§9), claimed as the loop claims it: refused while another row or batch holds it.
+    const claim = stage === 'merge' && (loop.claimLock(dir, issue, now) ?? refuse('merge-lock-held', { lock: readJson(join(dirname(dir), 'merge.lock'), {}) }));
     const startedAt = new Date(now).toISOString();
     const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working' };
     writeJson(join(dir, 'sessions.json'), [...records, rec]); // R9: recorded before it launches, as the loop does
@@ -450,7 +442,7 @@ function launchStage(dir, flags) {
       mcp: s.mcp ?? 'none', scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt });
     if (launched.error) {
       writeJson(join(dir, 'sessions.json'), records);
-      if (lock) rmSync(lock, { force: true });
+      if (claim?.fresh) loop.dropLock(dir, claim.lock);
       refuse('launch-failed', { detail: launched.error });
     }
     writeJson(join(dir, 'sessions.json'), [...records.map((r) => (old.includes(r) && !ENDED.has(r.state) ? { ...r, state: 'stopped', endedAt: r.endedAt ?? startedAt } : r)),

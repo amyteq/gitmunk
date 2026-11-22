@@ -55,6 +55,7 @@ else if (argv[0] === 'agents') process.stdout.write(JSON.stringify(w.agents[cfg]
 else if (argv[0] === '--bg') {
   // what the batch had recorded when the launch ran
   try { fs.copyFileSync(env.XDG_STATE_HOME + '/dev-batch/example-org/example-repo/i40/sessions.json', env.STUB_FIXTURE + '.launch'); } catch {}
+  try { fs.copyFileSync(env.XDG_STATE_HOME + '/dev-batch/example-org/example-repo/merge.lock', env.STUB_FIXTURE + '.lock'); } catch {}
   process.stdout.write('Started background session c0ffee01\\n');
 }
 `;
@@ -567,6 +568,28 @@ test('launch replaces a stuck unknown session record and relaunches the stage', 
   assert.equal(launch.cwd, w.checkout); // I9: wherever the command was run from
   assert.deepEqual([w.ledger().rows[0].status, w.ledger().rows[0].session], ['refining', 'er-i41r2']);
   assert.equal(w.cli('launch', '--task', '42', '--stage', 'review').out.error, 'no-pr');
+});
+
+test('a merge launch claims the merge lock as the loop does: renews its own, refused while another batch holds it (R9)', () => {
+  const w = world();
+  w.init();
+  w.cli('pause');
+  const l = parseLedger(readFileSync(w.file('ledger.last.md'), 'utf8')).ledger;
+  l.rows[0].pr = 50;
+  writeFileSync(w.file('ledger.last.md'), renderLedger(l));
+  const lock = join(dirname(w.dir), 'merge.lock');
+  writeFileSync(lock, JSON.stringify({ key: 'i99', issue: 7, at: '2026-11-19T09:00:00.000Z' }));
+  let r = w.cli('launch', '--task', '41', '--stage', 'merge');
+  assert.deepEqual([r.code, r.out?.error, r.out?.lock?.key], [1, 'merge-lock-held', 'i99'], r.text);
+  assert.deepEqual(w.calls('claude', '--bg'), []);
+  const own = { key: 'i40', issue: 41, at: '2026-11-19T09:00:00.000Z' };
+  writeFileSync(lock, JSON.stringify(own));
+  r = w.cli('launch', '--task', '41', '--stage', 'merge');
+  assert.equal(r.code, 0, r.text);
+  const atLaunch = json(join(w.root, 'world.json.lock'));
+  assert.deepEqual([atLaunch.key, atLaunch.issue], ['i40', 41]);
+  assert.notEqual(atLaunch.at, own.at); // renewed, so a reclaimer that read it before never removes it
+  assert.ok(atLaunch.id);
 });
 
 test('launch keeps the cap and adds no second session to an account of unknown usage', () => {

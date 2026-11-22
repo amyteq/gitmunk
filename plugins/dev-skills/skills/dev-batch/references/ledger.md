@@ -107,6 +107,6 @@ Each batch has a state directory, `${XDG_STATE_HOME:-~/.local/state}/dev-batch/<
 | `lease.json` | The loop's lease: pid, host, account alias, coordinator and start time |
 | `loop.log` | The loop's output, one JSON line per tick |
 
-The repository-wide `<owner>/<repo>/merge.lock` admits one merge session at a time across every batch of that repository ([prompts.md](prompts.md#stages)).
+The repository-wide `<owner>/<repo>/merge.lock` admits one merge session at a time across every batch of that repository ([prompts.md](prompts.md#stages)); `merge.lock.guard` exists only while a batch changes it. An unreadable `merge.lock`, or a `merge.lock.guard` a crash left behind, keeps every merge waiting until it is deleted by hand.
 
 A session record's `state` is `working`, `done`, `blocked` (needs input), `limited` (blocked on a usage limit, see [accounts.md](accounts.md#usage-limits)), `stopped`, `failed`, or `unknown`. A session is `unknown` when its account cannot be read or it ran on another machine; the loop never stops or relaunches over it.
