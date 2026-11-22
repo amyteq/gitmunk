@@ -355,6 +355,47 @@ test('cap and one merge at a time', () => {
   assert.deepEqual(b.status(), { 41: 'merged', 43: 'merging' });
 });
 
+test('two rows ready to merge: the lock goes to the higher priority, then the lower Batch, not the first row (Q1)', () => {
+  for (const [first, labels41, labels43] of [[{}, ['P3'], ['P0']], [{ batch: 2 }, null, null]]) {
+    const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50', ...first }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+    w.issues[41] = { refined: true, labels: labels41, pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, labels: labels43, pr: { number: 51, approved: true } };
+    w.agent('er-pr50', { stage: 'review', issue: 41, pr: 50 });
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m']);
+    assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', 'waiting for the merge lock'], ['merging', '']]);
+  }
+});
+
+test('a removed row whose merge session still runs keeps the merge lock until the session ends (R9)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'removed', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+  writeFileSync(w.lock, JSON.stringify({ key: 'i40', issue: 41, at: '2026-11-19T10:00:00.000Z' }));
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.agent('er-pr50m', { state: 'working', stage: 'merge', issue: 41, pr: 50 });
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 41);
+  w.set('er-pr50m', 'done');
+  assert.deepEqual(w.tick(T(10, 5)).launched, ['er-pr51m']);
+});
+
+test('another batch\'s merge lock stays held while its merge session runs, even with its loop stopped (R9)', () => {
+  const w = world({ rows: [row(1, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' })] });
+  const other = join(dirname(w.dir), 'i99'); // stopped: no lease
+  mkdirSync(other);
+  const id = w.agent('er-pr70m', { state: 'working', record: false });
+  writeFileSync(join(other, 'settings.json'), JSON.stringify({ accounts: w.accts }));
+  writeFileSync(join(other, 'sessions.json'), JSON.stringify([{ name: 'er-pr70m', stage: 'merge', issue: 7, pr: 70, account: 'A1', id, state: 'working' }]));
+  writeFileSync(w.lock, JSON.stringify({ key: 'i99', issue: 7, at: '2026-11-19T10:00:00.000Z' }));
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).key, 'i99');
+  w.set('er-pr70m', 'done');
+  assert.deepEqual(w.tick(T(10, 5)).launched, ['er-pr51m']);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).key, 'i40');
+});
+
 test('a higher-priority issue takes the free slot before a lower Batch, and the ledger shows its priority', () => {
   const w = world({ rows: [row(1, 41), row(2, 43, { batch: 2 })], cap: 1 });
   w.issues[43] = { labels: ['enhancement', 'priority:P0'] };
@@ -415,6 +456,33 @@ test('merge=auto under a line without the merge clause waits for merge authoriza
   const r = w.tick(T(10));
   assert.deepEqual([r.launched, existsSync(w.lock)], [[], false]);
   assert.deepEqual(w.ledger().rows.map((x) => [x.status, x.next]), [['owner', 'waiting for merge authorization']]);
+});
+
+test('a usage-limited merge session is not replaced once merge is no longer authorized (C24)', () => {
+  for (const revoke of ['merge=off', 'a line without the merge clause']) {
+    const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' })], accounts: ['A1', 'A2'] });
+    const settings = JSON.parse(readFileSync(join(w.dir, 'settings.json'), 'utf8'));
+    if (revoke === 'merge=off') settings.merge = 'off';
+    else w.body = w.body.replace(AUTH, settings.authorization = AUTH.replace(', and squash merge each approval-eligible PR.', '.'));
+    writeFileSync(join(w.dir, 'settings.json'), JSON.stringify(settings));
+    w.issues[41] = { refined: true, pr: { number: 50, approved: true } };
+    const id = w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 });
+    w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+    assert.deepEqual([revoke, w.tick(T(12)).launched], [revoke, []]);
+    assert.deepEqual(w.ledger().rows.map((x) => [x.status, x.next]), [['owner', 'waiting for merge authorization']]);
+  }
+});
+
+test('a closed issue is done only through its own merged closing PR, closed as completed (C30)', () => {
+  // Closed as completed while our merged PR only mentions it; closed as not planned although our closing PR merged.
+  for (const issue of [{ closed: 'COMPLETED', mention: { number: 50, merged: true } }, { closed: 'NOT_PLANNED', pr: { number: 50, merged: true } }]) {
+    const w = world({ rows: [row(1, 41, { status: 'implementing', session: 'er-i41a' }), row(2, 42, { deps: [41], batch: 2 })] });
+    w.issues[41] = { refined: true, ...issue };
+    w.agent('er-i41a', { stage: 'implement', issue: 41 });
+    const r = w.tick(T(11));
+    assert.deepEqual([issue.closed, r.launched, w.status()], [issue.closed, [], { 41: 'blocked', 42: 'waiting' }]);
+    assert.deepEqual(w.pending().map((e) => [e.type, e.task]), [['issue-closed', 41]]);
+  }
 });
 
 // A worker asks the owner on #41 at 10:30 and goes idle; the owner answers by comment at 11:10.
@@ -499,12 +567,40 @@ test('a complete batch whose final roll call fails to write is not complete unti
   w.writeFails = true;
   let r = w.tick(T(10));
   assert.deepEqual([r.complete, r.wrote], [false, false]);
+  assert.deepEqual([w.pending(), existsSync(join(w.dir, 'summary.json'))], [[], false]); // nothing says complete yet
   w.writeFails = false;
   r = w.tick(T(10, 5));
   assert.deepEqual([r.complete, r.wrote], [true, true]);
   assert.equal(w.ledger().header.loop, 'stopped');
   assert.match(w.ledger().log.at(-1).event, /^batch complete: 1 PRs merged/);
+  assert.equal(w.ledger().log.filter((l) => l.event.startsWith('batch complete')).length, 1);
   assert.deepEqual(w.pending().map((e) => e.type), ['batch-complete']); // raised once
+  assert.ok(existsSync(join(w.dir, 'summary.json')));
+});
+
+test('a final roll call skipped for an owner edit made during the tick completes only once it is written', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'removed' })] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true, merged: true } };
+  w.agent('er-pr50m', { stage: 'merge', issue: 41, pr: 50 });
+  w.onRead = (n) => { if (n === 2) w.edit((l) => { l.rows[1].deps = [41]; }); };
+  let r = w.tick(T(10));
+  assert.deepEqual([r.complete, r.wrote, w.pending(), existsSync(join(w.dir, 'summary.json'))], [false, false, [], false]);
+  r = w.tick(T(10, 5));
+  assert.deepEqual([r.complete, r.wrote], [true, true]);
+  assert.deepEqual([w.ledger().rows[1].deps, w.pending().map((e) => e.type)], [[41], ['batch-complete']]);
+});
+
+test('the last merge session still in its closeout keeps the batch open until it is stopped and measured (I8)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' })] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true, merged: true } };
+  w.agent('er-pr50m', { state: 'working', stage: 'merge', issue: 41, pr: 50 });
+  let r = w.tick(T(10));
+  assert.deepEqual([r.complete, w.status()[41], w.ledger().header.loop, existsSync(join(w.dir, 'summary.json'))], [false, 'merged', 'running', false]);
+  w.set('er-pr50m', 'done');
+  r = w.tick(T(10, 5));
+  assert.deepEqual([r.complete, r.stopped], [true, ['er-pr50m']]);
+  assert.deepEqual(lines(join(w.dir, 'metrics.jsonl')).map((m) => `${m.name} ${m.outcome}`), ['er-pr50m fact reached']);
+  assert.deepEqual(w.pending().map((e) => e.type), ['batch-complete']);
 });
 
 test('the loop stops idle sessions of merged and removed rows, never a working one (I8)', () => {

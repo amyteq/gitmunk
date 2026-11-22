@@ -257,7 +257,7 @@ Two Claude Code facts the helper respects: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in 
 - **Events** go to `events.jsonl`. Those that need judgment (refine `not-ready`, a review that ended blocked, a stall, a failed merge, all accounts at their cap, an owner reply on a 👤 row) are also queued in `pending/`.
 - `batch.mjs wait [--timeout <s>]` returns as soon as `pending/` holds an event, prints the events as JSON, moves them to `delivered/` and exits `0`; it exits `3` on timeout. Every 60 s it also checks the lease: a batch that is active and not paused, whose lease no live loop on this host holds (a loop killed by the OOM killer, a reboot or `kill -9` writes no event), gets one `loop-not-running` judgment per `wait`. In Claude Code the coordinator runs it as a background command, so the session wakes only when it exits. In Codex it runs in the foreground with `--timeout 540` and is re-run after each return.
 - While no `wait` is armed (the coordinator session ended), events stay pending, the coordinator line shows "❗ N events waiting", and the loop keeps doing mechanical work. `takeover` picks the events up.
-- When every row is ✅ or ⏭️, the loop writes a final roll call with stage durations from the event log, raises a `batch-complete` event and exits.
+- When every row is ✅ or ⏭️ and no session of the batch still works, the loop writes a final roll call with stage durations from the event log, raises a `batch-complete` event and exits.
 
 ## 11. Authority and safety
 

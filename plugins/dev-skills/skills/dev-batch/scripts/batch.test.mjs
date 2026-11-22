@@ -563,6 +563,19 @@ test('launch replaces a stuck unknown session record and relaunches the stage', 
   assert.equal(w.cli('launch', '--task', '42', '--stage', 'review').out.error, 'no-pr');
 });
 
+test('launch keeps the cap and adds no second session to an account of unknown usage', () => {
+  const w = world(); // A1 has no usage snapshot
+  w.init(); // cap 2
+  const rec = (name, issue) => ({ name, stage: 'refine', issue, pr: null, attempt: 1, account: 'A1', id: null, sessionId: null, startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'working' });
+  writeFileSync(w.file('sessions.json'), JSON.stringify([rec('er-i43r', 43)]));
+  let r = w.cli('launch', '--task', '41', '--stage', 'refine');
+  assert.deepEqual([r.code, r.out?.error], [1, 'no-account'], r.text);
+  writeFileSync(w.file('sessions.json'), JSON.stringify([rec('er-i43r', 43), rec('er-i44r', 44)]));
+  r = w.cli('launch', '--task', '41', '--stage', 'refine');
+  assert.deepEqual([r.code, r.out?.error], [1, 'at-cap'], r.text);
+  assert.deepEqual(w.calls('claude', '--bg'), []);
+});
+
 test('clear stops only idle sessions whose stage is finished', () => {
   const w = world();
   w.init();

@@ -251,7 +251,7 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
   // unmerged, or it only mentions the issue and a closing PR now exists; otherwise a closing PR, else a cross-reference
   // that will close the issue or came after the implement session started. A PR merged before the row's first launch
   // is never this batch's work, except a closing PR of an issue closed as completed (NB1: a hand merge, or an issue added
-  // closed); a closed issue's merged closing PR wins over a kept or newer open one.
+  // closed). C30: a closed issue takes only its own merged closing PR, and only when closed as completed.
   const since = (list) => list.map((x) => x.startedAt).filter(Boolean).sort()[0] ?? null;
   const after = (t, from) => !!from && Date.parse(t) >= Date.parse(from);
   const ours = (p) => !!p?.number && p.author?.login === login && p.baseRepository?.nameWithOwner?.toLowerCase() === repo.toLowerCase();
@@ -263,7 +263,7 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
     && ((p.state === 'OPEN' && willCloseTarget) || after(p.createdAt, since(sessions.filter((x) => x.stage === 'implement'))))).map((t) => t.source);
   const kept = rowPr && [...node.closedByPullRequestsReferences.nodes, ...(closing.length ? [] : node.timelineItems.nodes.map((t) => t.source))]
     .find((p) => ours(p) && p.number === rowPr && p.state !== 'CLOSED');
-  const best = (closedAs && closing.find((p) => p.merged)) || kept || (closing.length ? closing : refs).sort((x, y) => y.number - x.number)[0];
+  const best = closedAs ? completed && closing.find((p) => p.merged) : kept || (closing.length ? closing : refs).sort((x, y) => y.number - x.number)[0];
   const pr = best ? prFacts(best, login) : null;
 
   // I3 (§11): the /goal line runs with permission mode auto, so it counts only from a body last written by a trusted

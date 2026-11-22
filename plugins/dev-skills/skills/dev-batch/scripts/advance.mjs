@@ -132,6 +132,8 @@ export function advance({ row, facts, sessions, settings, authorized, mergeLock,
   let { status, next, actions } = out;
   // §11: without the owner's authorization line nothing new launches, merges included; running sessions go on.
   if (!authorized && actions.some((a) => a.type === 'launch')) ({ status, next, actions } = halt('owner', WAITING.authorization, 'authorization-missing'));
+  // C24: every merge launch, a limited merge session's replacement included, needs merge=auto under the merge clause.
+  if (settings.merge !== 'auto' && actions.some((a) => a.type === 'launch' && a.stage === 'merge')) ({ status, next, actions } = to('owner', WAITING.merge));
   if (status === row.status && next === row.next) actions = actions.filter((a) => a.type !== 'event'); // raised on an earlier tick
   // One merge per repository: a merge launch or a live merge session holds the lock, until the PR is merged.
   const needsLock = want !== 'merged' && (actions.some((a) => a.type === 'launch' && a.stage === 'merge') || LIVE.has(latest('merge')?.state));

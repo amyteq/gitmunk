@@ -20,7 +20,8 @@ const GRACE_MS = 120_000; // a session `claude agents` does not list yet is stil
 const STATUS_OF = { refine: 'refining', implement: 'implementing', review: 'reviewing', merge: 'merging' };
 const STAGE_OF = Object.fromEntries(Object.entries(STATUS_OF).map(([stage, status]) => [status, stage]));
 const PIPELINE = ['refining', 'implementing', 'reviewing', 'merging', 'merged'];
-const RUNNING = new Set(['working', 'blocked', 'unknown']); // holds a cap slot; a limited session is being replaced
+export const RUNNING = new Set(['working', 'blocked', 'unknown']); // holds a cap slot; a limited session is being replaced
+const LIVE = new Set([...RUNNING, 'limited']); // may still merge: a limited session resumes by itself after the reset
 const ENDED = new Set(['stopped', 'failed']);
 const IDLE = new Set(['done', 'blocked', 'limited']); // stoppable; never working or unknown
 const FINISHED = new Set(['merged', 'removed']);
@@ -52,10 +53,19 @@ function acquireLock(dir, issue, now) {
     throw e;
   }
 }
-// Another batch's lock is free once that batch has no lease, or its lease's pid is gone on this host.
-function batchGone(dir, key, host) {
-  const lease = readJson(join(dirname(dir), key, 'lease.json'), null);
-  return !lease || (lease.host === host && !pidAlive(lease.pid));
+// Another batch's lock is free once that batch's loop is gone (no lease, or its pid is gone on this host) and its merge
+// session no longer runs, as that batch's own accounts list it; a session they cannot show keeps the lock.
+function otherLockFree(dir, holder, ctx) {
+  const other = join(dirname(dir), holder.key);
+  const lease = readJson(join(other, 'lease.json'), null);
+  if (lease && !(lease.host === ctx.host && !pidAlive(lease.pid))) return false;
+  const accounts = readJson(join(other, 'settings.json'), {}).accounts ?? [];
+  return readJson(join(other, 'sessions.json'), []).every((r) => {
+    if (r.issue !== holder.issue || r.stage !== 'merge' || ENDED.has(r.state)) return true;
+    const acc = accounts.find((a) => a.alias === r.account);
+    const list = acc && sessions.listAgents({ configDir: acc.dir, run: ctx.claude });
+    return Array.isArray(list) && !list.some((x) => (r.id ? x.id === r.id : x.name === r.name) && (x.state === 'working' || x.state === 'blocked'));
+  });
 }
 
 // §7: the owner edits that count, applied to the rows the loop decided last; anything else in the region is the loop's.
@@ -196,15 +206,18 @@ export function tick(ctx) {
   }
 
   // 5. advance every active row. The merge lock is followed in memory while deciding, so two rows never both take
-  //    it (R9); a lock left by a finished row of this batch, or by a batch that is gone, is released first.
+  //    it (R9); a lock left by a merged row of this batch, by a removed row whose merge session ended, or by a batch
+  //    that is gone and whose merge session ended, is released first.
   let holder = readLock(dir);
   const liveRow = (issue) => rows.some((r) => r.issue === issue && !FINISHED.has(r.status));
-  if (holder && (holder.key === key ? !liveRow(holder.issue) : holder.key && batchGone(dir, holder.key, ctx.host))) { releaseLock(dir); holder = null; }
+  const ownFree = (issue) => rows.some((r) => r.issue === issue && r.status === 'merged')
+    || (!liveRow(issue) && !records.some((x) => x.issue === issue && x.stage === 'merge' && LIVE.has(x.state)));
+  if (holder && (holder.key === key ? ownFree(holder.issue) : holder.key && otherLockFree(dir, holder, ctx))) { releaseLock(dir); holder = null; }
   const byIssue = new Map(rows.map((r) => [r.issue, r]));
   const facts = new Map(active.map((r) => [r.issue, issueFacts(fetched.value, r.issue, { repo: s.repo, login: s.login, pr: r.pr,
     sessions: records.filter((x) => x.issue === r.issue) })]));
   const merged = new Set(rows.filter((r) => r.status === 'merged' || facts.get(r.issue)?.pr?.merged).map((r) => r.issue));
-  const decided = rows.map((row) => {
+  const decideRow = (row) => {
     const f = facts.get(row.issue);
     if (!f) return { row, batch: row.batch, priority: row.priority, actions: [], next: row };
     const mergeLock = !holder ? 'free' : holder.key === key && holder.issue === row.issue ? 'mine' : 'held';
@@ -218,7 +231,11 @@ export function tick(ctx) {
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
     return { row, batch: row.batch, priority: f.priority, facts: f, actions: r.actions,
       next: { ...row, status: r.status, pr: r.pr, head: r.head, next: r.next, priority: f.priority } };
-  });
+  };
+  // Decided in dispatch order, so the merge lock goes to the first eligible row in that order (Q1); kept in row order.
+  const decision = new Map(dispatchOrder(rows.map((row) => ({ row, batch: row.batch, priority: facts.get(row.issue)?.priority ?? row.priority })))
+    .map(({ row }) => [row, decideRow(row)]));
+  const decided = rows.map((row) => decision.get(row));
 
   // 6. Stop sessions whose stage is finished; write the metrics of every session that stopped or ended.
   const stopSession = (rec, outcome, row) => {
@@ -353,16 +370,18 @@ export function tick(ctx) {
   }
   flush();
   const newRows = decided.map((d) => d.next);
-  const complete = newRows.length > 0 && newRows.every((r) => FINISHED.has(r.status));
-  if (complete && base.header.loop !== 'stopped') {
-    // §10, §16: the final roll call, summary.json and one batch-complete event.
-    const summary = batchSummary(readLines(at('events.jsonl')), readLines(at('metrics.jsonl')));
-    writeJson(at('summary.json'), summary);
+  // §14, I8: a working session (a merge still in its closeout, a removed row's worker) keeps the loop until it ends,
+  // so the loop stops it once idle and records its metrics.
+  const complete = newRows.length > 0 && newRows.every((r) => FINISHED.has(r.status)) && !records.some((x) => x.state === 'working');
+  let summary = null;
+  let headline = null;
+  if (complete) {
+    // §10, §16: the final roll call; summary.json and the batch-complete event follow once it is written (below).
+    summary = batchSummary(readLines(at('events.jsonl')), readLines(at('metrics.jsonl')));
     const hours = (sec) => (sec == null ? '—' : `${(sec / 3600).toFixed(1)} h`);
     const cost = summary.costPerMergedPr == null ? '—' : `$${summary.costPerMergedPr.toFixed(2)}`;
-    const headline = `${summary.measures.mergedPrs} PRs merged · refine to last merge, median ${hours(summary.measures.refineToLastMerge.median)} · cost per merged PR ${cost}`;
-    ev({ type: 'batch-complete', detail: headline, judgment: true }, `batch complete: ${headline}`);
-    flush();
+    headline = `${summary.measures.mergedPrs} PRs merged · refine to last merge, median ${hours(summary.measures.refineToLastMerge.median)} · cost per merged PR ${cost}`;
+    if (base.header.loop !== 'stopped') logLines.push(`batch complete: ${headline}`);
   }
 
   // 9. Write the region only when it changed (or held an unreadable row), spliced into the body fetched again just
@@ -399,6 +418,10 @@ export function tick(ctx) {
   }
   // §10: the batch ends only once its final roll call is written; until then the next tick retries the write.
   out.complete = complete && (out.wrote || !changed);
+  if (out.complete && !existsSync(at('summary.json'))) { // summary.json marks the batch inactive: one event, once
+    writeJson(at('summary.json'), summary);
+    ev({ type: 'batch-complete', detail: headline, judgment: true });
+  }
   st.githubFailures = 0; // Review Focus 5: a tick counts as GitHub answering only once every call of it succeeded
   return finish();
 }

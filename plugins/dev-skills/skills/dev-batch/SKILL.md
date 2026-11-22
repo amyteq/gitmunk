@@ -110,7 +110,7 @@ Each event names its `type`, `task` and `detail`. ⛔ rows wait for you: nothing
 | `ledger-region` | The ledger markers are missing, doubled or unclosed: nothing launches or is written | Ask the owner to restore the region; the last written copy is `ledger.last.md` |
 | `loop-error` | The loop crashed (the stack is in `detail`) | Report it and `start` once; if it recurs, stop and report |
 | `loop-not-running` | `wait` found no live loop holding the lease of this active, unpaused batch (killed, or the machine restarted) | Run `B start`, then report it to the owner |
-| `batch-complete` | Every row is ✅ or ⏭️; the loop wrote the final roll call and exited | `clear`, report the headline numbers, and arm no further `wait` |
+| `batch-complete` | Every row is ✅ or ⏭️ and no session of the batch still works; the loop wrote the final roll call and exited | `clear`, report the headline numbers, and arm no further `wait` |
 
 ### Asking the owner
 
@@ -118,7 +118,7 @@ Post one comment on the task's issue whose first line is `<!-- dev-batch:owner i
 
 ### Relaunching a stage
 
-`B launch` refuses with `session-working` while a session of that stage is recorded as working. To stop one, run `claude stop <id>` with `CLAUDE_CONFIG_DIR` set to its account's directory (the id from `claude agents --json`). Then run `B tick`, so the loop records the stop, and `B launch`. A ⛔ stalled row that the owner sets back to 🆕 while its session still works stalls again at once.
+`B launch` refuses with `session-working` while a session of that stage is recorded as working, and with `at-cap` while other running sessions fill every `cap` slot. To stop one, run `claude stop <id>` with `CLAUDE_CONFIG_DIR` set to its account's directory (the id from `claude agents --json`). Then run `B tick`, so the loop records the stop, and `B launch`. A ⛔ stalled row that the owner sets back to 🆕 while its session still works stalls again at once.
 
 **Follow-ups.** Register a follow-up issue (a deferred finding, a split) with `B add --tasks <file> --hold "follow-up, not queued"`. It stays ⏸️ until the owner sets it to 🆕.
 

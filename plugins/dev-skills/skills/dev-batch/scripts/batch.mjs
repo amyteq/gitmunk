@@ -412,6 +412,9 @@ function launchStage(dir, flags) {
     const records = readJson(join(dir, 'sessions.json'), []);
     const old = records.filter((r) => r.issue === issue && r.stage === stage);
     if (old.some((r) => r.state === 'working')) refuse('session-working', { detail: `${old.findLast((r) => r.state === 'working').name} is still working` });
+    // §8, §12: the loop's limits. The records this launch retires free their slot.
+    const running = records.filter((r) => loop.RUNNING.has(r.state) && !old.includes(r));
+    if (running.length >= s.cap) refuse('at-cap', { detail: `cap ${s.cap}: ${running.map((r) => r.name).join(', ')} hold every slot` });
     const body = readSource({ repo: s.repo, src: s.src, gh }).body;
     const found = findRegion(body);
     if (!found || found.error) refuse('ledger-region', { detail: `the ledger region is ${found?.error ?? 'missing'}` });
@@ -433,6 +436,7 @@ function launchStage(dir, flags) {
       accounts: s.accounts.map((a) => ({ ...a, loggedIn: Array.isArray(lists.get(a.alias)) && sessions.loggedIn(cli(a)) })),
       snapshots: Object.fromEntries(s.accounts.map((a) => [a.alias, readSnapshot(a.dir, now)])),
       cooling: new Map(Object.entries(readJson(join(dir, 'loop.json'), {}).cooling ?? {})), usageCap: s.usage_cap, coordinatorAlias: base.header.alias, now,
+      unknownRunning: new Map(s.accounts.map((a) => [a.alias, running.some((r) => r.account === a.alias)])),
     });
     const account = s.accounts.find((a) => a.alias === choice.alias) ?? refuse('no-account', { detail: 'every account is at its cap, cooling or logged out', ...choice });
     const taken = new Set([...records.map((r) => r.name), ...base.rows.map((r) => r.session).filter(Boolean),
