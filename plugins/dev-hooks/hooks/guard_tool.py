@@ -472,9 +472,13 @@ class Word:
 
     def runnable(self, lead: str = "") -> str:
         """Quoted text that holds a substitution or a variable in command position, or ''. With `lead` a newline,
-        a variable at its start is in command position too."""
+        a variable at its start, or a program the text names by an expansion (`exec "$CLIENT"`), counts too."""
         quoted = "".join(self.quoted)
-        return quoted if not self.payload and RUNNABLE.search(lead + quoted) else ""
+        try:
+            hidden = bool(lead) and any(cmd.named() for cmd in ShellReader(quoted).commands)
+        except Exception:  # unreadable as a script: the pattern check stands
+            hidden = False
+        return quoted if not self.payload and (RUNNABLE.search(lead + quoted) or hidden) else ""
 
 
 class Command:
@@ -516,6 +520,13 @@ class Command:
                 if texts[index - 1].startswith("-") and index < len(texts) and not skip(index):
                     return len(texts)
         return index
+
+    def named(self, paths: bool = True) -> bool:
+        """Does it run a program named by an expansion (`exec "$CLIENT"`), or one a wrapper option leaves unclear?
+        Without `paths`, a program spelt with a literal `/` (`$S/bin/run.sh`), never a builtin, does not count."""
+        word = self.words[self.entry()] if self.target() else None
+        return self.program() is not None and (word is None or word.expands and (paths or "/" not in "".join(
+            word.code + word.quoted)))
 
     def target(self) -> str:
         """The base name of that program; '' when there is none."""
@@ -628,9 +639,11 @@ class ShellReader:
             return
         if program.text == "case":
             raise Unreadable("case")
-        start, runs = cmd.words.index(program), cmd.runs()
+        start, runs, entry = cmd.words.index(program), cmd.runs(), cmd.entry()
         operands = cmd.words[start + 1:]
-        if set(runs) & NAME_SETTERS or {"printf", "print"} & set(runs) and any(re.match(r"-\w*v", t) for t in texts):
+        # A program named by an expansion (`"$S" -t "$N"`, `command -- "$S"`) may be a setter.
+        named = program.expands or entry < len(cmd.words) and cmd.words[entry].expands
+        if named or set(runs) & NAME_SETTERS or {"printf", "print"} & set(runs) and any(re.match(r"-\w*v", t) for t in texts):
             for word in operands:  # a name joined to option letters counts (`read -aD`); a quoted one already does
                 for k in range(1, len(word.text)) if word.text.startswith("-") else ():
                     self.mention(word.text[k:])
@@ -639,7 +652,7 @@ class ShellReader:
         self.dynamic |= bool(set(runs) & RUNS_TEXT)
         # The payloads a shell runs here, also behind wrappers: `eval` and `trap` text and `sh -c` scripts. An
         # argument of another program (`env ssh host eval …`) is that program's text, not a local payload.
-        entry, target = cmd.entry(), cmd.target()
+        target = cmd.target()
         if target == "eval":
             payload = cmd.words[entry + 1:]
             self.read_payload(payload, " ".join(word.text for word in payload), depth)
@@ -921,7 +934,11 @@ def read_shell(text: str, raw: str | None = None) -> tuple[ShellReader | None, s
             for name, count in other.mentions.items():
                 first.mentions[name] = max(count, first.mentions.get(name, 0))
         strict, loose = first.resolved(), first.resolved(strict=False)
-        return (first if strict == text else ShellReader(strict)), strict, loose
+        second = first if strict == text else ShellReader(strict)
+        # A resolved program may turn out to be a setter (`S=declare; "$S" -t "$N"`), and one still named by an
+        # expansion may be `source` or `eval`: then nothing resolves (I2).
+        unsafe = second.dynamic or any(cmd.named(paths=False) for cmd in second.commands)
+        return (first, text, loose) if unsafe else (second, strict, loose)
     except Exception:  # Unreadable, or a reader defect: never fail open through it (I5)
         return None, text, text
 
