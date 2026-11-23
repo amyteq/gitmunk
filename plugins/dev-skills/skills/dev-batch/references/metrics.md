@@ -72,7 +72,7 @@ One record per session that the loop launched, written when the loop stops the s
 | `denials` | Tool calls refused for permission |
 | `outcome` | `fact reached`, `retried`, `judgment` or `removed` |
 
-v1 writes no record for the coordinator session. `/dev-review-pr` runs Codex with `--ephemeral`, so the reviewer phases' Codex usage is not recorded; a separate `dev-review-pr` change is to put it in its report marker, and the review record copies it once it is there.
+v1 writes no record for the coordinator session. `/dev-review-pr` runs Codex with `--ephemeral`, so no Codex session file records the reviewer phases' usage; `dev-review-pr` publishes each phase's usage in the `USAGE` field of its report signature instead, and the review record copies it once it reads that field.
 
 Claude Code deletes transcripts after `cleanupPeriodDays` (30 days by default); `setup` raises it to 365, so the records can be re-read from them.
 
