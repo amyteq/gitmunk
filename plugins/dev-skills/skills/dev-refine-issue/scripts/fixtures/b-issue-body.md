@@ -41,13 +41,13 @@ Ready for explicit dispatch: the scope, base, write boundary, owner gate G1 and 
 **Goal prompt**, only where supported and after readiness:
 
 ```text
-/goal Execute from https://github.com/example-org/example-repo/issues/102#issuecomment-9102. Drop the unused legacy_sessions table, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 and AC-2 hold at its head, or, at owner gate G1 or another stop condition, until its question is posted on issue #102. Handed on, not goal conditions: the PR's review and merge.
+/goal Execute from https://github.com/example-org/example-repo/issues/102#issuecomment-9102. Drop the unused legacy_sessions table, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 and AC-2 hold at its head, or, at owner gate G1 or another blocker, until its question is posted on issue #102, or until a cancellation or budget stop applies. Handed on, not goal conditions: the PR's review and merge.
 ```
 
 **Plain-language prompt**, the same task and authority:
 
 ```text
-Execute from https://github.com/example-org/example-repo/issues/102#issuecomment-9102. Drop the unused legacy_sessions table, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 and AC-2 hold at its head, or, at owner gate G1 or another stop condition, until its question is posted on issue #102. Handed on, not goal conditions: the PR's review and merge.
+Execute from https://github.com/example-org/example-repo/issues/102#issuecomment-9102. Drop the unused legacy_sessions table, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 and AC-2 hold at its head, or, at owner gate G1 or another blocker, until its question is posted on issue #102, or until a cancellation or budget stop applies. Handed on, not goal conditions: the PR's review and merge.
 ```
 
 The receiving session must retrieve the task and canonical sources and verify their current authority. A slash command supplies no authorization or readiness transition.

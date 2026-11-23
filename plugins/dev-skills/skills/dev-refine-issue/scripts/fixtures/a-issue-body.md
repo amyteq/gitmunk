@@ -43,13 +43,13 @@ Ready for explicit dispatch: the scope, base, write boundary and three closed ac
 **Goal prompt**, only where supported and after readiness:
 
 ```text
-/goal Execute from https://github.com/example-org/example-repo/issues/101#issuecomment-9101. Add the --dry-run flag to the sync command, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 holds at its head, or, at a stop condition, until its question is posted on issue #101. Handed on, not goal conditions: AC-2 (review), AC-3 (owner).
+/goal Execute from https://github.com/example-org/example-repo/issues/101#issuecomment-9101. Add the --dry-run flag to the sync command, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 holds at its head, or, at a blocker, until its question is posted on issue #101, or until a cancellation or budget stop applies. Handed on, not goal conditions: AC-2 (review), AC-3 (owner).
 ```
 
 **Plain-language prompt**, the same task and authority:
 
 ```text
-Execute from https://github.com/example-org/example-repo/issues/101#issuecomment-9101. Add the --dry-run flag to the sync command, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 holds at its head, or, at a stop condition, until its question is posted on issue #101. Handed on, not goal conditions: AC-2 (review), AC-3 (owner).
+Execute from https://github.com/example-org/example-repo/issues/101#issuecomment-9101. Add the --dry-run flag to the sync command, on a task branch from main with one PR into main. Continue until that PR is open and AC-1 holds at its head, or, at a blocker, until its question is posted on issue #101, or until a cancellation or budget stop applies. Handed on, not goal conditions: AC-2 (review), AC-3 (owner).
 ```
 
 The receiving session must retrieve the task and canonical sources and verify their current authority. A slash command supplies no authorization or readiness transition.

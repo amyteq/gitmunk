@@ -1,6 +1,7 @@
 // Fixtures A and B show the launch-prompt form of SKILL.md: the /goal completion condition names only the ACs
-// shown at the PR head, review and owner ACs are handed on with their stage, and a named owner gate ends the goal
-// once its question is posted. Run with `npm test` from the plugin root; no GitHub call is made.
+// shown at the PR head, review and owner ACs are handed on with their stage, a named owner gate ends the goal
+// once its question is posted, and a cancellation or budget stop ends it without a question. Run with `npm test`
+// from the plugin root; no GitHub call is made.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -38,9 +39,10 @@ function prompt(body, label) {
 const goalOf = (f) => prompt(f.body, '**Goal prompt**');
 const plainOf = (f) => prompt(f.body, '**Plain-language prompt**');
 
-// The fixed parts of either prompt: the PR-head part, the stop part and the handed-on part.
+// The fixed parts of either prompt: the PR-head part, the question stop, the cancellation or budget stop (which
+// posts no question) and the handed-on part.
 function parts(text) {
-  const m = /Continue until (.+?) holds? at its head, or, (at .+?, until its question is posted on issue #\d+)\. Handed on, not goal conditions: (.+)\.$/.exec(text);
+  const m = /Continue until (.+?) holds? at its head, or, (at .+?, until its question is posted on issue #\d+), or until a cancellation or budget stop applies\. Handed on, not goal conditions: (.+)\.$/.exec(text);
   assert.ok(m, `no fixed parts in: ${text}`);
   return { atHead: m[1], stop: m[2], handedOn: m[3] };
 }
@@ -70,12 +72,12 @@ test('AC-1 (c): fixture A\'s plain-language prompt has the same completion condi
 test('AC-2 (b): fixture B\'s goal ends once owner gate G1\'s question is posted on the issue, in both prompts', () => {
   assert.ok(B.task.includes('Owner gate G1:'), 'the task comment names the gate');
   const goal = parts(goalOf(B));
-  assert.equal(goal.stop, 'at owner gate G1 or another stop condition, until its question is posted on issue #102');
+  assert.equal(goal.stop, 'at owner gate G1 or another blocker, until its question is posted on issue #102');
   assert.deepEqual(ids(goal.atHead), atStage(B, (s) => s === 'PR head'));
   assert.deepEqual(ids(goal.handedOn), atStage(B, (s) => s !== 'PR head'));
   assert.deepEqual(parts(plainOf(B)), goal);
-  // A fixture without a named gate keeps only the generic stop.
-  assert.equal(parts(goalOf(A)).stop, 'at a stop condition, until its question is posted on issue #101');
+  // A fixture without a named gate keeps only the generic blocker stop.
+  assert.equal(parts(goalOf(A)).stop, 'at a blocker, until its question is posted on issue #101');
 });
 
 test('AC-3 (a): each fixture is a body with this skill\'s AUTO region and its task comment, on example-org/example-repo, with no unfilled slot', () => {

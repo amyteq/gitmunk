@@ -56,6 +56,6 @@ The owner's request in the issue covers edits, commits, a pushed task branch and
 
 - Success: the PR into `main` is open and AC-1 holds at its head. Handed on, not goal conditions: AC-2 (review), AC-3 (owner).
 - Blocked: a needed change outside the write boundary or a missing permission prevents the next step. Preserve progress, post the question on the issue and end the session without waiting for the answer; posting it ends the goal.
-- Cancellation or budget: stop within the bound, push the task branch and leave a continuation note on the issue.
+- Cancellation or budget: stop within the bound, push the task branch and leave a continuation note on the issue; this ends the goal without a question.
 
 Closeout: base and final HEAD, branch, PR link, the AC-to-evidence map, changed paths, each command's outcome and the remaining gates (AC-2 review, AC-3 owner, merge).
