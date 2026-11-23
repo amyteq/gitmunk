@@ -37,7 +37,7 @@ Use a stable first-line marker. A new task begins at revision 1; replacing a dis
 ### Acceptance criteria
 
 <!-- acs:begin -->
-<The operative stable AC IDs and text from the issue/canonical contract, each a closed case list with observable evidence per case. If they disagree, stop and reconcile; do not choose whichever is easier.>
+<The operative stable AC IDs and text from the issue/canonical contract, each a closed case list with observable evidence per case and a first line that ends with "Shown at: PR head.", "Shown at: review." or "Shown at: owner." to record where it is shown. If they disagree, stop and reconcile; do not choose whichever is easier.>
 <!-- acs:end -->
 
 ### Validation and evidence
@@ -50,8 +50,8 @@ Use a stable first-line marker. A new task begins at revision 1; replacing a dis
 
 ### Stop conditions and closeout
 
-- Success: <observable acceptance and completion artifact>.
-- Blocked: a named decision, stale identity, dependency, permission, capability, required evidence or conflicting edit prevents the next step. Preserve progress and report the concrete unblock action.
+- Success: <completion artifact> and <the ACs shown at the PR head> hold at its head. Handed on, not goal conditions: <each AC shown by the review or the owner, with that stage; if none, the PR's review and merge>.
+- Blocked: <a named owner gate that blocks the work, if any, or> a named decision, stale identity, dependency, permission, capability, required evidence or conflicting edit prevents the next step. Preserve progress, post the question with the concrete unblock action on the issue and end the session without waiting for the answer; posting it ends the goal.
 - Cancellation/budget: stop within the stated bound and preserve a usable continuation point.
 
 Closeout: exact base/final HEAD and branch, deliverable links, AC/evidence mapping, changed paths, command outcomes and skipped reasons, independent review identity, unresolved findings and remaining human gates.
@@ -92,4 +92,4 @@ A dispatched task comment is never edited in place. When the contract changes, a
 
 A note or dispatch record that changes no contract goes in an ordinary comment without a marker; its first line must not contain `dev-refine-issue:task`. Record only an observed date, actor and evidence. Unknown dispatch state is treated as dispatched. A human edit survives reconciliation even when its author shares the coordinator's GitHub account.
 
-Use soft-wrapped English operational text. Leave a blank line before thematic `---` separators. Return both goal and plain-language launch prompts using the real read-back permalink, with identical scope, finish line and stop conditions. Blocked tasks' prompts remain visibly non-dispatchable.
+Use soft-wrapped English operational text. Leave a blank line before thematic `---` separators. Return both goal and plain-language launch prompts using the real read-back permalink, in the form [the skill](../SKILL.md) gives: the completion condition names only the ACs shown at the PR head and any named owner gate, the review and owner ACs follow in the handed-on part, and the plain-language prompt is the `/goal` line without `/goal `. Blocked tasks' prompts remain visibly non-dispatchable.
