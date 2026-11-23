@@ -180,13 +180,16 @@ def strip_heredoc_bodies(command: str) -> str:
 
 
 def drop_message(match: re.Match) -> str:
-    # A setter's option value names variables (`unset -m 'D*'`, `then declare -t 'D=x'`), not a message (I2), so
-    # a setter among the words before it, up to the first one that opens a quoted text, keeps the value.
-    for word in re.split(r"[;&|\n(`]", match.string[:match.start()])[-1].split():
-        if word.count("'") % 2 or word.count('"') % 2:
-            break
-        if re.sub(r"[\"'\\]", "", word) in NAME_SETTERS:
-            return match.group()
+    # A setter's option value names variables (`unset -m 'D*'`, `then declare -t 'D=x'`), not a message (I2): it
+    # stays after a setter word, or after an expansion before the first option, which may name a setter (`$S -m`).
+    head = re.split(r"[;&|\n]", match.string[:match.start()])[-1]
+    try:
+        words = shlex.split(head)
+    except ValueError:  # an open quote: the plain words, unquoted
+        words = [re.sub(r"[\"'\\]", "", word) for word in head.split()]
+    lead = words[:next((k for k, word in enumerate(words) if word.startswith("-")), len(words))]
+    if set(words) & NAME_SETTERS or any(re.search(r"[$`]", word) and not ASSIGNMENT.match(word) for word in lead):
+        return match.group()
     return " "
 
 
@@ -521,6 +524,8 @@ class Command:
             index += 1
             while skip(index):
                 index += 1
+                if texts[index - 1] == "--":  # the end of its options: the program is next
+                    break
                 if texts[index - 1].startswith("-") and index < len(texts) and not skip(index):
                     return len(texts)
         return index

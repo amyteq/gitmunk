@@ -344,9 +344,12 @@ class StructuralAskTest(unittest.TestCase):
             "printf -vD ./build", "let 'D=5'", "getopts x 'D'", "set -A 'D' ./build", "builtin set -A 'D' ./build",
             "strftime -s 'D' %Y", "declare -t 'D=./build'", "unset -m 'D*'", "typeset -m 'D*=./build'",
             'set -A "$N" ./build', "N=D; : ${(P)N::=./build}", "if true; then declare -t 'D=./build'; fi",
-            "{ declare -t 'D=./build'; }", "time typeset -m 'D*=./build'", "! unset -m 'D*'"]])
+            "{ declare -t 'D=./build'; }", "time typeset -m 'D*=./build'", "! unset -m 'D*'",
+            "A=\"don't\" declare -t 'D=./build'", "A='x y' unset -m 'D*'", "A=\"x;y\" unset -m 'D*'",
+            "S=unset; $S -m 'D*'", "$(echo unset) -m 'D*'"]])
         self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\"",
-                                                  "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'"])
+                                                  "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'",
+                                                  "A=\"don't\" git -C \"$DIR\" commit -m 'Never rm -rf the build'"])
 
     def test_i3_text_another_program_runs_is_not_data(self):
         s = "$(printf %s x)"
@@ -380,10 +383,12 @@ class StructuralAskTest(unittest.TestCase):
             f"env ssh example.com sh <<'EOF'\ncat \"{s}\"\nEOF", f"$CLIENT <<'EOF'\ncat \"{s}\"\nEOF",
             # An option that may take the next word as its value leaves the program unclear.
             f"printf %s sh | xargs -I SH docker exec app SH -c 'cat \"{s}\"'",
-            f"exec -a sh docker exec app sh -c 'cat \"{s}\"'", f"env -u sh docker exec app sh -c 'cat \"{s}\"'"])
+            f"exec -a sh docker exec app sh -c 'cat \"{s}\"'", f"env -u sh docker exec app sh -c 'cat \"{s}\"'",
+            # `--` ends the options: the payload is read, and its unresolved program asks.
+            f"command -- sh -c '$CLIENT cat \"$P\"'; echo \"{s}\"", f"command -- eval '$CLIENT cat \"$P\"'; echo \"{s}\""])
         self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'nice -n 5 head "{s}"',
                                                 f"env sh -c 'cat \"{s}\"'", f"timeout 5 sh -c 'cat \"{s}\"'",
-                                                f"env bash <<'EOF'\ncat \"{s}\"\nEOF"])
+                                                f"env bash <<'EOF'\ncat \"{s}\"\nEOF", f"command -- sh -c 'cat \"{s}\"'"])
 
     def test_i5_text_the_reader_cannot_parse_keeps_the_whole_command_rule(self):
         self.assertDecisions(("ask", "ask"), ["case x in a) cat $(echo a);; esac", "cat $(echo 'a)"])
