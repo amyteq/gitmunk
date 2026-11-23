@@ -179,24 +179,10 @@ def strip_heredoc_bodies(command: str) -> str:
     return "\n".join(kept)
 
 
-def drop_message(match: re.Match) -> str:
-    # A setter's option value names variables (`unset -m 'D*'`, `then declare -t 'D=x'`), not a message (I2): it
-    # stays after a setter word, or after an expansion before the first option, which may name a setter (`$S -m`).
-    head = re.split(r"[;&|\n]", match.string[:match.start()])[-1]
-    try:
-        words = shlex.split(head)
-    except ValueError:  # an open quote: the plain words, unquoted
-        words = [re.sub(r"[\"'\\]", "", word) for word in head.split()]
-    lead = words[:next((k for k, word in enumerate(words) if word.startswith("-")), len(words))]
-    if set(words) & NAME_SETTERS or any(re.search(r"[$`]", word) and not ASSIGNMENT.match(word) for word in lead):
-        return match.group()
-    return " "
-
-
 def normalize_command(command: str, keep_lines: bool = False) -> str:
     """Canonicalise a command for matching: inert payloads out, gh flag noise out."""
     text = strip_heredoc_bodies(command)
-    text = LITERAL_MESSAGE_PAYLOAD.sub(drop_message, text)
+    text = LITERAL_MESSAGE_PAYLOAD.sub(" ", text)
     text = GH_LEADING_FLAGS.sub("gh", text)
     return text if keep_lines else compact(text)
 
@@ -484,10 +470,11 @@ class Word:
     def text(self) -> str:
         return "".join(self.parts)
 
-    def runnable(self) -> str:
-        """Quoted text that holds a substitution or a variable in command position, or ''."""
+    def runnable(self, lead: str = "") -> str:
+        """Quoted text that holds a substitution or a variable in command position, or ''. With `lead` a newline,
+        a variable at its start is in command position too."""
         quoted = "".join(self.quoted)
-        return quoted if not self.payload and RUNNABLE.search(quoted) else ""
+        return quoted if not self.payload and RUNNABLE.search(lead + quoted) else ""
 
 
 class Command:
@@ -916,13 +903,23 @@ class ShellReader:
         return "".join(out) + self.s[last:]
 
 
-def read_shell(text: str) -> tuple[ShellReader | None, str, str]:
+def read_shell(text: str, raw: str | None = None) -> tuple[ShellReader | None, str, str]:
     """The per-command reading of `text` after strict resolution, and the strict and loose resolved texts.
 
-    The reader is None when the text cannot be read; both texts are then `text` (I5).
+    The reader is None when the text cannot be read; both texts are then `text` (I5). `raw` is the text before
+    the message values were dropped: a dropped value may still name a variable (`unset -m 'D*'`), so what it
+    names, or sets unseen, blocks resolution too (I2).
     """
     try:
         first = ShellReader(text)
+        if raw is not None and raw != text:
+            try:
+                other = ShellReader(raw)
+            except Exception:  # unreadable with its messages: resolve nothing
+                other, first.dynamic = first, True
+            first.dynamic |= other.dynamic
+            for name, count in other.mentions.items():
+                first.mentions[name] = max(count, first.mentions.get(name, 0))
         strict, loose = first.resolved(), first.resolved(strict=False)
         return (first if strict == text else ShellReader(strict)), strict, loose
     except Exception:  # Unreadable, or a reader defect: never fail open through it (I5)
@@ -947,7 +944,10 @@ def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
         words = cmd.words + cmd.targets
         bodies = cmd.runnable + [body for body in cmd.written if runner and RUNNABLE.search(body)]
         own = cmd.target() if not bodies and cmd.target() in READ_PROGRAMS - RUNS_GIVEN_TEXT else ""
-        if (bodies or any(word.runnable() for word in words)) and STRUCTURAL_WORDS.search(" ".join(
+        # Quoted text for a program that is not a read program, or is unclear, may be a script (`xargs -I X sh -c`,
+        # `ssh host '$CLIENT cat x'`): a variable at its start is in command position.
+        lead = "" if cmd.target() in READ_PROGRAMS else "\n"
+        if (bodies or any(word.runnable(lead) for word in words)) and STRUCTURAL_WORDS.search(" ".join(
                 bodies + [word.text for word in words if Path(word.text).name.lower() != own]).lower()):
             return True
         program = cmd.program()
@@ -979,7 +979,7 @@ def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, st
     """The verdict for one Bash command. `sandboxed` is the settings-evidence signal (I6): the call runs
     sandboxed with reads of the protected paths blocked, so read programs skip the substitution ask."""
     text = normalize_command(command, keep_lines=True)
-    reader, resolved, loose = read_shell(text)
+    reader, resolved, loose = read_shell(text, strip_heredoc_bodies(command))
     texts = [text] if resolved == text else [text, resolved]
     lowered = [compact(t).lower() for t in texts]
 

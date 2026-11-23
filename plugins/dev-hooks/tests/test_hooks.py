@@ -347,9 +347,12 @@ class StructuralAskTest(unittest.TestCase):
             "{ declare -t 'D=./build'; }", "time typeset -m 'D*=./build'", "! unset -m 'D*'",
             "A=\"don't\" declare -t 'D=./build'", "A='x y' unset -m 'D*'", "A=\"x;y\" unset -m 'D*'",
             "S=unset; $S -m 'D*'", "$(echo unset) -m 'D*'"]])
+        self.assertDecisions(("ask", "ask"), ["D=/tmp/x; (declare -t 'D=./build'; rm -f \"$D/notes.txt\")",
+                                              "D=/tmp/x; S=declare; command -- \"$S\" -t 'D=./build'; rm -f \"$D/notes.txt\""])
         self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\"",
                                                   "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'",
-                                                  "A=\"don't\" git -C \"$DIR\" commit -m 'Never rm -rf the build'"])
+                                                  "A=\"don't\" git -C \"$DIR\" commit -m 'Never rm -rf the build'",
+                                                  "S=$TMPDIR/run; git commit -m 'Clean the cache'; rm -rf \"$S/old\""])
 
     def test_i3_text_another_program_runs_is_not_data(self):
         s = "$(printf %s x)"
@@ -365,12 +368,14 @@ class StructuralAskTest(unittest.TestCase):
             "python3 <<'EOF'\nimport subprocess\nsubprocess.run('cat `printf %s x`', shell=True)\nEOF",
             "node <<'EOF'\nrequire('child_process').execSync('cat `printf %s x`')\nEOF",
             f"perl <<'EOF'\nprint `cat {s}`;\nEOF", f"tee run.sh <<'EOF'\ncat \"{s}\"\nEOF\nsh run.sh",
+            "ssh example.com '$CLIENT cat notes.txt'", f"xargs -I X sh -c '$CLIENT cat \"$P\"'; echo \"{s}\"",
         ])
         self.assertDecisions(("ask", "allow"), [f"builtin eval 'cat \"{s}\"'", f"command eval 'cat \"{s}\"'"])
         self.assertDecisions(("allow", "allow"), [
             "awk '{print $1}' notes.txt", "sed '$d' notes.txt", f"ssh example.com '{s}'", "bash <<EOF\necho $(date)\nEOF",
             "gh issue comment 1 --body-file - <<'EOF'\nThe `cat` check passed.\nEOF",
             "python3 - <<'EOF'\nprint(\"Run `make test` before you push.\")\nEOF", "cat > notes.md <<'EOF'\nUse `cat`.\nEOF",
+            "awk '$1 > 0' notes.txt", "grep -n '$HOME' notes.txt",
         ])
 
     def test_i4_only_a_read_program_reached_through_its_wrappers_skips(self):
