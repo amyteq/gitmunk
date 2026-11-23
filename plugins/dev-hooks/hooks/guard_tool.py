@@ -7,7 +7,9 @@ Policy:
 - Allow normal development work without prompts.
 - Deny secret access and host- or history-destructive operations.
 - Ask only for irreversible operations (file deletion outside temp dirs,
-  git clean, destructive SQL, volume or remote database resets).
+  git clean, destructive SQL, volume or remote database resets), and when a
+  substitution decides what a gated command runs or reads. Read programs skip
+  that ask when the settings files prove the call runs sandboxed (`sandbox_signal`).
 
 Contract (Claude Code hooks):
   - stdin: JSON describing the tool call (tool_name, tool_input, ...).
@@ -313,7 +315,7 @@ def rm_targets_only_temp(command: str) -> bool:
     words = [Path(word).name for words in simple_commands(command) for word in words]
     if not calls or words.count("rm") != len(calls):
         return False  # an `rm` this reading did not resolve, such as `find -exec rm`
-    redefined = re.search(r"(?<![$\w{])TMPDIR(?!\w)", command) is not None
+    redefined = re.search(r"(?<![$\w{])(?:TMPDIR|IFS)(?!\w)", command) is not None  # IFS splits $TMPDIR
     for args in calls:
         targets = [arg for index, arg in enumerate(args) if not arg.startswith("-") or "--" in args[:index]]
         if not targets:
@@ -405,36 +407,651 @@ UNRESOLVED = re.compile(r"\$\(|`|[<>]\(|(?:^|[|;&\n(])\s*(?:\w+=\S*\s+)*[\"'\\]*
 LITERAL_SUBSTITUTION = re.compile(r"\$\(cat <<-?\s*'(?P<tag>[A-Za-z_]\w*)'\n\s*(?P=tag)\n\s*\)")
 
 
-def bash_decision(command: str) -> tuple[str | None, str | None]:
-    lc = normalize_command(command).lower()
+# --- per-command reading ------------------------------------------------------
+#
+# The substitution rule reads one simple command at a time (#61). This reader keeps
+# what the shlex reading above drops: single-quoted text and quoted heredoc bodies are
+# data, the command inside each substitution is a command of its own, and a variable
+# assigned a literal earlier in the same command resolves to that value. Text it cannot
+# parse raises Unreadable, and the caller keeps the whole-command rule.
+
+
+class Unreadable(ValueError):
+    """Shell text the per-command reader does not parse."""
+
+
+NAME = re.compile(r"[A-Za-z_]\w*")
+# A value that stays one literal word. A leading $TMPDIR stays in the text, so that
+# rm_targets_only_temp resolves it with the hook's own value, as it always has.
+LITERAL_VALUE = re.compile(r"(?:\$TMPDIR|\$\{TMPDIR\})(?:/[^\s$`'\"*?\[\\#(){}<>]*)?|[^\s$`'\"*?\[\\#(){}<>]*")
+# Names bash or zsh set on their own (`cd`, `read`, every command), or that refuse an assignment.
+SHELL_VARIABLES = {"_", "pwd", "oldpwd", "reply", "random", "srandom", "seconds", "lineno", "histcmd", "optarg",
+                   "optind", "mapfile", "match", "mbegin", "mend", "coproc", "pipestatus", "dirstack", "groups",
+                   "funcname", "uid", "euid", "gid", "egid", "ppid", "status", "argv", "argc", "errno", "username",
+                   "shlvl", "epochseconds", "epochrealtime"}
+SHELL_PREFIXES = ("bash_", "zsh_", "try_block_", "comp_", "readline_")
+SEPARATORS = ("&&", "||", ";;", "|&", ";", "&", "|")
+REDIRECTION = re.compile(r"\d*(?:<<<|<<-|<<|<>|<&|>&|>>|>\||<|>)|&>>?")
+KEYWORDS = SHELL_KEYWORDS | {"for", "select", "function"}
+COMPOUND_OPEN, COMPOUND_CLOSE = {"if", "while", "until", "for", "select", "{"}, {"fi", "done", "}"}
+STRUCTURAL_PROGRAMS = READ_PROGRAMS | TRANSFER_PROGRAMS | {"rm"}
+SHELL_RUNNERS = SHELLS | {"eval", "source", "."}
+# Builtins that can set a variable without naming it in the text; with one, nothing resolves.
+RUNS_TEXT = {"eval", "source", ".", "trap"}
+NAME_SETTERS = {"declare", "typeset", "local", "readonly", "export", "read", "mapfile", "readarray", "getopts",
+                "unset", "let"}
+SUBSTITUTION_REASON = "A substitution or variable decides what this command runs or reads; spell it out literally."
+
+
+class Word:
+    """One shell word: its unquoted text, with each substitution shown as `$(…)`."""
+
+    def __init__(self, start: int):
+        self.start = self.end = start
+        self.parts: list[str] = []
+        self.code: list[str] = []  # text outside quotes and expansions, where a variable can be named
+        self.names: list[str] = []  # what follows each `$`
+        self.subst = self.expands = False
+
+    @property
+    def text(self) -> str:
+        return "".join(self.parts)
+
+
+class Command:
+    """One simple command: its words, its redirection targets and its pipeline."""
+
+    def __init__(self, reader: ShellReader, start: int, pipeline: list[Command]):
+        self.reader, self.start, self.pipeline = reader, start, pipeline
+        self.words: list[Word] = []
+        self.targets: list[Word] = []
+        self.body_subst = False  # an unquoted heredoc body it reads holds a substitution
+        self.source = ""
+
+    def program(self) -> Word | None:
+        return next((w for w in self.words if w.text not in KEYWORDS and not ASSIGNMENT.match(w.text)), None)
+
+    def runs(self) -> list[str]:
+        """Base names of the program and, after a wrapper, of every later word."""
+        program = self.program()
+        if program is None:
+            return []
+        names = [Path(word.text).name for word in self.words[self.words.index(program):]]
+        names[0] = names[0].lower()
+        return names if names[0] in WRAPPERS else names[:1]
+
+
+class ShellReader:
+    """The simple commands of a shell text, and the variables it assigns, names and uses."""
+
+    def __init__(self, text: str, depth: int = 0):
+        self.s = text
+        self.commands: list[Command] = []
+        self.uses: list[tuple[int, int, str]] = []  # (start, stop, name) of `$NAME` and `${NAME}`
+        self.assigned: dict[str, list[tuple[str, int, bool]]] = {}  # name -> (raw value, end, eligible)
+        self.mentions: dict[str, int] = {}  # bare names outside quotes, lowercased (zsh ties `path` to PATH)
+        self.dynamic = False  # something may set a variable without naming it
+        self.compound = self.quiet = 0
+        self.pending: list[tuple[str, bool, bool, Command]] = []  # heredocs waiting for a newline
+        self.read_list(0, None, len(text), depth)
+        if self.pending:
+            raise Unreadable("a heredoc has no body")
+
+    def mention(self, text: str) -> None:
+        for name in NAME.findall(text):
+            self.mentions[name.lower()] = self.mentions.get(name.lower(), 0) + 1
+
+    def use(self, name: str, start: int, stop: int) -> None:
+        if not self.quiet:
+            self.uses.append((start, stop, name))
+
+    def read_list(self, i: int, close: str | None, end: int, depth: int) -> int:
+        """Read commands from `i` up to `close` (`)` or a backtick) or `end`; return the index after them."""
+        if depth > 30:
+            raise Unreadable("nested too deep")
+        s, cmd, pipeline, before = self.s, None, [], None
+        while True:
+            while i < end and (s[i] in " \t\r" or s.startswith("\\\n", i)):
+                i += 2 if s[i] == "\\" else 1
+            if i >= end or (close and s.startswith(close, i)):
+                if close and i >= end:
+                    raise Unreadable(f"unclosed {close}")
+                self.finish(cmd, i, before, None, depth)
+                return i + 1 if close else i
+            char = s[i]
+            separator = next((op for op in SEPARATORS if s.startswith(op, i)), None)
+            redirection = None if s.startswith(("<(", ">("), i) else REDIRECTION.match(s, i)
+            if char == "#":
+                newline = s.find("\n", i, end)
+                i = end if newline < 0 else newline
+            elif char == "\n":
+                joined = cmd is None and before in ("|", "|&", "&&", "||")  # the list goes on after the line
+                if not joined:
+                    self.finish(cmd, i, before, "\n", depth)
+                    cmd, pipeline, before = None, [], "\n"
+                i = self.read_bodies(i + 1, end, depth, joined)
+            elif char == ")":
+                raise Unreadable("unmatched )")
+            elif char == "(":
+                cmd = cmd or Command(self, i, pipeline)
+                if s.startswith("((", i) and not cmd.words:
+                    i = self.read_arithmetic(i + 2, end, close, depth)
+                else:
+                    i = self.read_list(i + 1, ")", end, depth + 1)
+            elif redirection:
+                cmd = cmd or Command(self, i, pipeline)
+                i = redirection.end()
+                while i < end and s[i] in " \t":
+                    i += 1
+                if i >= end or s[i] in "\n;&|()":
+                    raise Unreadable("a redirection has no target")
+                i, target = self.read_word(i, end, close, depth)
+                cmd.targets.append(target)
+                if redirection.group().endswith(("<<", "<<-")):
+                    quoted = any(mark in s[target.start:target.end] for mark in "'\"\\")
+                    self.pending.append((target.text, quoted, redirection.group().endswith("-"), cmd))
+            elif separator:
+                if separator == ";;":
+                    raise Unreadable("case")
+                self.finish(cmd, i, before, separator, depth)
+                cmd, before = None, separator
+                pipeline = pipeline if separator in ("|", "|&") else []
+                i += len(separator)
+            else:
+                cmd = cmd or Command(self, i, pipeline)
+                i, word = self.read_word(i, end, close, depth)
+                cmd.words.append(word)
+
+    def finish(self, cmd: Command | None, i: int, before: str | None, after: str | None, depth: int) -> None:
+        """Record a finished simple command: its assignment, nesting and any payload it runs."""
+        if cmd is None:
+            return
+        cmd.source = self.s[cmd.start:i]
+        cmd.pipeline.append(cmd)
+        self.commands.append(cmd)
+        texts = [word.text for word in cmd.words]
+        lead = next((n for n, text in enumerate(texts) if text not in KEYWORDS), len(texts))
+        self.compound += sum(text in COMPOUND_OPEN for text in texts[:lead]) + texts[lead:].count("{") \
+            - sum(text in COMPOUND_CLOSE for text in texts[:lead])
+        if len(cmd.words) == 1 and not cmd.targets:
+            word = cmd.words[0]
+            name, equals, value = self.s[word.start:word.end].partition("=")
+            if equals and NAME.fullmatch(name):
+                # I2: a standalone assignment that always runs, in this shell, before what follows.
+                eligible = depth == 0 and self.compound == 0 and before in (None, ";", "\n") \
+                    and after in (None, ";", "\n", "&&", "||")
+                self.assigned.setdefault(name, []).append((value, i, eligible))
+        program = cmd.program()
+        if program is None:
+            return
+        if program.text == "case":
+            raise Unreadable("case")
+        start, runs = cmd.words.index(program), cmd.runs()
+        operands = cmd.words[start + 1:]
+        if set(runs) & RUNS_TEXT or (set(runs) & NAME_SETTERS or "printf" in runs and "-v" in texts) \
+                and any(word.expands for word in operands):
+            self.dynamic = True
+        # The payload of `eval` and `sh -c`, as `invocations` reads them.
+        if runs[0] == "eval":
+            self.read_payload(" ".join(word.text for word in operands), depth)
+        for k in range(start, len(cmd.words) if runs[0] in WRAPPERS else start + 1):
+            if Path(cmd.words[k].text).name in SHELLS:
+                flag = next((j for j in range(k + 1, len(cmd.words) - 1)
+                             if re.fullmatch(r"-[a-z]*c[a-z]*", cmd.words[j].text)), None)
+                if flag is not None:
+                    self.read_payload(cmd.words[flag + 1].text, depth)
+                break
+
+    def read_payload(self, text: str, depth: int) -> None:
+        child = ShellReader(text, depth + 1)
+        self.commands.extend(child.commands)
+        self.dynamic |= child.dynamic  # what the payload sets only ever blocks resolution here
+        for name, count in child.mentions.items():
+            self.mentions[name] = self.mentions.get(name, 0) + count
+
+    def read_bodies(self, i: int, end: int, depth: int, joined: bool) -> int:
+        """Read the heredoc bodies that start after a newline; return the index after the last one."""
+        s = self.s
+        while self.pending:
+            delimiter, quoted, tabs, owner = self.pending.pop(0)
+            start = i
+            while True:
+                if i >= end:
+                    raise Unreadable("unterminated heredoc")
+                newline = s.find("\n", i, end)
+                stop = end if newline < 0 else newline
+                if (s[i:stop].lstrip("\t") if tabs else s[i:stop]) == delimiter:
+                    body_end, i = i, min(stop + 1, end)
+                    break
+                i = stop + 1
+            runs_shell = joined or any(
+                set(c.runs()) & SHELL_RUNNERS or (c.program() is not None and c.program().expands)
+                for c in owner.pipeline)
+            if runs_shell:  # a shell runs the body, so its commands are commands
+                waiting, self.pending = self.pending, []
+                self.quiet += quoted  # the outer shell does not expand a quoted body
+                self.read_list(start, None, body_end, depth + 1)
+                self.quiet -= quoted
+                if self.pending:
+                    raise Unreadable("a heredoc inside a heredoc body")
+                self.pending = waiting
+            elif not quoted:  # data, but the shell still expands it
+                word = Word(start)
+                while start < body_end:
+                    if s[start] == "\\":
+                        start += 2
+                    elif s[start] in "$`":
+                        start = self.read_expansion(start, body_end, None, depth, word)
+                    else:
+                        start += 1
+                owner.body_subst |= word.subst
+        return i
+
+    def read_word(self, i: int, end: int, close: str | None, depth: int) -> tuple[int, Word]:
+        s, word = self.s, Word(i)
+        while i < end:
+            char = s[i]
+            if char in " \t\r\n;&|()" or char == close:
+                break
+            if char in "<>":
+                if not s.startswith("(", i + 1):
+                    break
+                i = self.read_list(i + 2, ")", end, depth + 1)
+                word.parts.append(char + "(…)")
+                word.subst = word.expands = True
+            elif char == "\\":
+                if not s.startswith("\n", i + 1):
+                    word.parts.append(s[i + 1:i + 2])
+                    word.code.append(s[i + 1:i + 2])
+                i += 2
+            elif char == "'":
+                stop = s.find("'", i + 1, end)
+                if stop < 0:
+                    raise Unreadable("unclosed '")
+                word.parts.append(s[i + 1:stop])
+                i = stop + 1
+            elif char == '"':
+                i = self.read_double(i + 1, end, close, depth, word)
+            elif s.startswith("$'", i):
+                stop = i + 2
+                while stop < end and s[stop] != "'":
+                    stop += 2 if s[stop] == "\\" else 1
+                if stop >= end:
+                    raise Unreadable("unclosed $'")
+                word.parts.append(s[i + 2:stop])
+                i = stop + 1
+            elif char in "$`":
+                i = self.read_expansion(i, end, close, depth, word)
+            else:
+                word.parts.append(char)
+                word.code.append(char)
+                i += 1
+        word.end = i
+        self.mention("".join(word.code))
+        return i, word
+
+    def read_double(self, i: int, end: int, close: str | None, depth: int, word: Word) -> int:
+        s = self.s
+        while i < end:
+            char = s[i]
+            if char == '"':
+                return i + 1
+            if char == "\\" and s[i + 1:i + 2] in ("$", "`", '"', "\\", "\n"):
+                word.parts.append(s[i + 1].replace("\n", ""))
+                i += 2
+            elif char == "`" and close == "`":
+                raise Unreadable("a backtick inside quotes inside backticks")
+            elif char in "$`":
+                i = self.read_expansion(i, end, close, depth, word)
+            else:
+                word.parts.append(char)
+                word.code.append(char)
+                i += 1
+        raise Unreadable('unclosed "')
+
+    def read_expansion(self, i: int, end: int, close: str | None, depth: int, word: Word) -> int:
+        """Read the `$…` or backtick expansion at `i` into `word`; return the index after it."""
+        s = self.s
+        if s[i] == "`":
+            if close == "`":
+                raise Unreadable("nested backticks")
+            i = self.read_list(i + 1, "`", end, depth + 1)
+            word.parts.append("$(…)")
+            word.subst = word.expands = True
+            return i
+        if s.startswith("$((", i):
+            word.parts.append("$((…))")
+            word.expands = True
+            return self.read_arithmetic(i + 3, end, close, depth)
+        if s.startswith("$(", i):
+            literal = LITERAL_SUBSTITUTION.match(s, i)
+            if literal:  # the closed literal form, its body already removed as data
+                word.parts.append(" ")
+                return literal.end()
+            i = self.read_list(i + 2, ")", end, depth + 1)
+            word.parts.append("$(…)")
+            word.subst = word.expands = True
+            return i
+        if s.startswith("${", i):
+            return self.read_parameter(i, end, close, depth, word)
+        name = NAME.match(s, i + 1)
+        if name:
+            self.use(name.group(), i, name.end())
+        elif s[i + 1:i + 2] == '"':
+            return i + 1  # `$"…"` is a quoted string
+        elif not (s[i + 1:i + 2] and s[i + 1] in "@*#?$!-0123456789"):
+            word.parts.append("$")  # a lone `$` is literal
+            return i + 1
+        stop = name.end() if name else i + 2
+        word.names.append(s[i + 1:stop])
+        word.parts.append(s[i:stop])
+        word.expands = True
+        return stop
+
+    def read_parameter(self, i: int, end: int, close: str | None, depth: int, word: Word) -> int:
+        """Read `${…}`: a plain `${NAME}` is a use; with an operator, NAME is also mentioned, as it may assign."""
+        s, start = self.s, i
+        i += 2
+        while i < end:
+            char = s[i]
+            if char == "}":
+                content = s[start + 2:i]
+                lead = NAME.match(content)
+                if lead and lead.end() == len(content):
+                    self.use(content, start, i + 1)
+                elif lead:
+                    self.mention(lead.group())
+                word.names.append(lead.group() if lead else content[:1])
+                word.parts.append(s[start:i + 1])
+                word.expands = True
+                return i + 1
+            if char == "\\":
+                i += 2
+            elif char == "'":
+                stop = s.find("'", i + 1, end)
+                if stop < 0:
+                    raise Unreadable("unclosed '")
+                i = stop + 1
+            elif char in "\"$`":
+                inner = Word(i)
+                i = self.read_double(i + 1, end, close, depth, inner) if char == '"' else \
+                    self.read_expansion(i, end, close, depth, inner)
+                word.subst |= inner.subst
+            elif char == close:
+                break
+            else:
+                i += 1
+        raise Unreadable("unclosed ${")
+
+    def read_arithmetic(self, i: int, end: int, close: str | None, depth: int) -> int:
+        """Read an arithmetic body up to its `))`; an expansion in it may name a variable it assigns."""
+        s, start, level = self.s, i, 0
+        while i < end:
+            char = s[i]
+            if char in "$`":
+                self.dynamic = True
+                i = self.read_expansion(i, end, close, depth, Word(i))
+                continue
+            if char in "'\"\\" or char == close:
+                break
+            if char == "(":
+                level += 1
+            elif char == ")":
+                if level == 0:
+                    if not s.startswith("))", i):
+                        break
+                    self.mention(s[start:i])
+                    return i + 2
+                level -= 1
+            i += 1
+        raise Unreadable("unclosed ((")
+
+    def resolved(self, strict: bool = True) -> str:
+        """The text with variable uses replaced by assigned values.
+
+        Strict (I2): only the one standalone literal assignment of a name that nothing else in the
+        command mentions, earlier in the same top-level sequence, and only when nothing may set a
+        variable unseen. Loose: the latest earlier standalone assignment, for deny checks only.
+        """
+        if strict and (self.dynamic or "ifs" in self.mentions):
+            return self.s
+        out, last = [], 0
+        for start, stop, name in sorted(self.uses):
+            earlier = [entry for entry in self.assigned.get(name, []) if entry[1] <= start]
+            if start < last or not earlier:
+                continue
+            value, _, eligible = earlier[-1]
+            if strict and not (eligible and name.lower() not in SHELL_VARIABLES | {"tmpdir"}
+                               and not name.lower().startswith(SHELL_PREFIXES) and len(self.assigned[name]) == 1
+                               and self.mentions.get(name.lower()) == 1 and LITERAL_VALUE.fullmatch(value)):
+                continue
+            out += [self.s[last:start], value]
+            last = stop
+        return "".join(out) + self.s[last:]
+
+
+def read_shell(text: str) -> tuple[ShellReader | None, str, str]:
+    """The per-command reading of `text` after strict resolution, and the strict and loose resolved texts.
+
+    The reader is None when the text cannot be read; both texts are then `text` (I5).
+    """
+    try:
+        first = ShellReader(text)
+        strict, loose = first.resolved(), first.resolved(strict=False)
+        return (first if strict == text else ShellReader(strict)), strict, loose
+    except Exception:  # Unreadable, or a reader defect: never fail open through it (I5)
+        return None, text, text
+
+
+def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
+    """I3 and I4: one simple command at a time, does a substitution decide what a gated command runs or reads?"""
+    words = [word for cmd in reader.commands for word in cmd.words + cmd.targets]
+    if any(word.subst for word in words) or any(cmd.body_subst for cmd in reader.commands):
+        # A variable the text sets, while a substitution runs somewhere in it, may carry that
+        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one.
+        for word in words:
+            word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower())
+                              for name in word.names)
+    for cmd in reader.commands:
+        program = cmd.program()
+        if program is None:
+            continue
+        if program.expands:
+            # A variable or substitution in command position. The gated words of its pipeline count,
+            # or of the whole text when the command also sets that variable or may set it unseen.
+            owner = cmd.reader
+            whole = owner is not reader or owner.dynamic or any(
+                not NAME.fullmatch(name) or owner.mentions.get(name.lower()) for name in program.names)
+            scope = reader.s if whole else " ".join(c.source for c in cmd.pipeline)
+            found = set(STRUCTURAL_WORDS.findall(scope.lower()))
+        elif cmd.body_subst or any(word.subst for word in cmd.words + cmd.targets):
+            names = {Path(word.text).name for word in cmd.words[cmd.words.index(program):]}
+            names.add(Path(program.text).name.lower())
+            found = names & STRUCTURAL_PROGRAMS | ({"push"} if {"git", "push"} <= names else set())
+        else:
+            continue
+        # I4: only a command whose gated words are all read programs skips; an unresolved program may be any.
+        if found and not (sandboxed and not program.expands and found <= READ_PROGRAMS):
+            return True
+    return False
+
+
+def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, str | None]:
+    """The verdict for one Bash command. `sandboxed` is the settings-evidence signal (I6): the call runs
+    sandboxed with reads of the protected paths blocked, so read programs skip the substitution ask."""
     text = normalize_command(command, keep_lines=True)
+    reader, resolved, loose = read_shell(text)
+    texts = [text] if resolved == text else [text, resolved]
+    lowered = [compact(t).lower() for t in texts]
 
     for pattern, reason in DENY_PATTERNS:
-        if re.search(pattern, lc, flags=re.IGNORECASE):
+        if any(re.search(pattern, lc, flags=re.IGNORECASE) for lc in lowered):
             return "deny", reason
-
-    try:
-        decision = push_decision(text)
-        if decision[0]:
-            return decision
-        if protected_operand(text, READ_PROGRAMS):
+    try:  # a protected path that reaches a read or transfer program through any assigned variable
+        if loose != text and protected_operand(loose, READ_PROGRAMS):
             return "deny", "Refusing shell read of protected secrets."
-        if protected_operand(text, TRANSFER_PROGRAMS):
+        if loose != text and protected_operand(loose, TRANSFER_PROGRAMS):
             return "deny", "Refusing shell exfiltration/metadata access pattern."
-        removes_outside_temp = re.search(r"\brm\b", lc) and not rm_targets_only_temp(text)
     except ValueError:
-        if STRUCTURAL_WORDS.search(lc):
+        pass  # the loose reading only ever adds denies
+
+    structural = set().union(*(STRUCTURAL_WORDS.findall(lc) for lc in lowered))
+    reads_only = sandboxed and structural <= READ_PROGRAMS
+    try:
+        decisions = [push_decision(t) for t in texts]
+        decision = next((d for wanted in ("deny", "ask") for d in decisions if d[0] == wanted), None)
+        if decision:
+            return decision
+        if any(protected_operand(t, READ_PROGRAMS) for t in texts):
+            return "deny", "Refusing shell read of protected secrets."
+        if any(protected_operand(t, TRANSFER_PROGRAMS) for t in texts):
+            return "deny", "Refusing shell exfiltration/metadata access pattern."
+        removes_outside_temp = "rm" in structural and not rm_targets_only_temp(resolved)
+    except ValueError:
+        if structural and not reads_only:
             return "ask", "This command's quoting cannot be read safely; split or simplify it."
         removes_outside_temp = False
-    if STRUCTURAL_WORDS.search(lc) and UNRESOLVED.search(LITERAL_SUBSTITUTION.sub(" ", text)):
-        return "ask", "A substitution or variable decides what this command runs or reads; spell it out literally."
+    if reader is None:  # the per-command reader cannot parse it: the whole-command rule (I5)
+        if structural and UNRESOLVED.search(LITERAL_SUBSTITUTION.sub(" ", text)):
+            return "ask", SUBSTITUTION_REASON
+    elif structural_ask(reader, sandboxed):
+        return "ask", SUBSTITUTION_REASON
     if removes_outside_temp:
         return "ask", "File deletion outside /tmp or $TMPDIR requires approval."
     for pattern, reason in ASK_PATTERNS:
-        if re.search(pattern, lc, flags=re.IGNORECASE):
+        if any(re.search(pattern, lc, flags=re.IGNORECASE) for lc in lowered):
             return "ask", reason
 
     return None, None
+
+
+# --- settings evidence (I6) ---------------------------------------------------
+#
+# The hook input does not say whether a call runs sandboxed. The signal is on only when the settings
+# files the hook can read prove it: the sandbox is on and must start, nothing exempts this call, and
+# reads of every protected path in the home and project directories are blocked. Anything missing,
+# unreadable or of an unexpected type turns it off.
+
+MANAGED_DIRS = {"linux": "/etc/claude-code", "darwin": "/Library/Application Support/ClaudeCode"}
+# The 11 protected names; joined to the home and project directories they give the 22 required paths.
+REQUIRED_NAMES = sorted({fragment.strip("/") for fragment in PROTECTED_FRAGMENTS} | PROTECTED_NAMES)
+SWITCHES = {"enabled", "failIfUnavailable", "enableWeakerNestedSandbox", "filesystem.disabled"}
+
+
+class NoEvidence(Exception):
+    """The settings files do not prove that the call runs sandboxed."""
+
+
+def require(condition: object) -> None:
+    if not condition:
+        raise NoEvidence
+
+
+def strings(value: object) -> list[str]:
+    require(isinstance(value, list) and all(isinstance(item, str) for item in value))
+    return value
+
+
+def sandbox_settings(path: str) -> dict:
+    """The `sandbox` object of one settings file; {} when there is no file."""
+    if not os.path.lexists(path):
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        settings = json.load(handle)
+    require(isinstance(settings, dict))
+    sandbox = settings.get("sandbox", {})
+    require(isinstance(sandbox, dict) and all(isinstance(sandbox.get(key, {}), dict)
+                                              for key in ("filesystem", "credentials")))
+    return sandbox
+
+
+def settings_files(env, platform: str, managed_dir: str | None) -> tuple[str, str, list[str]]:
+    """The home and project directories, and the settings files from lowest to highest precedence."""
+    home, project, config = env.get("HOME"), env.get("CLAUDE_PROJECT_DIR"), env.get("CLAUDE_CONFIG_DIR")
+    require(platform in MANAGED_DIRS and all(isinstance(p, str) and os.path.isabs(p) for p in (home, project)))
+    require(config is None or os.path.isabs(config))
+    home, project = os.path.normpath(home), os.path.normpath(project)
+    managed = managed_dir or MANAGED_DIRS[platform]
+    drop_ins = os.path.join(managed, "managed-settings.d")
+    names = sorted(os.listdir(drop_ins)) if os.path.lexists(drop_ins) else []
+    require(not any(name.startswith(".") and name.endswith(".json") for name in names))  # read or skipped?
+    return home, project, [
+        os.path.join(config or os.path.join(home, ".claude"), "settings.json"),
+        os.path.join(project, ".claude", "settings.json"),
+        os.path.join(project, ".claude", "settings.local.json"),
+        os.path.join(managed, "managed-settings.json"),
+    ] + [os.path.join(drop_ins, name) for name in names if name.endswith(".json")]
+
+
+def absolute(entry: str, home: str) -> str | None:
+    """A sandbox path entry as a normalised absolute path; None for a glob or a relative entry."""
+    if entry == "~" or entry.startswith("~/"):
+        entry = home + entry[1:]
+    if re.search(r"[*?\[{]", entry) or not entry.startswith("/"):
+        return None
+    return "/" + os.path.normpath(entry).lstrip("/")
+
+
+def within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def call_programs(command: str) -> set[str]:
+    """Every program the call may run, as written and by base name, case-folded."""
+    programs = set()
+    for cmd in ShellReader(normalize_command(command, keep_lines=True)).commands:
+        program = cmd.program()
+        if program is None:
+            continue
+        words = cmd.words[cmd.words.index(program):]
+        words = words if Path(program.text).name.lower() in WRAPPERS else words[:1]
+        require(not any(word.expands for word in words))
+        programs |= {name.casefold() for word in words for name in (word.text, Path(word.text).name)}
+    return programs
+
+
+def sandbox_signal(tool_input: dict, env, platform: str, managed_dir: str | None = None) -> bool:
+    """I6: True only when the settings files prove that this Bash call runs sandboxed with reads of the
+    22 required paths blocked. Missing evidence, a doubt or any error gives False."""
+    try:
+        require(tool_input.get("dangerouslyDisableSandbox", False) is False)
+        home, project, paths = settings_files(env, platform, managed_dir)
+        switches, deny, allow, excluded = {}, [], [], []
+        for path in paths:  # a later file overrides a switch; lists add up
+            sandbox = sandbox_settings(path)
+            filesystem = sandbox.get("filesystem", {})
+            for key, value in [*sandbox.items(), *(("filesystem." + k, v) for k, v in filesystem.items())]:
+                if key in SWITCHES:
+                    require(isinstance(value, bool))
+                    switches[key] = value
+            deny += strings(filesystem.get("denyRead", []))
+            allow += strings(filesystem.get("allowRead", []))
+            excluded += strings(sandbox.get("excludedCommands", []))
+            files = sandbox.get("credentials", {}).get("files", [])
+            require(isinstance(files, list) and all(isinstance(f, dict) and isinstance(f.get("path"), str)
+                                                    for f in files))
+            deny += [f["path"] for f in files if f.get("mode") == "deny"]  # a mask may let the real file through
+        require(switches.get("enabled") is True and switches.get("failIfUnavailable") is True)
+        require(not switches.get("filesystem.disabled") and not switches.get("enableWeakerNestedSandbox"))
+        if excluded:
+            programs = call_programs(tool_input.get("command") or "")
+            for entry in excluded:
+                lead = (entry.split() or [""])[0]
+                require(lead and not re.search(r"[*?\[]", lead))
+                require(not {lead.casefold(), Path(lead).name.casefold()} & programs)
+        cover = [path for path in (absolute(entry, home) for entry in deny) if path]
+        reopened = [absolute(entry, home) for entry in allow]
+        require(None not in reopened)
+        reopened = [path.casefold() for path in reopened]
+        for path in (os.path.join(base, name) for base in (home, project) for name in REQUIRED_NAMES):
+            folded = path.casefold()
+            # Covered by a deny that no allow equal to, beneath, or between it and the path re-opens.
+            require(any(within(path, root) and not any(
+                within(other, folded) or within(folded, other) and within(other, root.casefold())
+                for other in reopened) for root in cover))
+        return True
+    except Exception:
+        return False
 
 
 def main() -> int:
@@ -449,7 +1066,11 @@ def main() -> int:
             return 0
 
     if tool == "Bash":
-        decision, reason = bash_decision(tool_input.get("command") or "")
+        command = tool_input.get("command") or ""
+        decision, reason = bash_decision(command)
+        # The signal only ever relaxes an ask, so the settings files are read only for one.
+        if decision == "ask" and sandbox_signal(tool_input, os.environ, sys.platform):
+            decision, reason = bash_decision(command, sandboxed=True)
         if decision and reason:
             emit(decision, reason)
     return 0

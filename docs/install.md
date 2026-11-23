@@ -201,6 +201,73 @@ codex plugin marketplace remove gitmunk
 
 `codex plugin remove` also deletes the plugin's cached folder, `node_modules` included.
 
+## Fewer prompts
+
+One account was measured for 48 hours: 183 Claude Code sessions in `auto` mode, with the Bash sandbox on. 299 tool calls stopped for a human answer, and three quarters of them were `dev-hooks` asks. Every one of those asks was approved, so they added friction and caught nothing (#61):
+
+| Source of the prompt | Prompts |
+| --- | --- |
+| `dev-hooks`: "A substitution or variable decides what this command runs or reads" | 194 |
+| `dev-hooks`: "File deletion outside /tmp or $TMPDIR", for a variable holding a temp path | 21 |
+| `dev-hooks`: quoting it could not read, in long scripts | 7 |
+| `dev-hooks`: a push with `git -c` | 1 |
+| A user `ask` rule `Bash(rm *)`, mostly for `$TMPDIR` scratch | 38 |
+| A user `ask` rule `Bash(gh release*)`, for read-only calls | 15 |
+| A project `ask` rule for a paid run, half of them for a `grep` of its literal string | 19 |
+| `EnterWorktree` outside `.claude/worktrees` | 2 |
+
+User-level hooks that pointed at project files also failed 13,051 times in the same window.
+
+`dev-hooks` 0.2.2 handles the first three rows itself. It reads each simple command on its own, resolves a variable assigned a literal earlier in the same command (`S=$TMPDIR/run; cat $S/a.log`), and skips the ask for read programs when the settings show that the call runs sandboxed. For the rest:
+
+- **Keep `auto` mode.** It ran 98% of the measured calls without a prompt; the other modes prompt more, deny instead of asking, or drop the classifier.
+- **Remove user-level hooks that point at project files.** A hook in `~/.claude/settings.json` that runs `"$CLAUDE_PROJECT_DIR"/.claude/hooks/check.py` fails with exit 127 or 126 in every project without that file. Declare it in that project's `.claude/settings.json`, or ship it in a plugin.
+- **Narrow broad `ask` rules.** `Bash(gh release*)` also stops `gh release list` and `gh release view`. Ask for the writes only: `Bash(gh release create *)`, `Bash(gh release delete *)`, `Bash(gh release upload *)` and `Bash(gh release edit *)`. A rule for a paid run should match the command that starts it, not every `grep` for its name.
+- **Leave `rm` asks to the hook.** With `dev-hooks` installed, drop a `Bash(rm *)` ask rule. The hook asks before deletion outside `/tmp` and `$TMPDIR` and allows temp paths, also through a variable assigned one earlier in the same command.
+
+### When the read skip applies
+
+The hook input does not say whether a call runs sandboxed, so `dev-hooks` reads the settings files the hook can see: the user file (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`), the project's `.claude/settings.json` and `.claude/settings.local.json`, and the managed `managed-settings.json` and `managed-settings.d/*.json` in `/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode` (macOS). It skips the substitution ask for `cat`, `head`, `grep` and the other read programs only when all of these hold, and asks as before otherwise:
+
+- The platform is Linux or macOS, and the call does not set `dangerouslyDisableSandbox`.
+- `HOME` and `CLAUDE_PROJECT_DIR` are absolute paths, and so is `CLAUDE_CONFIG_DIR` when it is set.
+- Every settings file that exists is valid JSON with an object where the settings expect one.
+- After precedence (managed over local over project over user, and the last `managed-settings.d` file over the earlier managed ones), `sandbox.enabled` and `sandbox.failIfUnavailable` are `true`, and neither `sandbox.filesystem.disabled` nor `sandbox.enableWeakerNestedSandbox` is `true`. A value that is not `true` or `false` counts against.
+- No `sandbox.excludedCommands` entry starts with a program the call runs. An entry that starts with a wildcard counts as every program.
+- Reads are denied for each of the 22 protected paths: `secrets`, `.ssh`, `.aws`, `.config/gcloud`, `.config/gh/hosts.yml`, `.netrc`, `id_rsa`, `id_ed25519`, `.env.production`, `.env.test` and `hosts.yml`, under the home directory and under the project directory. A `sandbox.filesystem.denyRead` entry, or a `sandbox.credentials.files` entry with `"mode": "deny"`, covers the path itself and everything beneath it. Only an absolute or `~/` entry without wildcards counts. An `allowRead` entry equal to a protected path, beneath it, or between it and its deny re-opens it, and an `allowRead` entry with a wildcard or a relative path turns the skip off.
+
+For example, the home paths in `~/.claude/settings.json`:
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "denyRead": ["~/secrets", "~/.ssh", "~/.aws", "~/.config/gcloud", "~/.config/gh/hosts.yml", "~/.netrc",
+                   "~/id_rsa", "~/id_ed25519", "~/.env.production", "~/.env.test", "~/hosts.yml"]
+    }
+  }
+}
+```
+
+and the project paths, which must be absolute, in the project's `.claude/settings.local.json`, since an absolute path belongs to one machine:
+
+```json
+{
+  "sandbox": {
+    "filesystem": {
+      "denyRead": ["/path/to/project/secrets", "/path/to/project/.ssh", "/path/to/project/.aws",
+                   "/path/to/project/.config/gcloud", "/path/to/project/.config/gh/hosts.yml",
+                   "/path/to/project/.netrc", "/path/to/project/id_rsa", "/path/to/project/id_ed25519",
+                   "/path/to/project/.env.production", "/path/to/project/.env.test", "/path/to/project/hosts.yml"]
+    }
+  }
+}
+```
+
+The hook cannot see `--settings`, `--setting-sources`, server-managed settings or macOS managed preferences. If you start Claude Code with one of them, make sure it does not loosen what the files say. The [`dev-hooks` README](../plugins/dev-hooks/README.md#failure-policy) lists the rules that keep their checks with the skip on.
+
 ## Troubleshooting
 
 **A skill's name clashes with another plugin's skill.** Claude Code shows a skill by its bare name, such as `/dev-review-pr`, unless another installed skill has the same name. Call it with the plugin prefix instead: `/dev-skills:dev-review-pr`. Codex always shows the prefix, as `dev-skills:dev-review-pr`.
