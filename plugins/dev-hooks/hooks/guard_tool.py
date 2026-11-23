@@ -116,7 +116,7 @@ INTERPRETERS = {
 
 # A word in command position: start, or after a pipe/separator/substitution,
 # optionally preceded by VAR=value assignments; quotes and backslashes around it do not hide it.
-COMMAND_POSITION = re.compile(r"(?:^|[|;&\n(]|`)\s*(?:\w+=\S+\s+)*[\"'\\]*(?P<program>[\w./-]+)")
+COMMAND_POSITION = re.compile(r"(?:^|[|;&\n(]|`)\s*(?:\w+=\S+\s+)*[\"'\\]*(?P<program>[\w./${}`-]+)")
 
 # The literal value of a message-carrying flag. Single quotes never expand; double
 # quotes count only without `$`, backtick or backslash, so a payload that could
@@ -176,7 +176,7 @@ def strip_heredoc_bodies(command: str) -> str:
         if index < len(lines):
             kept.append(lines[index])
             index += 1
-    return "\n".join(kept)
+    return command if any("$" in p or "`" in p for p in COMMAND_POSITION.findall("\n".join(kept))) else "\n".join(kept)
 
 
 def normalize_command(command: str, keep_lines: bool = False) -> str:
@@ -603,7 +603,7 @@ class ShellReader:
                 i, target = self.read_word(i, end, close, depth)
                 cmd.targets.append(target)
                 if redirection.group().endswith(("<<", "<<-")):
-                    quoted = any(mark in s[target.start:target.end] for mark in "'\"\\")
+                    quoted = any(mark in s[target.start:target.end].replace("\\\n", "") for mark in "'\"\\")
                     self.pending.append((target.text, quoted, redirection.group().endswith("-"), cmd))
             elif separator:
                 if separator == ";;":
@@ -677,7 +677,7 @@ class ShellReader:
             self.mentions[name] = self.mentions.get(name, 0) + count
 
     def read_bodies(self, i: int, end: int, depth: int, joined: bool) -> int:
-        """Read the heredoc bodies that start after a newline; return the index after the last one."""
+        """Read the heredoc bodies after a newline, joining an unquoted body's continued lines; return the index after."""
         s = self.s
         while self.pending:
             delimiter, quoted, tabs, owner = self.pending.pop(0)
@@ -685,9 +685,9 @@ class ShellReader:
             while True:
                 if i >= end:
                     raise Unreadable("unterminated heredoc")
-                newline = s.find("\n", i, end)
-                stop = end if newline < 0 else newline
-                if (s[i:stop].lstrip("\t") if tabs else s[i:stop]) == delimiter:
+                newline = re.compile(r"\n" if quoted else r"(?<!\\)(?:\\\\)*\n").search(s, i, end)
+                stop = end if newline is None else newline.end() - 1
+                if (s[i:stop].lstrip("\t") if tabs else s[i:stop]).replace("\\\n", "") == delimiter:
                     body_end, i = i, min(stop + 1, end)
                     break
                 i = stop + 1
