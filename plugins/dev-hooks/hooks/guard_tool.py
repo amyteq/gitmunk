@@ -116,7 +116,7 @@ INTERPRETERS = {
 
 # A word in command position: start, or after a pipe/separator/substitution,
 # optionally preceded by VAR=value assignments; quotes and backslashes around it do not hide it.
-COMMAND_POSITION = re.compile(r"(?:^|[|;&\n(]|`)\s*(?:\w+=\S+\s+)*[\"'\\]*(?P<program>[\w./${}`-]+)")
+COMMAND_POSITION = re.compile(r"(?:^|[|;&\n(]|`)\s*(?:\w+=\S+\s+)*[\"'\\]*(?P<program>[\w./${}`\"'\\-]+)")
 
 # The literal value of a message-carrying flag. Single quotes never expand; double
 # quotes count only without `$`, backtick or backslash, so a payload that could
@@ -176,7 +176,7 @@ def strip_heredoc_bodies(command: str) -> str:
         if index < len(lines):
             kept.append(lines[index])
             index += 1
-    return command if any("$" in p or "`" in p for p in COMMAND_POSITION.findall("\n".join(kept))) else "\n".join(kept)
+    return command if any(set(p) & set("$`\"'\\") for p in COMMAND_POSITION.findall("\n".join(kept))) else "\n".join(kept)
 
 
 def normalize_command(command: str, keep_lines: bool = False) -> str:
@@ -955,8 +955,8 @@ def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
         for word in words:
             word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower())
                               for name in word.names)
-    # A text with an interpreter in command position may run what a data sink wrote (the base's heredoc rule).
-    runner = mentions_interpreter(reader.s)
+    # An interpreter in command position, as written or as read (`"$S"/sh`), may run what a data sink wrote.
+    runner = mentions_interpreter(reader.s) or any(c.target() in INTERPRETERS or c.named() for c in reader.commands)
     for cmd in reader.commands:
         # Text another program may run (`ssh host cat '"$(…)"'`, `watch`, `find -exec sh -c`, awk's `system()`,
         # a heredoc fed to `ssh`): this reading cannot see into it, so the command's gated words ask, signal or

