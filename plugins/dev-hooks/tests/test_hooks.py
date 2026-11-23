@@ -354,6 +354,13 @@ class StructuralAskTest(unittest.TestCase):
             'S=declare; command -- "$S" -t "$N"', 'S=read; "$S" -aD < notes.txt', 'S=.; "$S" ./env.sh',
             'command -p "$S" ./env.sh', 'S=.; command -p "$S" ./env.sh', 'S=.; command -p ${S} ./env.sh',
             'S=.; command -p $S ./env.sh', 'command -p . ./env.sh', 'builtin . ./env.sh', "command -- '.' ./env.sh"]])
+        # zsh applies an unbraced modifier or subscript to the value, and a glob qualifier to the whole word.
+        self.assertDecisions(("ask", "ask"), [f"D=/tmp/x; rm -f {target}" for target in [
+            "$D:t/notes.txt", '"$D:t/notes.txt"', "$D:h:h/notes.txt", "$D:s,/tmp,./build,/notes.txt", "$D:A/notes.txt",
+            "$D[2,-1]/notes.txt", '"$D[2,-1]/notes.txt"', "$D[1]", "$D/notes.txt(:t)", '"$D/notes.txt"(:t)', "$D(N)"]])
+        self.assertDecisions(("allow", "allow"), ['D=/tmp/x; echo $D:t; rm -f "$D/notes.txt"',
+                                                  'D=/tmp/x; echo "$D: done"; rm -f "$D/notes.txt"',
+                                                  "python3 - <<'EOF'\nprint(1)\nEOF\nrm -f \"$TMPDIR/out.json\""])
         self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\"",
                                                   "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'",
                                                   "A=\"don't\" git -C \"$DIR\" commit -m 'Never rm -rf the build'",

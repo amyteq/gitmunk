@@ -423,6 +423,7 @@ class Unreadable(ValueError):
 
 
 NAME = re.compile(r"[A-Za-z_]\w*")
+ZSH_SUFFIX = re.compile(r":[A-Za-z&]|\[")  # zsh applies `$D:t` and `$D[2,-1]` to the value
 # A value that stays one literal word. A leading $TMPDIR stays in the text, so that
 # rm_targets_only_temp resolves it with the hook's own value, as it always has.
 LITERAL_VALUE = re.compile(r"(?:\$TMPDIR|\$\{TMPDIR\})(?:/[^\s$`'\"*?\[\\#(){}<>]*)?|[^\s$`'\"*?\[\\#(){}<>]*")
@@ -587,6 +588,7 @@ class ShellReader:
                 raise Unreadable("unmatched )")
             elif char == "(":
                 cmd = cmd or Command(self, i, pipeline)
+                self.dynamic |= bool(cmd.words) and cmd.words[-1].end == i  # zsh's `$D(:t)` glob qualifier (I2)
                 if s.startswith("((", i) and not cmd.words:
                     i = self.read_arithmetic(i + 2, end, close, depth)
                 else:
@@ -820,7 +822,8 @@ class ShellReader:
             return self.read_parameter(i, end, close, depth, word)
         name = NAME.match(s, i + 1)
         if name:
-            self.use(name.group(), i, name.end())
+            if not ZSH_SUFFIX.match(s, name.end()):  # with a modifier or subscript the value differs (I2)
+                self.use(name.group(), i, name.end())
         elif s[i + 1:i + 2] == '"':
             return i + 1  # `$"…"` is a quoted string
         elif not (s[i + 1:i + 2] and s[i + 1] in "@*#?$!-0123456789"):
