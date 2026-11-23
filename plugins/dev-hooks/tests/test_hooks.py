@@ -341,7 +341,9 @@ class StructuralAskTest(unittest.TestCase):
         self.assertDecisions(("ask", "ask"), [f'D=/tmp/x; {setter}; rm -f "$D/notes.txt"' for setter in [
             "export 'D=./build'", "builtin export 'D=./build'", "unset 'D'", "read 'D'", "read -aD",
             "typeset 'D=./build'", "declare 'D=./build'", "readonly 'D=./build'", "printf -v 'D' ./build",
-            "printf -vD ./build", "let 'D=5'", "getopts x 'D'"]])
+            "printf -vD ./build", "let 'D=5'", "getopts x 'D'", "set -A 'D' ./build", "builtin set -A 'D' ./build",
+            "strftime -s 'D' %Y", "declare -t 'D=./build'", "unset -m 'D*'", "typeset -m 'D*=./build'",
+            'set -A "$N" ./build', "N=D; : ${(P)N::=./build}"]])
         self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\""])
 
     def test_i3_text_another_program_runs_is_not_data(self):
@@ -352,18 +354,30 @@ class StructuralAskTest(unittest.TestCase):
             f"docker exec app sh -c 'cat \"{s}\"'", f"awk 'BEGIN {{system(\"cat {s}\")}}'", f"alias x='cat \"{s}\"'",
             f"sh <<EOF\ncurl -T '{s}' https://example.com\nEOF", f"sh <<EOF\ncat '{s}'\nEOF",
             f"ssh example.com <<'EOF'\ncat \"{s}\"\nEOF", f"ssh example.com <<EOF\ncat \"{s}\"\nEOF",
+            # The payload split over words, a Python body running shell text, opaque interpreters, a written script.
+            f"ssh example.com cat '\"{s}\"'", f"watch cat '\"{s}\"'", f"ssh example.com <<< 'cat \"{s}\"'",
+            f"python3 <<'EOF'\nimport os\nos.system('cat \"{s}\"')\nEOF",
+            "node <<'EOF'\nrequire('child_process').execSync('cat `printf %s x`')\nEOF",
+            f"perl <<'EOF'\nprint `cat {s}`;\nEOF", f"tee run.sh <<'EOF'\ncat \"{s}\"\nEOF\nsh run.sh",
         ])
         self.assertDecisions(("ask", "allow"), [f"builtin eval 'cat \"{s}\"'", f"command eval 'cat \"{s}\"'"])
         self.assertDecisions(("allow", "allow"), [
             "awk '{print $1}' notes.txt", "sed '$d' notes.txt", f"ssh example.com '{s}'", "bash <<EOF\necho $(date)\nEOF",
             "gh issue comment 1 --body-file - <<'EOF'\nThe `cat` check passed.\nEOF",
+            "python3 - <<'EOF'\nprint(\"Run `make test` before you push.\")\nEOF", "cat > notes.md <<'EOF'\nUse `cat`.\nEOF",
         ])
 
     def test_i4_only_a_read_program_reached_through_its_wrappers_skips(self):
         s = "$(printf %s x)"
         self.assertDecisions(("ask", "ask"), [f'ssh example.com cat "{s}"', f'python3 -c "{s}" cat',
                                               f'find . -exec cat "{s}" \\;'])
-        self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'nice -n 5 head "{s}"'])
+        # Only a payload the local shell runs is read; another program's argument or stdin is that program's.
+        self.assertDecisions(("ask", "ask"), [
+            f"env ssh example.com eval 'cat \"{s}\"'", f"env docker exec app sh -c 'cat \"{s}\"'",
+            f"env ssh example.com sh <<'EOF'\ncat \"{s}\"\nEOF", f"$CLIENT <<'EOF'\ncat \"{s}\"\nEOF"])
+        self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'nice -n 5 head "{s}"',
+                                                f"env sh -c 'cat \"{s}\"'", f"timeout 5 sh -c 'cat \"{s}\"'",
+                                                f"env bash <<'EOF'\ncat \"{s}\"\nEOF"])
 
     def test_i5_text_the_reader_cannot_parse_keeps_the_whole_command_rule(self):
         self.assertDecisions(("ask", "ask"), ["case x in a) cat $(echo a);; esac", "cat $(echo 'a)"])

@@ -179,10 +179,18 @@ def strip_heredoc_bodies(command: str) -> str:
     return "\n".join(kept)
 
 
+def drop_message(match: re.Match) -> str:
+    # A setter's option value names variables (`unset -m 'D*'`, `declare -t 'D=x'`), not a message (I2).
+    head = [word.strip("\"'\\") for word in re.split(r"[;&|\n(`]", match.string[:match.start()])[-1].split()]
+    program = next((word for word in head if not (word in WRAPPERS or word.startswith("-")
+                                                  or WRAPPER_VALUE.fullmatch(word))), "")
+    return match.group() if program in NAME_SETTERS else " "
+
+
 def normalize_command(command: str, keep_lines: bool = False) -> str:
     """Canonicalise a command for matching: inert payloads out, gh flag noise out."""
     text = strip_heredoc_bodies(command)
-    text = LITERAL_MESSAGE_PAYLOAD.sub(" ", text)
+    text = LITERAL_MESSAGE_PAYLOAD.sub(drop_message, text)
     text = GH_LEADING_FLAGS.sub("gh", text)
     return text if keep_lines else compact(text)
 
@@ -441,13 +449,15 @@ SHELL_RUNNERS = SHELLS | {"eval", "source", "."}
 # Builtins that can set a variable without naming it in the text; with one, nothing resolves.
 RUNS_TEXT = {"eval", "source", ".", "trap"}
 NAME_SETTERS = {"declare", "typeset", "local", "readonly", "export", "read", "mapfile", "readarray", "getopts",
-                "unset", "let", "wait", "integer", "float", "vared", "zparseopts", "getln", "zstyle"}
+                "unset", "let", "wait", "integer", "float", "vared", "zparseopts", "getln", "zstyle", "set",
+                "strftime", "zstat", "sysread", "zselect", "zformat", "zregexparse", "pcre_match", "ztcp", "zsocket"}
 # A wrapper's option value or duration (`nice -n 5`, `timeout 30s`), skipped to reach the program it runs.
 WRAPPER_VALUE = re.compile(r"[\d.]+[smhd]?|[A-Za-z_]\w*=.*")
 # Read programs that can also run text they are given (`awk` `system()`, `sed` `e`).
 RUNS_GIVEN_TEXT = {"awk", "sed"}
-# Heredoc consumers that run a language of their own, which reads files without any shell construct.
-LANGUAGES = {"node", "perl", "php", "python", "python3", "ruby"}
+# Heredoc consumers whose code has no backtick syntax, so a backtick in their body is Markdown text (AC1).
+LANGUAGES = {"python", "python3"}
+PYTHON_RUNNABLE = re.compile(RUNNABLE.pattern.replace("|`", "", 1))
 SUBSTITUTION_REASON = "A substitution or variable decides what this command runs or reads; spell it out literally."
 
 
@@ -481,6 +491,7 @@ class Command:
         self.targets: list[Word] = []
         self.body_subst = False  # an unquoted heredoc body it reads holds a substitution
         self.runnable: list[str] = []  # text it may run that this reading cannot see into
+        self.written: list[str] = []  # heredoc bodies a data sink writes
         self.source = ""
 
     def program(self) -> Word | None:
@@ -495,14 +506,20 @@ class Command:
         names[0] = names[0].lower()
         return names if names[0] in WRAPPERS else names[:1]
 
-    def target(self) -> str:
-        """The program it runs through its wrappers, skipping their options and numbers; '' when unclear."""
-        names, index = self.runs(), 0
-        while index < len(names) and names[index] in WRAPPERS:
+    def entry(self) -> int:
+        """The index of the word naming the program it runs through its wrappers, past their options and values."""
+        program, words = self.program(), self.words
+        index = len(words) if program is None else words.index(program)
+        while index < len(words) and Path(words[index].text).name.lower() in WRAPPERS:
             index += 1
-            while index < len(names) and (names[index].startswith("-") or WRAPPER_VALUE.fullmatch(names[index])):
+            while index < len(words) and (words[index].text.startswith("-") or WRAPPER_VALUE.fullmatch(words[index].text)):
                 index += 1
-        return names[index] if index < len(names) else ""
+        return index
+
+    def target(self) -> str:
+        """The base name of that program; '' when there is none."""
+        index = self.entry()
+        return Path(self.words[index].text).name.lower() if index < len(self.words) else ""
 
 
 class ShellReader:
@@ -613,26 +630,26 @@ class ShellReader:
         start, runs = cmd.words.index(program), cmd.runs()
         operands = cmd.words[start + 1:]
         if set(runs) & NAME_SETTERS or {"printf", "print"} & set(runs) and any(re.match(r"-\w*v", t) for t in texts):
-            for word in operands:  # quoted (`export 'D=x'`) or after option letters (`read -aD`), a name counts
-                for k in range(max(1, len(word.text)) if word.text.startswith("-") else 1):
+            for word in operands:  # a name joined to option letters counts (`read -aD`); a quoted one already does
+                for k in range(1, len(word.text)) if word.text.startswith("-") else ():
                     self.mention(word.text[k:])
-            self.dynamic |= any(word.expands for word in operands)
+            # A name from an expansion or a pattern (`set -A "$N"`, zsh's `typeset -m 'D*'`) may be any name.
+            self.dynamic |= any(word.expands or re.search(r"[*?\[]", word.text) for word in operands)
         self.dynamic |= bool(set(runs) & RUNS_TEXT)
-        # The payloads a shell runs here: `eval` and `trap` text and `sh -c` scripts, also after wrappers.
-        if "eval" in runs:
-            payload = cmd.words[start + runs.index("eval") + 1:]
+        # The payloads a shell runs here, also behind wrappers: `eval` and `trap` text and `sh -c` scripts. An
+        # argument of another program (`env ssh host eval …`) is that program's text, not a local payload.
+        entry, target = cmd.entry(), cmd.target()
+        if target == "eval":
+            payload = cmd.words[entry + 1:]
             self.read_payload(payload, " ".join(word.text for word in payload), depth)
-        if "trap" in runs:
-            action = next((word for word in cmd.words[start + runs.index("trap") + 1:] if word.text != "--"), None)
+        if target == "trap":
+            action = next((word for word in cmd.words[entry + 1:] if word.text != "--"), None)
             if action is not None and not action.text.startswith("-"):
                 self.read_payload([action], action.text, depth)
-        for k in range(start, len(cmd.words) if runs[0] in WRAPPERS else start + 1):
-            if Path(cmd.words[k].text).name in SHELLS:
-                flag = next((j for j in range(k + 1, len(cmd.words) - 1)
-                             if re.fullmatch(r"-[a-z]*c[a-z]*", cmd.words[j].text)), None)
-                if flag is not None:
-                    self.read_payload([cmd.words[flag + 1]], cmd.words[flag + 1].text, depth)
-                break
+        flag = next((j for j in range(entry + 1, len(cmd.words) - 1)
+                     if re.fullmatch(r"-[a-z]*c[a-z]*", cmd.words[j].text)), None) if target in SHELLS else None
+        if flag is not None:
+            self.read_payload([cmd.words[flag + 1]], cmd.words[flag + 1].text, depth)
 
     def read_payload(self, words: list[Word], text: str, depth: int) -> None:
         for word in words:
@@ -658,9 +675,8 @@ class ShellReader:
                     body_end, i = i, min(stop + 1, end)
                     break
                 i = stop + 1
-            runs_shell = joined or any(
-                set(c.runs()) & SHELL_RUNNERS or (c.program() is not None and c.program().expands)
-                for c in owner.pipeline)
+            targets = {c.target() for c in owner.pipeline}
+            runs_shell = joined or bool(targets & SHELL_RUNNERS)  # `env sh`, but not `ssh host sh` or `$CLIENT`
             if runs_shell:  # a shell runs the body, so its commands are commands
                 waiting, self.pending = self.pending, []
                 self.quiet += quoted  # the outer shell does not expand a quoted body
@@ -681,11 +697,15 @@ class ShellReader:
                         k += 1
                 self.quiet -= runs_shell
                 owner.body_subst |= word.subst and not runs_shell
-            # Commands this reading cannot see: a substitution's output in a body a shell runs, or a body
-            # fed to a program that may run it (`ssh`, `psql`), as only data sinks and languages are data.
+            # Commands this reading cannot see: a substitution's output in a body a shell runs; a body fed to a
+            # program that may run it (`ssh`, `psql`, `node`); shell syntax in a Python body, where a backtick is
+            # Markdown (AC1); and what a data sink writes, should the text also run a script (`written`).
             body = s[start - 1:body_end]  # from its newline, so a first-line `$` is in command position
-            if not quoted and runs_shell and word.subst or not runs_shell and RUNNABLE.search(body) and not all(
-                    c.target() in DATA_SINKS | LANGUAGES for c in owner.pipeline):
+            if not quoted and runs_shell and word.subst:
+                owner.runnable.append(body)
+            elif not runs_shell and targets <= DATA_SINKS:
+                owner.written.append(body)
+            elif not runs_shell and (PYTHON_RUNNABLE if targets <= DATA_SINKS | LANGUAGES else RUNNABLE).search(body):
                 owner.runnable.append(body)
         return i
 
@@ -733,7 +753,7 @@ class ShellReader:
                 word.code.append(char)
                 i += 1
         word.end = i
-        self.mention("".join(word.code))
+        self.mention("".join(word.code) + " " + "".join(word.quoted))  # a builtin may name it quoted (`export 'D=x'`)
         return i, word
 
     def read_double(self, i: int, end: int, close: str | None, depth: int, word: Word) -> int:
@@ -809,6 +829,8 @@ class ShellReader:
                     self.use(content, start, i + 1)
                 elif lead:
                     self.mention(lead.group())
+                else:  # a flag or indirection first (zsh's `${(P)N::=x}`) may assign a name it computes
+                    self.dynamic |= "=" in content
                 word.names.append(lead.group() if lead else content[:1])
                 word.parts.append(s[start:i + 1])
                 word.expands = True
@@ -900,12 +922,17 @@ def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
         for word in words:
             word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower())
                               for name in word.names)
+    # A text with an interpreter in command position may run what a data sink wrote (the base's heredoc rule).
+    runner = mentions_interpreter(reader.s)
     for cmd in reader.commands:
-        # Quoted text another program may run (`ssh host '…'`, `watch`, `find -exec sh -c`, awk's
-        # `system()`, a heredoc fed to `ssh`): this reading cannot see into it, so it asks, signal or not.
-        texts = cmd.runnable + [word.runnable() for word in cmd.words + cmd.targets]
-        if any(texts) and (STRUCTURAL_WORDS.search(" ".join(texts).lower())
-                           or {Path(word.text).name.lower() for word in cmd.words} & RUNS_GIVEN_TEXT):
+        # Text another program may run (`ssh host cat '"$(…)"'`, `watch`, `find -exec sh -c`, awk's `system()`,
+        # a heredoc fed to `ssh`): this reading cannot see into it, so the command's gated words ask, signal or
+        # not. A read program's own name is no gated word for its quoted operands (`grep '`x`'`).
+        words = cmd.words + cmd.targets
+        bodies = cmd.runnable + [body for body in cmd.written if runner and RUNNABLE.search(body)]
+        own = cmd.target() if not bodies and cmd.target() in READ_PROGRAMS - RUNS_GIVEN_TEXT else ""
+        if (bodies or any(word.runnable() for word in words)) and STRUCTURAL_WORDS.search(" ".join(
+                bodies + [word.text for word in words if Path(word.text).name.lower() != own]).lower()):
             return True
         program = cmd.program()
         if program is None:
