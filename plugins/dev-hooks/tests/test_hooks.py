@@ -343,8 +343,10 @@ class StructuralAskTest(unittest.TestCase):
             "typeset 'D=./build'", "declare 'D=./build'", "readonly 'D=./build'", "printf -v 'D' ./build",
             "printf -vD ./build", "let 'D=5'", "getopts x 'D'", "set -A 'D' ./build", "builtin set -A 'D' ./build",
             "strftime -s 'D' %Y", "declare -t 'D=./build'", "unset -m 'D*'", "typeset -m 'D*=./build'",
-            'set -A "$N" ./build', "N=D; : ${(P)N::=./build}"]])
-        self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\""])
+            'set -A "$N" ./build', "N=D; : ${(P)N::=./build}", "if true; then declare -t 'D=./build'; fi",
+            "{ declare -t 'D=./build'; }", "time typeset -m 'D*=./build'", "! unset -m 'D*'"]])
+        self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\"",
+                                                  "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'"])
 
     def test_i3_text_another_program_runs_is_not_data(self):
         s = "$(printf %s x)"
@@ -375,7 +377,10 @@ class StructuralAskTest(unittest.TestCase):
         # Only a payload the local shell runs is read; another program's argument or stdin is that program's.
         self.assertDecisions(("ask", "ask"), [
             f"env ssh example.com eval 'cat \"{s}\"'", f"env docker exec app sh -c 'cat \"{s}\"'",
-            f"env ssh example.com sh <<'EOF'\ncat \"{s}\"\nEOF", f"$CLIENT <<'EOF'\ncat \"{s}\"\nEOF"])
+            f"env ssh example.com sh <<'EOF'\ncat \"{s}\"\nEOF", f"$CLIENT <<'EOF'\ncat \"{s}\"\nEOF",
+            # An option that may take the next word as its value leaves the program unclear.
+            f"printf %s sh | xargs -I SH docker exec app SH -c 'cat \"{s}\"'",
+            f"exec -a sh docker exec app sh -c 'cat \"{s}\"'", f"env -u sh docker exec app sh -c 'cat \"{s}\"'"])
         self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'nice -n 5 head "{s}"',
                                                 f"env sh -c 'cat \"{s}\"'", f"timeout 5 sh -c 'cat \"{s}\"'",
                                                 f"env bash <<'EOF'\ncat \"{s}\"\nEOF"])

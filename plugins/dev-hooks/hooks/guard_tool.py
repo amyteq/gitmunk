@@ -180,11 +180,14 @@ def strip_heredoc_bodies(command: str) -> str:
 
 
 def drop_message(match: re.Match) -> str:
-    # A setter's option value names variables (`unset -m 'D*'`, `declare -t 'D=x'`), not a message (I2).
-    head = [word.strip("\"'\\") for word in re.split(r"[;&|\n(`]", match.string[:match.start()])[-1].split()]
-    program = next((word for word in head if not (word in WRAPPERS or word.startswith("-")
-                                                  or WRAPPER_VALUE.fullmatch(word))), "")
-    return match.group() if program in NAME_SETTERS else " "
+    # A setter's option value names variables (`unset -m 'D*'`, `then declare -t 'D=x'`), not a message (I2), so
+    # a setter among the words before it, up to the first one that opens a quoted text, keeps the value.
+    for word in re.split(r"[;&|\n(`]", match.string[:match.start()])[-1].split():
+        if word.count("'") % 2 or word.count('"') % 2:
+            break
+        if re.sub(r"[\"'\\]", "", word) in NAME_SETTERS:
+            return match.group()
+    return " "
 
 
 def normalize_command(command: str, keep_lines: bool = False) -> str:
@@ -509,13 +512,17 @@ class Command:
         return names if names[0] in WRAPPERS else names[:1]
 
     def entry(self) -> int:
-        """The index of the word naming the program it runs through its wrappers, past their options and values."""
-        program, words = self.program(), self.words
-        index = len(words) if program is None else words.index(program)
-        while index < len(words) and Path(words[index].text).name.lower() in WRAPPERS:
+        """The index of the word naming the program it runs through its wrappers, past their options and values;
+        none (the length) when an option may take the next word as its value (`xargs -I SH`, `exec -a sh`)."""
+        program, texts = self.program(), [word.text for word in self.words]
+        index = len(texts) if program is None else self.words.index(program)
+        skip = lambda k: k < len(texts) and (texts[k].startswith("-") or WRAPPER_VALUE.fullmatch(texts[k]))
+        while index < len(texts) and Path(texts[index]).name.lower() in WRAPPERS:
             index += 1
-            while index < len(words) and (words[index].text.startswith("-") or WRAPPER_VALUE.fullmatch(words[index].text)):
+            while skip(index):
                 index += 1
+                if texts[index - 1].startswith("-") and index < len(texts) and not skip(index):
+                    return len(texts)
         return index
 
     def target(self) -> str:
