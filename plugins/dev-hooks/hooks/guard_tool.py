@@ -455,9 +455,11 @@ NAME_SETTERS = {"declare", "typeset", "local", "readonly", "export", "read", "ma
 WRAPPER_VALUE = re.compile(r"[\d.]+[smhd]?|[A-Za-z_]\w*=.*")
 # Read programs that can also run text they are given (`awk` `system()`, `sed` `e`).
 RUNS_GIVEN_TEXT = {"awk", "sed"}
-# Heredoc consumers whose code has no backtick syntax, so a backtick in their body is Markdown text (AC1).
+# Heredoc consumers whose code has no backtick syntax: a backtick in their body is Markdown text (AC1), unless
+# the body hands text to a shell through one of the calls below.
 LANGUAGES = {"python", "python3"}
 PYTHON_RUNNABLE = re.compile(RUNNABLE.pattern.replace("|`", "", 1))
+PYTHON_SHELL = re.compile(r"system|popen|subprocess|spawn|exec|pty|getoutput|commands")
 SUBSTITUTION_REASON = "A substitution or variable decides what this command runs or reads; spell it out literally."
 
 
@@ -699,13 +701,15 @@ class ShellReader:
                 owner.body_subst |= word.subst and not runs_shell
             # Commands this reading cannot see: a substitution's output in a body a shell runs; a body fed to a
             # program that may run it (`ssh`, `psql`, `node`); shell syntax in a Python body, where a backtick is
-            # Markdown (AC1); and what a data sink writes, should the text also run a script (`written`).
+            # Markdown (AC1) unless the body calls a shell; and what a data sink writes, should the text also run
+            # an interpreter (`written`).
             body = s[start - 1:body_end]  # from its newline, so a first-line `$` is in command position
             if not quoted and runs_shell and word.subst:
                 owner.runnable.append(body)
             elif not runs_shell and targets <= DATA_SINKS:
                 owner.written.append(body)
-            elif not runs_shell and (PYTHON_RUNNABLE if targets <= DATA_SINKS | LANGUAGES else RUNNABLE).search(body):
+            elif not runs_shell and (PYTHON_RUNNABLE if targets <= DATA_SINKS | LANGUAGES and not PYTHON_SHELL.search(
+                    body) else RUNNABLE).search(body):
                 owner.runnable.append(body)
         return i
 

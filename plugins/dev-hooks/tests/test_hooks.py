@@ -357,6 +357,7 @@ class StructuralAskTest(unittest.TestCase):
             # The payload split over words, a Python body running shell text, opaque interpreters, a written script.
             f"ssh example.com cat '\"{s}\"'", f"watch cat '\"{s}\"'", f"ssh example.com <<< 'cat \"{s}\"'",
             f"python3 <<'EOF'\nimport os\nos.system('cat \"{s}\"')\nEOF",
+            "python3 <<'EOF'\nimport subprocess\nsubprocess.run('cat `printf %s x`', shell=True)\nEOF",
             "node <<'EOF'\nrequire('child_process').execSync('cat `printf %s x`')\nEOF",
             f"perl <<'EOF'\nprint `cat {s}`;\nEOF", f"tee run.sh <<'EOF'\ncat \"{s}\"\nEOF\nsh run.sh",
         ])
