@@ -403,6 +403,8 @@ STRUCTURAL_WORDS = re.compile(r"\b(?:push|rm|curl|wget|scp|rsync|sftp|cat|less|m
 # Shell text these rules cannot resolve: a command or process substitution, whose output becomes
 # words or a program, and a variable or substitution in command position.
 UNRESOLVED = re.compile(r"\$\(|`|[<>]\(|(?:^|[|;&\n(])\s*(?:\w+=\S*\s+)*[\"'\\]*\$")
+# The same constructs inside quoted text, which a program may run as a script of its own.
+RUNNABLE = re.compile(r"\$\(|`|[<>]\(|[|;&\n(]\s*(?:\w+=\S*\s+)*[\"'\\]*\$")
 # The one closed literal form allowed through: `$(cat <<'TAG'` with its body already removed as data.
 LITERAL_SUBSTITUTION = re.compile(r"\$\(cat <<-?\s*'(?P<tag>[A-Za-z_]\w*)'\n\s*(?P=tag)\n\s*\)")
 
@@ -439,7 +441,13 @@ SHELL_RUNNERS = SHELLS | {"eval", "source", "."}
 # Builtins that can set a variable without naming it in the text; with one, nothing resolves.
 RUNS_TEXT = {"eval", "source", ".", "trap"}
 NAME_SETTERS = {"declare", "typeset", "local", "readonly", "export", "read", "mapfile", "readarray", "getopts",
-                "unset", "let"}
+                "unset", "let", "wait", "integer", "float", "vared", "zparseopts", "getln", "zstyle"}
+# A wrapper's option value or duration (`nice -n 5`, `timeout 30s`), skipped to reach the program it runs.
+WRAPPER_VALUE = re.compile(r"[\d.]+[smhd]?|[A-Za-z_]\w*=.*")
+# Read programs that can also run text they are given (`awk` `system()`, `sed` `e`).
+RUNS_GIVEN_TEXT = {"awk", "sed"}
+# Heredoc consumers that run a language of their own, which reads files without any shell construct.
+LANGUAGES = {"node", "perl", "php", "python", "python3", "ruby"}
 SUBSTITUTION_REASON = "A substitution or variable decides what this command runs or reads; spell it out literally."
 
 
@@ -450,12 +458,18 @@ class Word:
         self.start = self.end = start
         self.parts: list[str] = []
         self.code: list[str] = []  # text outside quotes and expansions, where a variable can be named
+        self.quoted: list[str] = []  # quoted or escaped text, which another program may still run
         self.names: list[str] = []  # what follows each `$`
-        self.subst = self.expands = False
+        self.subst = self.expands = self.payload = False  # payload: read here as the commands it runs
 
     @property
     def text(self) -> str:
         return "".join(self.parts)
+
+    def runnable(self) -> str:
+        """Quoted text that holds a substitution or a variable in command position, or ''."""
+        quoted = "".join(self.quoted)
+        return quoted if not self.payload and RUNNABLE.search(quoted) else ""
 
 
 class Command:
@@ -466,6 +480,7 @@ class Command:
         self.words: list[Word] = []
         self.targets: list[Word] = []
         self.body_subst = False  # an unquoted heredoc body it reads holds a substitution
+        self.runnable: list[str] = []  # text it may run that this reading cannot see into
         self.source = ""
 
     def program(self) -> Word | None:
@@ -479,6 +494,15 @@ class Command:
         names = [Path(word.text).name for word in self.words[self.words.index(program):]]
         names[0] = names[0].lower()
         return names if names[0] in WRAPPERS else names[:1]
+
+    def target(self) -> str:
+        """The program it runs through its wrappers, skipping their options and numbers; '' when unclear."""
+        names, index = self.runs(), 0
+        while index < len(names) and names[index] in WRAPPERS:
+            index += 1
+            while index < len(names) and (names[index].startswith("-") or WRAPPER_VALUE.fullmatch(names[index])):
+                index += 1
+        return names[index] if index < len(names) else ""
 
 
 class ShellReader:
@@ -588,21 +612,31 @@ class ShellReader:
             raise Unreadable("case")
         start, runs = cmd.words.index(program), cmd.runs()
         operands = cmd.words[start + 1:]
-        if set(runs) & RUNS_TEXT or (set(runs) & NAME_SETTERS or "printf" in runs and "-v" in texts) \
-                and any(word.expands for word in operands):
-            self.dynamic = True
-        # The payload of `eval` and `sh -c`, as `invocations` reads them.
-        if runs[0] == "eval":
-            self.read_payload(" ".join(word.text for word in operands), depth)
+        if set(runs) & NAME_SETTERS or {"printf", "print"} & set(runs) and any(re.match(r"-\w*v", t) for t in texts):
+            for word in operands:  # quoted (`export 'D=x'`) or after option letters (`read -aD`), a name counts
+                for k in range(max(1, len(word.text)) if word.text.startswith("-") else 1):
+                    self.mention(word.text[k:])
+            self.dynamic |= any(word.expands for word in operands)
+        self.dynamic |= bool(set(runs) & RUNS_TEXT)
+        # The payloads a shell runs here: `eval` and `trap` text and `sh -c` scripts, also after wrappers.
+        if "eval" in runs:
+            payload = cmd.words[start + runs.index("eval") + 1:]
+            self.read_payload(payload, " ".join(word.text for word in payload), depth)
+        if "trap" in runs:
+            action = next((word for word in cmd.words[start + runs.index("trap") + 1:] if word.text != "--"), None)
+            if action is not None and not action.text.startswith("-"):
+                self.read_payload([action], action.text, depth)
         for k in range(start, len(cmd.words) if runs[0] in WRAPPERS else start + 1):
             if Path(cmd.words[k].text).name in SHELLS:
                 flag = next((j for j in range(k + 1, len(cmd.words) - 1)
                              if re.fullmatch(r"-[a-z]*c[a-z]*", cmd.words[j].text)), None)
                 if flag is not None:
-                    self.read_payload(cmd.words[flag + 1].text, depth)
+                    self.read_payload([cmd.words[flag + 1]], cmd.words[flag + 1].text, depth)
                 break
 
-    def read_payload(self, text: str, depth: int) -> None:
+    def read_payload(self, words: list[Word], text: str, depth: int) -> None:
+        for word in words:
+            word.payload = True
         child = ShellReader(text, depth + 1)
         self.commands.extend(child.commands)
         self.dynamic |= child.dynamic  # what the payload sets only ever blocks resolution here
@@ -635,16 +669,24 @@ class ShellReader:
                 if self.pending:
                     raise Unreadable("a heredoc inside a heredoc body")
                 self.pending = waiting
-            elif not quoted:  # data, but the shell still expands it
-                word = Word(start)
-                while start < body_end:
-                    if s[start] == "\\":
-                        start += 2
-                    elif s[start] in "$`":
-                        start = self.read_expansion(start, body_end, None, depth, word)
+            if not quoted:  # the outer shell expands an unquoted body, inside its quotes too
+                word, k = Word(start), start
+                self.quiet += runs_shell  # the uses in a body a shell runs are already recorded
+                while k < body_end:
+                    if s[k] == "\\":
+                        k += 2
+                    elif s[k] in "$`":
+                        k = self.read_expansion(k, body_end, None, depth, word)
                     else:
-                        start += 1
-                owner.body_subst |= word.subst
+                        k += 1
+                self.quiet -= runs_shell
+                owner.body_subst |= word.subst and not runs_shell
+            # Commands this reading cannot see: a substitution's output in a body a shell runs, or a body
+            # fed to a program that may run it (`ssh`, `psql`), as only data sinks and languages are data.
+            body = s[start - 1:body_end]  # from its newline, so a first-line `$` is in command position
+            if not quoted and runs_shell and word.subst or not runs_shell and RUNNABLE.search(body) and not all(
+                    c.target() in DATA_SINKS | LANGUAGES for c in owner.pipeline):
+                owner.runnable.append(body)
         return i
 
     def read_word(self, i: int, end: int, close: str | None, depth: int) -> tuple[int, Word]:
@@ -663,12 +705,14 @@ class ShellReader:
                 if not s.startswith("\n", i + 1):
                     word.parts.append(s[i + 1:i + 2])
                     word.code.append(s[i + 1:i + 2])
+                    word.quoted.append(s[i + 1:i + 2])
                 i += 2
             elif char == "'":
                 stop = s.find("'", i + 1, end)
                 if stop < 0:
                     raise Unreadable("unclosed '")
                 word.parts.append(s[i + 1:stop])
+                word.quoted.append(s[i + 1:stop])
                 i = stop + 1
             elif char == '"':
                 i = self.read_double(i + 1, end, close, depth, word)
@@ -679,6 +723,8 @@ class ShellReader:
                 if stop >= end:
                     raise Unreadable("unclosed $'")
                 word.parts.append(s[i + 2:stop])
+                # A numeric escape may spell `$(` or a backtick (`\x24(`), so such text counts as holding one.
+                word.quoted.append(s[i + 2:stop] + ("$(" if re.search(r"\\[0-7xuU]", s[i + 2:stop]) else ""))
                 i = stop + 1
             elif char in "$`":
                 i = self.read_expansion(i, end, close, depth, word)
@@ -698,6 +744,7 @@ class ShellReader:
                 return i + 1
             if char == "\\" and s[i + 1:i + 2] in ("$", "`", '"', "\\", "\n"):
                 word.parts.append(s[i + 1].replace("\n", ""))
+                word.quoted.append(s[i + 1].replace("\n", ""))
                 i += 2
             elif char == "`" and close == "`":
                 raise Unreadable("a backtick inside quotes inside backticks")
@@ -706,6 +753,7 @@ class ShellReader:
             else:
                 word.parts.append(char)
                 word.code.append(char)
+                word.quoted.append(char)
                 i += 1
         raise Unreadable('unclosed "')
 
@@ -853,6 +901,12 @@ def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
             word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower())
                               for name in word.names)
     for cmd in reader.commands:
+        # Quoted text another program may run (`ssh host '…'`, `watch`, `find -exec sh -c`, awk's
+        # `system()`, a heredoc fed to `ssh`): this reading cannot see into it, so it asks, signal or not.
+        texts = cmd.runnable + [word.runnable() for word in cmd.words + cmd.targets]
+        if any(texts) and (STRUCTURAL_WORDS.search(" ".join(texts).lower())
+                           or {Path(word.text).name.lower() for word in cmd.words} & RUNS_GIVEN_TEXT):
+            return True
         program = cmd.program()
         if program is None:
             continue
@@ -870,8 +924,10 @@ def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
             found = names & STRUCTURAL_PROGRAMS | ({"push"} if {"git", "push"} <= names else set())
         else:
             continue
-        # I4: only a command whose gated words are all read programs skips; an unresolved program may be any.
-        if found and not (sandboxed and not program.expands and found <= READ_PROGRAMS):
+        # I4: only a read program, reached through its wrappers, skips when its gated words are all read
+        # programs; an unresolved program may be any, and `ssh host cat` or `find -exec cat` run another.
+        if found and not (sandboxed and not program.expands and found <= READ_PROGRAMS
+                          and cmd.target() in READ_PROGRAMS):
             return True
     return False
 
@@ -935,7 +991,9 @@ def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, st
 MANAGED_DIRS = {"linux": "/etc/claude-code", "darwin": "/Library/Application Support/ClaudeCode"}
 # The 11 protected names; joined to the home and project directories they give the 22 required paths.
 REQUIRED_NAMES = sorted({fragment.strip("/") for fragment in PROTECTED_FRAGMENTS} | PROTECTED_NAMES)
-SWITCHES = {"enabled", "failIfUnavailable", "enableWeakerNestedSandbox", "filesystem.disabled"}
+SWITCHES = ("enabled", "failIfUnavailable", "enableWeakerNestedSandbox")
+# Allow rules whose paths Claude Code adds to the sandbox's write paths, which can re-open a read.
+EDIT_RULE = re.compile(r"(?:Edit|Write|MultiEdit|NotebookEdit)(?:\((?P<path>.*)\))?")
 
 
 class NoEvidence(Exception):
@@ -952,17 +1010,29 @@ def strings(value: object) -> list[str]:
     return value
 
 
-def sandbox_settings(path: str) -> dict:
-    """The `sandbox` object of one settings file; {} when there is no file."""
+def read_settings(path: str) -> tuple[dict, dict]:
+    """The `sandbox` and `permissions` objects of one settings file; empty when there is no file."""
     if not os.path.lexists(path):
-        return {}
+        return {}, {}
     with open(path, encoding="utf-8") as handle:
         settings = json.load(handle)
     require(isinstance(settings, dict))
-    sandbox = settings.get("sandbox", {})
-    require(isinstance(sandbox, dict) and all(isinstance(sandbox.get(key, {}), dict)
-                                              for key in ("filesystem", "credentials")))
-    return sandbox
+    sandbox, permissions = settings.get("sandbox", {}), settings.get("permissions", {})
+    require(isinstance(sandbox, dict) and isinstance(permissions, dict) and all(
+        isinstance(sandbox.get(key, {}), dict) for key in ("filesystem", "credentials")))
+    return sandbox, permissions
+
+
+def write_paths(permissions: dict) -> list[str]:
+    """The paths of `additionalDirectories` and of Edit allow rules, as sandbox path entries."""
+    paths = strings(permissions.get("additionalDirectories", []))
+    for rule in strings(permissions.get("allow", [])):
+        match = EDIT_RULE.fullmatch(rule)
+        if match:  # `//path` is absolute; a bare rule or `/path` (relative to its settings file) gives off
+            path = match.group("path") or ""
+            require(path.startswith(("//", "~/")) or path == "~")
+            paths.append(path[1:] if path.startswith("//") else path)
+    return paths
 
 
 def settings_files(env, platform: str, managed_dir: str | None) -> tuple[str, str, list[str]]:
@@ -1015,24 +1085,30 @@ def sandbox_signal(tool_input: dict, env, platform: str, managed_dir: str | None
     22 required paths blocked. Missing evidence, a doubt or any error gives False."""
     try:
         require(tool_input.get("dangerouslyDisableSandbox", False) is False)
+        # A hosted session does not enforce the filesystem rules even with `failIfUnavailable`.
+        require(not env.get("CLAUDE_CODE_REMOTE"))
         home, project, paths = settings_files(env, platform, managed_dir)
-        switches, deny, allow, excluded = {}, [], [], []
+        switches, weakened, deny, allow, excluded = {}, False, [], [], []
         for path in paths:  # a later file overrides a switch; lists add up
-            sandbox = sandbox_settings(path)
+            sandbox, permissions = read_settings(path)
             filesystem = sandbox.get("filesystem", {})
-            for key, value in [*sandbox.items(), *(("filesystem." + k, v) for k, v in filesystem.items())]:
-                if key in SWITCHES:
-                    require(isinstance(value, bool))
-                    switches[key] = value
+            found = {key: sandbox[key] for key in SWITCHES if key in sandbox}
+            found.update({"filesystem.disabled": filesystem["disabled"]} if "disabled" in filesystem else {})
+            require(all(isinstance(value, bool) for value in found.values()))
+            # Claude Code ignores `filesystem.disabled` in repository files, so a later `false` there
+            # cannot undo a `true`: a `true` of either weakening switch in any file gives off.
+            weakened |= True in (found.get("enableWeakerNestedSandbox"), found.get("filesystem.disabled"))
+            switches.update(found)
             deny += strings(filesystem.get("denyRead", []))
-            allow += strings(filesystem.get("allowRead", []))
+            # Write access re-opens a path as a read allow does.
+            allow += strings(filesystem.get("allowRead", [])) + strings(filesystem.get("allowWrite", [])) \
+                + write_paths(permissions)
             excluded += strings(sandbox.get("excludedCommands", []))
             files = sandbox.get("credentials", {}).get("files", [])
             require(isinstance(files, list) and all(isinstance(f, dict) and isinstance(f.get("path"), str)
                                                     for f in files))
             deny += [f["path"] for f in files if f.get("mode") == "deny"]  # a mask may let the real file through
-        require(switches.get("enabled") is True and switches.get("failIfUnavailable") is True)
-        require(not switches.get("filesystem.disabled") and not switches.get("enableWeakerNestedSandbox"))
+        require(switches.get("enabled") is True and switches.get("failIfUnavailable") is True and not weakened)
         if excluded:
             programs = call_programs(tool_input.get("command") or "")
             for entry in excluded:

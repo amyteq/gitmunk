@@ -229,12 +229,12 @@ User-level hooks that pointed at project files also failed 13,051 times in the s
 
 The hook input does not say whether a call runs sandboxed, so `dev-hooks` reads the settings files the hook can see: the user file (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`), the project's `.claude/settings.json` and `.claude/settings.local.json`, and the managed `managed-settings.json` and `managed-settings.d/*.json` in `/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode` (macOS). It skips the substitution ask for `cat`, `head`, `grep` and the other read programs only when all of these hold, and asks as before otherwise:
 
-- The platform is Linux or macOS, and the call does not set `dangerouslyDisableSandbox`.
+- The platform is Linux or macOS, the session is not a hosted one (`CLAUDE_CODE_REMOTE` is unset), and the call does not set `dangerouslyDisableSandbox`.
 - `HOME` and `CLAUDE_PROJECT_DIR` are absolute paths, and so is `CLAUDE_CONFIG_DIR` when it is set.
 - Every settings file that exists is valid JSON with an object where the settings expect one.
-- After precedence (managed over local over project over user, and the last `managed-settings.d` file over the earlier managed ones), `sandbox.enabled` and `sandbox.failIfUnavailable` are `true`, and neither `sandbox.filesystem.disabled` nor `sandbox.enableWeakerNestedSandbox` is `true`. A value that is not `true` or `false` counts against.
+- After precedence (managed over local over project over user, and the last `managed-settings.d` file over the earlier managed ones), `sandbox.enabled` and `sandbox.failIfUnavailable` are `true`. No file sets `sandbox.filesystem.disabled` or `sandbox.enableWeakerNestedSandbox` to `true`, since Claude Code ignores the first in project files and a later `false` there cannot undo it. A value that is not `true` or `false` counts against.
 - No `sandbox.excludedCommands` entry starts with a program the call runs. An entry that starts with a wildcard counts as every program.
-- Reads are denied for each of the 22 protected paths: `secrets`, `.ssh`, `.aws`, `.config/gcloud`, `.config/gh/hosts.yml`, `.netrc`, `id_rsa`, `id_ed25519`, `.env.production`, `.env.test` and `hosts.yml`, under the home directory and under the project directory. A `sandbox.filesystem.denyRead` entry, or a `sandbox.credentials.files` entry with `"mode": "deny"`, covers the path itself and everything beneath it. Only an absolute or `~/` entry without wildcards counts. An `allowRead` entry equal to a protected path, beneath it, or between it and its deny re-opens it, and an `allowRead` entry with a wildcard or a relative path turns the skip off.
+- Reads are denied for each of the 22 protected paths: `secrets`, `.ssh`, `.aws`, `.config/gcloud`, `.config/gh/hosts.yml`, `.netrc`, `id_rsa`, `id_ed25519`, `.env.production`, `.env.test` and `hosts.yml`, under the home directory and under the project directory. A `sandbox.filesystem.denyRead` entry, or a `sandbox.credentials.files` entry with `"mode": "deny"`, covers the path itself and everything beneath it. Only an absolute or `~/` entry without wildcards counts. An `allowRead` entry equal to a protected path, beneath it, or between it and its deny re-opens it, and an `allowRead` entry with a wildcard or a relative path turns the skip off. Write access re-opens a path the same way, so `sandbox.filesystem.allowWrite`, `permissions.additionalDirectories` and the paths of `Edit` allow rules count as `allowRead` entries; an `Edit` rule without a path or with a `/path` relative to its settings file turns the skip off.
 
 For example, the home paths in `~/.claude/settings.json`:
 
@@ -266,7 +266,7 @@ and the project paths, which must be absolute, in the project's `.claude/setting
 }
 ```
 
-The hook cannot see `--settings`, `--setting-sources`, server-managed settings or macOS managed preferences. If you start Claude Code with one of them, make sure it does not loosen what the files say. The [`dev-hooks` README](../plugins/dev-hooks/README.md#failure-policy) lists the rules that keep their checks with the skip on.
+The hook cannot see `--settings`, `--setting-sources`, `--add-dir`, `/add-dir`, server-managed settings or macOS managed preferences. If you start Claude Code with one of them, make sure it does not loosen what the files say. The [`dev-hooks` README](../plugins/dev-hooks/README.md#failure-policy) lists the rules that keep their checks with the skip on.
 
 ## Troubleshooting
 

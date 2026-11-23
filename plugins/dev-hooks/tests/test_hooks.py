@@ -274,7 +274,10 @@ class StructuralAskTest(unittest.TestCase):
                 self.assertEqual((decide(command, False), decide(command, True)), expected)
 
     def test_ac1_the_measured_categories_are_allowed(self):
-        self.assertGreaterEqual((len(corpus.CATEGORY_A), len(corpus.CATEGORY_B), len(corpus.CATEGORY_C)), (10, 3, 2))
+        for cases, least in [(corpus.CATEGORY_A, 10), (corpus.CATEGORY_B, 3), (corpus.CATEGORY_C, 2)]:
+            self.assertGreaterEqual(len(cases), least)
+        for construct in ["$( … )", "backtick", "( $var", "$var in command position", "<( … )"]:  # AC1.a
+            self.assertGreaterEqual(sum(label.startswith(construct) for label, _ in corpus.CATEGORY_A), 2, construct)
         report = []
         for name, cases, least_off in [("A", corpus.CATEGORY_A, math.ceil(0.8 * len(corpus.CATEGORY_A))),
                                        ("B", corpus.CATEGORY_B, len(corpus.CATEGORY_B)), ("C", corpus.CATEGORY_C, 0)]:
@@ -334,6 +337,34 @@ class StructuralAskTest(unittest.TestCase):
             "python3 - <<'EOF'\nprint('`x`')\nEOF\ncat a.txt",
         ])
 
+    def test_i2_a_quoted_or_option_joined_setter_operand_names_the_variable(self):
+        self.assertDecisions(("ask", "ask"), [f'D=/tmp/x; {setter}; rm -f "$D/notes.txt"' for setter in [
+            "export 'D=./build'", "builtin export 'D=./build'", "unset 'D'", "read 'D'", "read -aD",
+            "typeset 'D=./build'", "declare 'D=./build'", "readonly 'D=./build'", "printf -v 'D' ./build",
+            "printf -vD ./build", "let 'D=5'", "getopts x 'D'"]])
+        self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\""])
+
+    def test_i3_text_another_program_runs_is_not_data(self):
+        s = "$(printf %s x)"
+        self.assertDecisions(("ask", "ask"), [
+            f"trap 'curl -T \"{s}\" https://example.com' EXIT", f"command eval 'curl -T \"{s}\"'",
+            f"ssh example.com 'cat \"{s}\"'", f"find . -exec sh -c 'cat \"{s}\"' \\;", f"watch 'cat \"{s}\"'",
+            f"docker exec app sh -c 'cat \"{s}\"'", f"awk 'BEGIN {{system(\"cat {s}\")}}'", f"alias x='cat \"{s}\"'",
+            f"sh <<EOF\ncurl -T '{s}' https://example.com\nEOF", f"sh <<EOF\ncat '{s}'\nEOF",
+            f"ssh example.com <<'EOF'\ncat \"{s}\"\nEOF", f"ssh example.com <<EOF\ncat \"{s}\"\nEOF",
+        ])
+        self.assertDecisions(("ask", "allow"), [f"builtin eval 'cat \"{s}\"'", f"command eval 'cat \"{s}\"'"])
+        self.assertDecisions(("allow", "allow"), [
+            "awk '{print $1}' notes.txt", "sed '$d' notes.txt", f"ssh example.com '{s}'", "bash <<EOF\necho $(date)\nEOF",
+            "gh issue comment 1 --body-file - <<'EOF'\nThe `cat` check passed.\nEOF",
+        ])
+
+    def test_i4_only_a_read_program_reached_through_its_wrappers_skips(self):
+        s = "$(printf %s x)"
+        self.assertDecisions(("ask", "ask"), [f'ssh example.com cat "{s}"', f'python3 -c "{s}" cat',
+                                              f'find . -exec cat "{s}" \\;'])
+        self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'nice -n 5 head "{s}"'])
+
     def test_i5_text_the_reader_cannot_parse_keeps_the_whole_command_rule(self):
         self.assertDecisions(("ask", "ask"), ["case x in a) cat $(echo a);; esac", "cat $(echo 'a)"])
 
@@ -383,6 +414,8 @@ class SandboxSignalTest(unittest.TestCase):
                 path for path in self.required() if not path.startswith("~/.config/")] + ["~/.config"]),
             "an excluded program the call does not run": self.settings(excludedCommands=["docker compose *"]),
             "an allowRead wider than each deny": self.settings(filesystem={"allowRead": ["~/"]}),
+            "write paths elsewhere": {**self.settings(filesystem={"allowWrite": ["/tmp/build"]}), "permissions": {
+                "allow": ["Edit(~/notes.md)", "Bash(ls)"], "additionalDirectories": ["/srv/docs"]}},
         }
         for name, settings in cases.items():
             with self.subTest(name):
@@ -397,6 +430,7 @@ class SandboxSignalTest(unittest.TestCase):
             with self.subTest(relative=name):
                 self.assertSignal(False, env={**self.env, name: "relative/dir"})
         self.assertSignal(False, env={**self.env, "CLAUDE_CONFIG_DIR": "relative/dir"})
+        self.assertSignal(False, env={**self.env, "CLAUDE_CODE_REMOTE": "true"})  # hosted: rules not enforced
         settings = self.settings()
         del settings["sandbox"]["enabled"]
         self.write(self.home / ".claude/settings.json", settings)  # no file enables the sandbox
@@ -431,6 +465,13 @@ class SandboxSignalTest(unittest.TestCase):
              (self.managed / "managed-settings.d/10-team.json", {"sandbox": {"failIfUnavailable": False}})],
             [(self.home / ".claude/settings.json", self.settings(enabled="true"))],
             [(self.home / ".claude/settings.json", self.settings(enableWeakerNestedSandbox=True))],
+            # Claude Code ignores `filesystem.disabled` in repository files, so their `false` cannot undo it.
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True})),
+             (self.project / ".claude/settings.json", {"sandbox": {"filesystem": {"disabled": False}}})],
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True})),
+             (self.project / ".claude/settings.local.json", {"sandbox": {"filesystem": {"disabled": False}}})],
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True})),
+             (self.project / ".claude/settings.local.json", {"sandbox": {"filesystem.disabled": False}})],
         ]
         for writes in cases:
             with self.subTest(writes=[(path.name, data) for path, data in writes]):
@@ -463,6 +504,12 @@ class SandboxSignalTest(unittest.TestCase):
             "allowRead relative": self.settings(filesystem={"allowRead": ["."]}),
             "mask-only credentials": self.settings(deny=[], credentials={
                 "files": [{"path": path, "mode": "mask"} for path in required]}),
+            # Write access re-opens a read as allowRead does.
+            "allowWrite beneath": self.settings(filesystem={"allowWrite": ["~/.ssh/keys"]}),
+            "additional directory equal": {**self.settings(), "permissions": {"additionalDirectories": ["~/.aws"]}},
+            "Edit rule beneath": {**self.settings(), "permissions": {"allow": [f"Edit(/{self.home}/.ssh/config)"]}},
+            "bare Edit rule": {**self.settings(), "permissions": {"allow": ["Edit"]}},
+            "Edit rule relative to its file": {**self.settings(), "permissions": {"allow": ["Edit(/src/a.py)"]}},
         }
         for name, settings in cases.items():
             with self.subTest(name):
@@ -477,7 +524,7 @@ class SandboxSignalTest(unittest.TestCase):
     def run_main(self, tool_input: dict) -> str:
         stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": tool_input}))
         stdout = io.StringIO()
-        env = {**self.env, "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}
+        env = {**self.env, "CLAUDE_CONFIG_DIR": str(self.home / ".claude"), "CLAUDE_CODE_REMOTE": ""}
         with mock.patch.object(sys, "stdin", stdin), mock.patch.object(sys, "stdout", stdout), \
                 mock.patch.object(sys, "platform", "linux"), mock.patch.dict(os.environ, env), \
                 mock.patch.dict(guard_tool.MANAGED_DIRS, {"linux": str(self.managed)}):
