@@ -444,7 +444,7 @@ NAME_SETTERS = {"declare", "typeset", "local", "readonly", "export", "read", "ma
                 "unset", "let", "wait", "integer", "float", "vared", "zparseopts", "getln", "zstyle", "set",
                 "strftime", "zstat", "sysread", "zselect", "zformat", "zregexparse", "pcre_match", "ztcp", "zsocket"}
 # A wrapper's option value or duration (`nice -n 5`, `timeout 30s`), skipped to reach the program it runs.
-WRAPPER_VALUE = re.compile(r"[\d.]+[smhd]?|[A-Za-z_]\w*=.*")
+WRAPPER_VALUE = re.compile(r"[\d.]*\d[\d.]*[smhd]?|[A-Za-z_]\w*=.*")  # a number holds a digit: `.` is the builtin
 # Read programs that can also run text they are given (`awk` `system()`, `sed` `e`).
 RUNS_GIVEN_TEXT = {"awk", "sed"}
 # Heredoc consumers whose code has no backtick syntax: a backtick in their body is Markdown text (AC1), unless
@@ -501,7 +501,7 @@ class Command:
         program = self.program()
         if program is None:
             return []
-        names = [Path(word.text).name for word in self.words[self.words.index(program):]]
+        names = [Path(word.text).name or word.text for word in self.words[self.words.index(program):]]  # `.` stays
         names[0] = names[0].lower()
         return names if names[0] in WRAPPERS else names[:1]
 
@@ -531,7 +531,7 @@ class Command:
     def target(self) -> str:
         """The base name of that program; '' when there is none."""
         index = self.entry()
-        return Path(self.words[index].text).name.lower() if index < len(self.words) else ""
+        return (Path(self.words[index].text).name or self.words[index].text).lower() if index < len(self.words) else ""
 
 
 class ShellReader:

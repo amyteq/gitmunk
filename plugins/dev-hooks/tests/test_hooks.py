@@ -352,7 +352,8 @@ class StructuralAskTest(unittest.TestCase):
         # A program named by an expansion may be a setter, `source` or `.`, before or after its own resolution.
         self.assertDecisions(("ask", "ask"), [f'D=/tmp/x; {setter}; rm -f "$D/notes.txt"' for setter in [
             'S=declare; command -- "$S" -t "$N"', 'S=read; "$S" -aD < notes.txt', 'S=.; "$S" ./env.sh',
-            'command -p "$S" ./env.sh']])
+            'command -p "$S" ./env.sh', 'S=.; command -p "$S" ./env.sh', 'S=.; command -p ${S} ./env.sh',
+            'S=.; command -p $S ./env.sh', 'command -p . ./env.sh', 'builtin . ./env.sh', "command -- '.' ./env.sh"]])
         self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\"",
                                                   "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'",
                                                   "A=\"don't\" git -C \"$DIR\" commit -m 'Never rm -rf the build'",
@@ -396,7 +397,7 @@ class StructuralAskTest(unittest.TestCase):
             f"exec -a sh docker exec app sh -c 'cat \"{s}\"'", f"env -u sh docker exec app sh -c 'cat \"{s}\"'",
             # `--` ends the options: the payload is read, and its unresolved program asks.
             f"command -- sh -c '$CLIENT cat \"$P\"'; echo \"{s}\"", f"command -- eval '$CLIENT cat \"$P\"'; echo \"{s}\""])
-        self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'nice -n 5 head "{s}"',
+        self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'timeout .5s cat "{s}"', f'nice -n 5 head "{s}"',
                                                 f"env sh -c 'cat \"{s}\"'", f"timeout 5 sh -c 'cat \"{s}\"'",
                                                 f"env bash <<'EOF'\ncat \"{s}\"\nEOF", f"command -- sh -c 'cat \"{s}\"'"])
 
