@@ -301,6 +301,13 @@ class GuardLevels(unittest.TestCase):
         for fields in ({"scratchpad_dir": None}, {"cwd": str(self.root)}, {"cwd": []},
                        {"scratchpad_dir": str(self.root / "other-session")}):
             self.assertEqual(self.decision(one, **fields), "ask")
+        if sys.platform == "darwin":
+            # Real root-owned /tmp symlink on macOS; the other hook path uses its physical spelling.
+            alias = Path("/tmp") / self.pad.relative_to(Path("/tmp").resolve())
+            self.assertIsNone(self.decision(one, cwd=str(alias)))
+            self.assertIsNone(self.decision(one, scratchpad_dir=str(alias)))
+        (self.pad / "alias-dir").symlink_to(self.pad, target_is_directory=True)
+        self.assertEqual(self.decision(one, cwd=str(self.pad / "alias-dir")), "ask")
         (self.pad / "link.md").symlink_to(self.pad / "notes.md")
         self.assertEqual(self.decision("rm -f link.md"), "ask")
         os.link(self.pad / "notes.md", self.pad / "alias.md")

@@ -1251,12 +1251,23 @@ def guard_level() -> str:
     return min(requested, ceiling, key=LEVELS.index)
 
 
+def scratch_path(value: str) -> Path:
+    path = Path(value)
+    # macOS reports both spellings of its system temp paths. Only its two fixed root aliases qualify.
+    if sys.platform == "darwin" and len(path.parts) > 1 and path.parts[1] in ("tmp", "var"):
+        alias = Path("/") / path.parts[1]
+        system = Path("/private") / alias.name
+        if alias.lstat().st_uid == 0 and alias.resolve(strict=True) == system:
+            return system.joinpath(*path.parts[2:])
+    return path
+
+
 def private_task_files(cwd: str, scratchpad: str, names: list[str]) -> bool:
     """The hook identifies the session scratchpad; an environment variable or another user's directory cannot."""
     if not all(isinstance(p, str) and os.path.isabs(p) for p in (cwd, scratchpad)):
         return False
     try:
-        directory, scratch = Path(cwd), Path(scratchpad)
+        directory, scratch = scratch_path(cwd), scratch_path(scratchpad)
         if directory != scratch and scratch not in directory.parents:
             return False
         if scratch.parent == scratch or directory.resolve(strict=True) != directory:
