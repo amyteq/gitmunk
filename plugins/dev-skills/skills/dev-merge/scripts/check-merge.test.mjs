@@ -208,6 +208,17 @@ test('AC-3d the real verdict decides: a fenced example, a missing one or two of 
   assert.equal(gate({ pr: pr({ comments: [quoted] }), main: B, headTree: T1 }).reason, 'review-evidence-stale');
 });
 
+test('AC-3d a usage field in the review signature gives the same review evidence', () => {
+  const signed = (comment) => ({ ...comment, body: comment.body.replace(' · 0:03 · ', ' · 0:03 · in 1.24M (cached 1.10M) · out 18k · ') });
+  for (const verdict of ['approval-eligible', 'continue']) {
+    const plain = terminal(H, B, { verdict });
+    assert.notEqual(signed(plain).body, plain.body);
+    const run = (comment) => gate({ pr: pr({ comments: [comment] }), main: B, headTree: T1 });
+    assert.deepEqual(run(signed(plain)), run(plain), verdict);
+  }
+  assert.equal(gate({ pr: pr({ comments: [signed(terminal())] }), main: B, headTree: T1 }).verdict, 'pass');
+});
+
 test('AC-3d the latest approval by submission time restores a withdrawn marked review, in any array order', () => {
   const by = (login, at) => approval({ author: { login }, submittedAt: at });
   const withdrawn = terminal(H, B, { verdict: 'blocked', at: '2026-11-14T02:45:00Z' });
