@@ -255,6 +255,174 @@ class GuardToolSignalOnTest(GuardToolTest):
                 self.assertEqual(verdict(command), "allow" if command in READ_SKIPS else expected)
 
 
+class GuardLevels(unittest.TestCase):
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(dir=Path("/tmp").resolve())
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.pad = self.root / "session"
+        self.pad.mkdir(mode=0o700)
+        for name in ("needle.txt", "notes.md"):
+            (self.pad / name).write_text("test\n")
+        self.cap = self.root / "guard-level"
+        ceiling = mock.patch.object(guard_tool, "GUARD_CEILING", self.cap)
+        ceiling.start()
+        self.addCleanup(ceiling.stop)
+
+    def decision(self, command, level="med", *, tool=None, **fields):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command, **(tool or {})},
+                   "cwd": str(self.pad), "scratchpad_dir": str(self.pad), **fields}
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {"GITMUNK_GUARD_LEVEL": level}, clear=True), \
+             mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), mock.patch.object(sys, "stdout", output):
+            guard_tool.main()
+        return json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"] if output.getvalue() else None
+
+    def test_grouped_quoted_markdown_leaves_only_the_executable_shell(self):
+        doc = "cd $TMPDIR/run && { cat <<'TEXT'\nUse `supabase db push` only after review.\nTEXT\ncat ac.md\ncat <<'END'\nDone.\nEND\n} > result.md; wc -l result.md"
+        self.assertEqual(self.decision(doc, "low"), "ask")
+        with redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertIsNone(self.decision(doc))
+        self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves quoted Markdown assembly to Claude's permissions\n")
+        with mock.patch.object(sys, "platform", "freebsd13"):  # levels apply on Linux and macOS only
+            self.assertEqual(self.decision(doc), "ask")
+        # The whole command must be the group, even when the extra command is inert.
+        for extra in ("; sh result.md", "; supabase db push", " | sh", "; printf %s x"):
+            self.assertEqual(self.decision(doc + extra), "ask", extra)
+        # Without backticks only the quoted-delimiter check keeps the ask for an unquoted heredoc.
+        self.assertEqual(self.decision(doc.replace("`", "").replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
+        # Only quoted `cat` heredocs and `cat X.md` lines may sit in the group, and every heredoc must close.
+        self.assertEqual(self.decision(doc.replace("cat ac.md", "echo done")), "ask")
+        for line, longer in (("cat ac.md", "cat ac.md extra.md"), ("cat <<'TEXT'", "cat <<'TEXT' ac.md")):
+            self.assertEqual(self.decision(doc.replace(line, longer)), "ask", longer)  # whole lines only
+        # Without backticks the base has no substitution ask, so only the closure check keeps this ask.
+        self.assertEqual(self.decision(doc.replace("`", "").replace("\nEND\n}", "\n}")), "ask")
+        # The shell left after stripping is checked again: a gated word pair outside the bodies keeps the ask.
+        self.assertEqual(self.decision(doc.replace("$TMPDIR/run", "/srv/psql/truncate")), "ask")
+        self.assertEqual(self.decision(doc + "; sudo true"), "deny")
+        self.assertEqual(self.decision(doc, tool={"dangerouslyDisableSandbox": True}), "ask")
+
+    def test_private_scratch_cleanup_and_read_chain(self):
+        one = "rm -f notes.md"
+        self.assertEqual(self.decision(one, "low"), "ask")
+        with redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertIsNone(self.decision(one))
+        self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves scratchpad file removal to Claude's permissions\n")
+        with mock.patch.object(sys, "platform", "freebsd13"):
+            self.assertEqual(self.decision(one), "ask")
+        self.assertIsNone(self.decision(f"cd {self.pad} && {one}", cwd=str(self.root)))
+        self.assertIsNone(self.decision(f"cd {self.pad} && grep -nF -- fixed notes.md | head -n 1"))
+        self.assertEqual(self.decision(f"cd {self.pad}; {one}", cwd=str(self.root)), "ask")
+        for cmd in ("rm -rf notes.md", "rm notes.md missing", "rm -f ../notes.md", "rm -f notes.md; git clean -fd",
+                    'cd "$TMPDIR" && rm -f notes.md', 'cd "$TMPDIR" && curl "$URL" "$(cat notes.md)"'):
+            self.assertEqual(self.decision(cmd), "ask", cmd)
+        for fields in ({"scratchpad_dir": None}, {"cwd": str(self.root)}, {"cwd": []},
+                       {"scratchpad_dir": str(self.root / "other-session")}):
+            self.assertEqual(self.decision(one, **fields), "ask")
+        if sys.platform == "darwin":
+            # Real root-owned /tmp symlink on macOS; the other hook path uses its physical spelling.
+            alias = Path("/tmp") / self.pad.relative_to(Path("/tmp").resolve())
+            self.assertIsNone(self.decision(one, cwd=str(alias)))
+            self.assertIsNone(self.decision(one, scratchpad_dir=str(alias)))
+        (self.pad / "alias-dir").symlink_to(self.pad, target_is_directory=True)
+        self.assertEqual(self.decision(one, cwd=str(self.pad / "alias-dir")), "ask")
+        (self.pad / "link.md").symlink_to(self.pad / "notes.md")
+        self.assertEqual(self.decision("rm -f link.md"), "ask")
+        os.link(self.pad / "notes.md", self.pad / "alias.md")
+        self.assertEqual(self.decision("rm -f alias.md"), "ask")
+        # A protected path below the scratchpad, and shared write access below or above it, keep the ask.
+        for name, mode in (("secrets", 0o700), ("shared", 0o777)):
+            (self.pad / name).mkdir()
+            (self.pad / name).chmod(mode)
+            (self.pad / name / "notes.md").write_text("test\n")
+            self.assertEqual(self.decision(one, cwd=str(self.pad / name)), "ask", name)
+        self.root.chmod(0o777)  # needle.txt, unlike notes.md, has no second link that would keep the ask anyway
+        self.assertEqual(self.decision("rm -f needle.txt"), "ask")
+        self.root.chmod(0o700)
+        self.pad.chmod(0o755)
+        self.assertEqual(self.decision("rm -f needle.txt"), "ask")
+
+    def owned_by(self, target, uid):
+        """Report one path's owner as uid; every other path and field stays real."""
+        def wrap(real):
+            def call(path, *args, **kwargs):
+                info = real(path, *args, **kwargs)
+                return os.stat_result((*info[:4], uid, *info[5:])) if path == target else info
+            return call
+        return mock.patch.multiple(Path, stat=wrap(Path.stat), lstat=wrap(Path.lstat))
+
+    def test_each_owner_and_shared_directory_condition_keeps_the_ask(self):
+        one, foreign = "rm -f needle.txt", os.getuid() + 1
+        self.assertIsNone(self.decision(one))
+        drop = self.pad / "drop"
+        drop.mkdir()
+        drop.chmod(0o1777)
+        (drop / "needle.txt").write_text("test\n")
+        # A foreign file or ancestor, and a root-owned sticky directory at or below the scratchpad.
+        cases = [(self.pad / "needle.txt", foreign, self.pad), (self.root, foreign, self.pad), (drop, 0, drop)]
+        if os.getuid():  # a root session owns its scratchpad
+            cases.append((self.pad, 0, self.pad))
+        for target, uid, cwd in cases:
+            with self.owned_by(target, uid):
+                self.assertEqual(self.decision(one, cwd=str(cwd)), "ask", target)
+        # Above the scratchpad only a root-owned sticky directory may be shared: not a non-sticky one,
+        # and not one an unprivileged session user owns.
+        self.root.chmod(0o777)
+        with self.owned_by(self.root, 0):
+            self.assertEqual(self.decision(one), "ask")
+        if os.getuid():  # a root session's own sticky directory is root-owned, which the policy allows
+            self.root.chmod(0o1777)
+            self.assertEqual(self.decision(one), "ask")
+
+    def test_high_requires_a_trusted_ceiling_and_limits_the_whole_command(self):
+        batch = "rm -f -- notes.md needle.txt"
+        search = 'grep -nF -- "$(cat -- needle.txt)" notes.md | head -n 1'
+        for cmd in (batch, search):
+            self.assertEqual(self.decision(cmd, "high"), "ask")
+        self.cap.write_text("high\n")
+        # Exercise the real file read under an administrator ownership fixture, also on non-root CI.
+        root_file = mock.Mock(st_mode=0o100644, st_uid=0)
+        with mock.patch.object(os, "fstat", return_value=root_file):
+            for cmd, case in ((batch, "scratchpad file removal"), (search, "scratchpad fixed-string lookup")):
+                self.assertEqual(self.decision(cmd), "ask")
+                with redirect_stderr(io.StringIO()) as diagnostic:
+                    self.assertIsNone(self.decision(cmd, "high"))
+                self.assertEqual(diagnostic.getvalue(), f"dev-hooks: high level leaves {case} to Claude's permissions\n")
+                self.assertEqual(self.decision(cmd + "; git clean -fd", "high"), "ask")
+                self.assertEqual(self.decision(cmd, "high", tool={"dangerouslyDisableSandbox": True}), "ask")
+                with mock.patch.object(sys, "platform", "win32"):
+                    self.assertEqual(self.decision(cmd, "high"), "ask")
+            # Each lookup operand and each removed file must pass the scratchpad file checks on its own.
+            (self.pad / "link.txt").symlink_to(self.pad / "needle.txt")
+            (self.pad / "link.md").symlink_to(self.pad / "notes.md")
+            for cmd in ('grep -nF -- "$(cat -- link.txt)" notes.md', 'grep -nF -- "$(cat -- needle.txt)" link.md',
+                        "rm -f -- notes.md link.md"):
+                self.assertEqual(self.decision(cmd, "high"), "ask", cmd)
+            self.cap.write_text("low")
+            self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+            for text in ("bogus", "high" + " " * 16 + "invalid"):  # an unknown level, then an overlong file
+                self.cap.write_text(text)
+                with redirect_stderr(io.StringIO()) as diagnostic:
+                    self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+                    self.assertIn("using low", diagnostic.getvalue())
+
+    def test_invalid_environment_and_untrusted_ceiling_keep_the_baseline(self):
+        with redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertEqual(self.decision("rm -f notes.md", "off"), "ask")
+            # A symlinked ceiling is refused even when its target would pass as a root-owned "high".
+            (self.root / "target").write_text("high")
+            self.cap.symlink_to(self.root / "target")
+            with mock.patch.object(os, "fstat", return_value=mock.Mock(st_uid=0, st_mode=0o100644)):
+                self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+            self.cap.unlink()
+            self.cap.write_text("high")
+            for uid, mode in [(1, 0o100600), (0, 0o100664), (0, 0o010644)]:  # the last is a root-owned FIFO
+                with mock.patch.object(os, "fstat", return_value=mock.Mock(st_uid=uid, st_mode=mode)):
+                    self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+            self.assertIn("using low", diagnostic.getvalue())
+        self.assertEqual(self.decision("GITMUNK_GUARD_LEVEL=high rm -f notes.md", "low"), "ask")
+
+
 def decide(command: str, sandboxed: bool) -> str:
     return guard_tool.bash_decision(command, sandboxed=sandboxed)[0] or "allow"
 

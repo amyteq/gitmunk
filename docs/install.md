@@ -233,6 +233,20 @@ User-level hooks that pointed at project files also failed 13,051 times in the s
 - **Narrow broad `ask` rules.** `Bash(gh release*)` also stops `gh release list` and `gh release view`. Ask for the writes only: `Bash(gh release create *)`, `Bash(gh release delete *)`, `Bash(gh release upload *)` and `Bash(gh release edit *)`. A rule for a paid run should match the command that starts it, not every `grep` for its name.
 - **Leave `rm` asks to the hook.** With `dev-hooks` installed, drop a `Bash(rm *)` ask rule. The hook asks before deletion outside `/tmp` and `$TMPDIR` and allows temp paths, also through a variable assigned one earlier in the same command.
 
+### Guard levels
+
+On Linux and macOS, `GITMUNK_GUARD_LEVEL` selects how the hook handles three specific Bash asks. Other commands follow the existing rules. A recognized operation returns no hook decision, so Claude continues its normal permission checks. The hook then writes one line to stderr that names the level and the case, without the command, for example `dev-hooks: med level leaves scratchpad file removal to Claude's permissions`. The other cases are `quoted Markdown assembly` and `scratchpad fixed-string lookup`.
+
+| Level | Additional cases |
+|---|---|
+| `low` | Uses the 0.2.2 decisions. |
+| `med` (default) | A brace group that writes Markdown using `cat` with quoted heredocs and local Markdown files can mention a database push or reset. The hook rechecks the shell outside the literal bodies. In the session scratchpad, a nonrecursive `rm -f -- result.md` can remove one explicitly named, existing regular file. |
+| `high` | Also handles several such files in one `rm`, and `grep -nF -- "$(cat -- needle.txt)" report.md`, optionally piped into `head -n N`. Both search files must pass the same scratchpad checks. |
+
+The ceiling defaults to `med`. A host administrator can set it to `low`, `med` or `high` in the one-line file `/etc/gitmunk-guard-level`. The hook accepts a root-owned regular file without group or other write permission. The effective level is the lower of the requested level and the ceiling. An invalid level or unreadable ceiling selects `low` and writes a diagnostic to stderr. A command's own environment assignments cannot select its hook level.
+
+For the new file cases, the hook uses Claude's session-specific `scratchpad_dir` and current `cwd`. A literal `cd /absolute/path &&` can select the directory instead. It must be the private scratchpad or a directory below it. This works under system or user-configured temp roots. Missing scratchpad evidence, unknown paths, linked files, shared writable directories and additional commands keep the original decision. These checks inspect the filesystem before Bash runs. They do not serialize other processes running as the same user. A request to disable the sandbox keeps the original decision at every level. Older Claude versions continue to use the existing temp rules when the scratchpad field is absent. [Claude hook input fields](https://code.claude.com/docs/en/hooks#common-input-fields)
+
 ### When the read skip applies
 
 The hook input does not say whether a call runs sandboxed, so `dev-hooks` reads the settings files the hook can see: the user file (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`), the project's `.claude/settings.json` and `.claude/settings.local.json`, and the managed `managed-settings.json` and `managed-settings.d/*.json` in `/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode` (macOS). It skips the substitution ask for `cat`, `head`, `grep` and the other read programs only when all of these hold, and asks as before otherwise:
