@@ -30,17 +30,20 @@ const ROUTES = {
   claude: { cli: 'claude' },
 };
 const PHASES = { reviewer: ['review', 'closing-review', 'final-review'], writer: ['writer', 'closing-writer'] };
+const QUOTE_HANDOFF = 'For line-number checks on known quotes in saved evidence, return candidates for the coordinator to verify with check-text.mjs. '
+  + 'In the relevant finding or disposition, give the snapshot-relative file and an exact single-line literal that occurs on only one line of it. '
+  + 'Skip inline lookup loops and leave the manifest to the coordinator. Pass this rule to any reader already authorized to supply evidence. Do not start subagents.';
 
 // Every probe and phase runs as its own process group, so a timeout, or the end of the phase,
 // stops the whole tree, including children that outlive their parent.
-function runBounded(command, args, { cwd, env, stdinPath, timeoutSeconds, label }) {
+function runBounded(command, args, { cwd, env, promptPath, timeoutSeconds, label }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const out = [];
     const err = [];
     let timedOut = false;
     let settled = false;
-    const child = spawn(command, args, { cwd, env, detached: true, stdio: [stdinPath ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, env, detached: true, stdio: [promptPath ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     groups.add(child.pid);
     const signalGroup = (signal) => killGroup(child.pid, signal);
     const finish = (fields) => {
@@ -68,9 +71,12 @@ function runBounded(command, args, { cwd, env, stdinPath, timeoutSeconds, label 
     child.on('error', (error) => finish({ code: null, signal: null, spawnError: error.code ?? error.message }));
     child.on('exit', () => signalGroup('SIGKILL'));
     child.on('close', (code, signal) => finish({ code, signal }));
-    if (stdinPath) {
+    if (promptPath) {
       child.stdin.on('error', () => {});
-      createReadStream(stdinPath).on('error', () => child.stdin.end()).pipe(child.stdin);
+      const prompt = createReadStream(promptPath);
+      prompt.on('error', () => child.stdin.end());
+      prompt.on('end', () => child.stdin.end(`\n\n${QUOTE_HANDOFF}\n`));
+      prompt.pipe(child.stdin, { end: false });
     }
   });
 }
@@ -400,7 +406,7 @@ async function runPhase(request) {
   }
   const link = gitLink(request.worktree);
   record.started_at = new Date().toISOString();
-  const phase = await runBounded(cli, args, { cwd: request.worktree, env: phaseEnv, stdinPath: request.prompt,
+  const phase = await runBounded(cli, args, { cwd: request.worktree, env: phaseEnv, promptPath: request.prompt,
     timeoutSeconds: request.timeout, label: `the ${request.role} phase` });
   record.ended_at = new Date().toISOString();
   record.elapsed_seconds = Math.round(phase.elapsedMs / 1000);
