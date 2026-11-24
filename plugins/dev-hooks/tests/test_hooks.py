@@ -286,12 +286,15 @@ class GuardLevels(unittest.TestCase):
         self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves quoted Markdown assembly to Claude's permissions\n")
         with mock.patch.object(sys, "platform", "freebsd13"):  # levels apply on Linux and macOS only
             self.assertEqual(self.decision(doc), "ask")
-        for extra in ("; sh result.md", "; supabase db push", " | sh"):
-            self.assertEqual(self.decision(doc + extra), "ask")
+        # The whole command must be the group, even when the extra command is inert.
+        for extra in ("; sh result.md", "; supabase db push", " | sh", "; printf %s x"):
+            self.assertEqual(self.decision(doc + extra), "ask", extra)
         # Without backticks only the quoted-delimiter check keeps the ask for an unquoted heredoc.
         self.assertEqual(self.decision(doc.replace("`", "").replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
         # Only quoted `cat` heredocs and `cat X.md` lines may sit in the group, and every heredoc must close.
         self.assertEqual(self.decision(doc.replace("cat ac.md", "echo done")), "ask")
+        for line, longer in (("cat ac.md", "cat ac.md extra.md"), ("cat <<'TEXT'", "cat <<'TEXT' ac.md")):
+            self.assertEqual(self.decision(doc.replace(line, longer)), "ask", longer)  # whole lines only
         # Without backticks the base has no substitution ask, so only the closure check keeps this ask.
         self.assertEqual(self.decision(doc.replace("`", "").replace("\nEND\n}", "\n}")), "ask")
         # The shell left after stripping is checked again: a gated word pair outside the bodies keeps the ask.
@@ -339,6 +342,36 @@ class GuardLevels(unittest.TestCase):
         self.pad.chmod(0o755)
         self.assertEqual(self.decision("rm -f needle.txt"), "ask")
 
+    def owned_by(self, target, uid):
+        """Report one path's owner as uid; every other path and field stays real."""
+        def wrap(real):
+            def call(path, *args, **kwargs):
+                info = real(path, *args, **kwargs)
+                return os.stat_result((*info[:4], uid, *info[5:])) if path == target else info
+            return call
+        return mock.patch.multiple(Path, stat=wrap(Path.stat), lstat=wrap(Path.lstat))
+
+    def test_each_owner_and_shared_directory_condition_keeps_the_ask(self):
+        one, foreign = "rm -f needle.txt", os.getuid() + 1
+        self.assertIsNone(self.decision(one))
+        drop = self.pad / "drop"
+        drop.mkdir()
+        drop.chmod(0o1777)
+        (drop / "needle.txt").write_text("test\n")
+        # A foreign file or ancestor, and a root-owned sticky directory at or below the scratchpad.
+        cases = [(self.pad / "needle.txt", foreign, self.pad), (self.root, foreign, self.pad), (drop, 0, drop)]
+        if os.getuid():  # a root session owns its scratchpad
+            cases.append((self.pad, 0, self.pad))
+        for target, uid, cwd in cases:
+            with self.owned_by(target, uid):
+                self.assertEqual(self.decision(one, cwd=str(cwd)), "ask", target)
+        # Above the scratchpad only a root-owned sticky directory may be shared: not a user-owned or non-sticky one.
+        self.root.chmod(0o1777)
+        self.assertEqual(self.decision(one), "ask")
+        self.root.chmod(0o777)
+        with self.owned_by(self.root, 0):
+            self.assertEqual(self.decision(one), "ask")
+
     def test_high_requires_a_trusted_ceiling_and_limits_the_whole_command(self):
         batch = "rm -f -- notes.md needle.txt"
         search = 'grep -nF -- "$(cat -- needle.txt)" notes.md | head -n 1'
@@ -365,10 +398,11 @@ class GuardLevels(unittest.TestCase):
                 self.assertEqual(self.decision(cmd, "high"), "ask", cmd)
             self.cap.write_text("low")
             self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
-            self.cap.write_text("high" + " " * 16 + "invalid")
-            with redirect_stderr(io.StringIO()) as diagnostic:
-                self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
-                self.assertIn("using low", diagnostic.getvalue())
+            for text in ("bogus", "high" + " " * 16 + "invalid"):  # an unknown level, then an overlong file
+                self.cap.write_text(text)
+                with redirect_stderr(io.StringIO()) as diagnostic:
+                    self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+                    self.assertIn("using low", diagnostic.getvalue())
 
     def test_invalid_environment_and_untrusted_ceiling_keep_the_baseline(self):
         with redirect_stderr(io.StringIO()) as diagnostic:
