@@ -274,8 +274,9 @@ export function issueFacts(raw, issue, { repo, login, sessions = [], pr: rowPr =
   const line = taskUrl && (TRUSTED.has(node.authorAssociation) || trusted.has(node.editor?.login)) ? goalLine(node.body ?? '') : null;
   const goal = line && [...line.matchAll(/https:\/\/github\.com\/\S+?#issuecomment-\d+/g)].some((m) => m[0] === taskUrl) ? line : null;
 
+  const labels = (node.labels?.nodes ?? []).map((l) => l.name);
   return {
-    task, goal, verdict, ownerQuestion, ownerAnswer, pr, closedAs, priority: priorityOf((node.labels?.nodes ?? []).map((l) => l.name)),
+    task, goal, verdict, ownerQuestion, ownerAnswer, pr, closedAs, priority: priorityOf(labels), labels,
     lastActivity: newest([...comments.map((c) => c.createdAt), pr?.lastActivity]),
   };
 }

@@ -943,3 +943,190 @@ test('run refuses while the lease holder is alive', async () => {
   assert.equal(r.held.pid, process.pid);
   assert.equal(w.reads, 0);
 });
+
+// ---- #58: named slots and the cost alert ----
+
+// Settings changed as `config` changes them; `forget` drops both, as in a settings.json written before they existed.
+function configure(w, args) {
+  const path = join(w.dir, 'settings.json');
+  const { values } = resolveSettings(args, {});
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), ...Object.fromEntries(Object.keys(args).map((k) => [k, values[k]])) }));
+}
+function forget(w) {
+  const path = join(w.dir, 'settings.json');
+  const { slots, cost_alert: costAlert, ...rest } = JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual([slots, costAlert], ['none', 'off']);
+  writeFileSync(path, JSON.stringify(rest));
+}
+// A listed session recorded as holding `e2e`, as a launch that needed it records it.
+function holder(w, name, opts) {
+  const id = w.agent(name, { state: 'working', ...opts });
+  w.records.at(-1).slots = ['e2e'];
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  return id;
+}
+const slotsOf = (w, name) => w.sessions().find((s) => s.name === name).slots;
+const rowOf = (w, issue) => { const r = w.ledger().rows.find((x) => x.issue === issue); return [r.status, r.next, r.session]; };
+const A_HOLDS = (over = {}) => row(1, 41, { status: 'implementing', session: 'er-i41a', ...over });
+
+test('a stage whose slot is full waits as at the cap, and a later row that needs no slot launches (#58 AC-1 a, b)', () => {
+  const setup = (w) => {
+    w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+    w.issues[43] = { labels: ['slot:e2e'] };
+    holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  };
+  const w = world({ rows: [A_HOLDS(), row(2, 43), row(3, 44)] });
+  configure(w, { slots: 'e2e=1' });
+  setup(w);
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i44r']);
+  assert.deepEqual(w.status(), { 41: 'implementing', 43: 'queued', 44: 'refining' });
+  const atCap = world({ rows: [A_HOLDS(), row(2, 43)], cap: 1 }); // the same row held back by a full cap instead
+  setup(atCap);
+  assert.deepEqual(atCap.tick(T(10)).launched, []);
+  assert.deepEqual(rowOf(w, 43), rowOf(atCap, 43));
+});
+
+test('the waiting row launches and holds the slot once its holder leaves the four states; an adopted session holds it too (#58 AC-1 c)', () => {
+  const w = world({ rows: [row(1, 43), A_HOLDS({ n: 2 })] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  w.set('er-i41a', 'done');
+  assert.ok(w.tick(T(10, 5)).launched.includes('er-i43r'));
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['e2e']);
+
+  const a = world({ rows: [row(1, 41), row(2, 43)] });
+  configure(a, { slots: 'e2e=1' });
+  a.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  a.issues[43] = { labels: ['slot:e2e'] };
+  a.agent('er-i41a', { state: 'working', record: false }); // launched before a restart lost the record
+  assert.deepEqual(a.tick(T(10)).launched, []);
+  assert.deepEqual(a.sessions().map((s) => [s.name, s.slots]), [['er-i41a', ['e2e']]]);
+  assert.deepEqual(a.status(), { 41: 'implementing', 43: 'queued' });
+});
+
+test('a slot with room still waits for a full cap (#58 AC-1 d)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 44, { status: 'implementing', session: 'er-i44a' }), row(3, 43)], cap: 2 });
+  configure(w, { slots: 'e2e=2' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[44] = { refined: true };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  w.agent('er-i44a', { state: 'working', stage: 'implement', issue: 44 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.equal(w.status()[43], 'queued');
+  configure(w, { cap: '3' }); // e2e had room: the cap alone held it back
+  assert.deepEqual(w.tick(T(10, 5)).launched, ['er-i43r']);
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['e2e']);
+});
+
+test('a stage outside the slot\'s stage list needs no slot (#58 AC-1 e)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43)] });
+  configure(w, { slots: 'e2e=1:implement' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i43r']);
+  assert.equal(slotsOf(w, 'er-i43r'), undefined);
+});
+
+test('a row\'s own limited session frees its slot for the replacement, which holds it (#58 AC-1 f)', () => {
+  const w = world({ rows: [row(1, 43), A_HOLDS({ n: 2 })], accounts: ['A1', 'A2'] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  const id = holder(w, 'er-i41a', { alias: 'A1', state: 'blocked', stage: 'implement', issue: 41 });
+  w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+  const r = w.tick(T(12)); // #43 comes first, but the slot is #41's: only its replacement takes it
+  assert.deepEqual([r.stopped, r.launched], [['er-i41a'], ['er-i41a2']]);
+  assert.deepEqual(w.sessions().map((s) => [s.name, s.state, s.slots]), [['er-i41a', 'stopped', ['e2e']], ['er-i41a2', 'working', ['e2e']]]);
+  assert.deepEqual(w.status(), { 43: 'queued', 41: 'implementing' });
+});
+
+test('a label naming a slot that is not configured needs no slot; the cap alone applies (#58 AC-1 g)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43), row(3, 44)], cap: 2 });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:gpu'] };
+  w.issues[44] = { labels: ['slot:gpu'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i43r']); // #44 waits for the cap only
+  assert.equal(slotsOf(w, 'er-i43r'), undefined);
+  assert.equal(w.status()[44], 'queued');
+});
+
+test('a session keeps its slot after its label is removed, until it leaves the four states (#58 AC-1 h)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43)] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['Slot:E2E'] }; // compared without regard to case
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  w.issues[41].labels = ['enhancement'];
+  for (const m of [0, 5]) assert.deepEqual(w.tick(T(10, m)).launched, []);
+  w.set('er-i41a', 'blocked');
+  assert.deepEqual(w.tick(T(10, 10)).launched, []);
+  w.set('er-i41a', 'done');
+  assert.ok(w.tick(T(10, 15)).launched.includes('er-i43r'));
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['e2e']);
+});
+
+// metrics.jsonl lines as step 6 appends them; only `task` and `costUsd` count for the alert.
+const writeCosts = (w, costs) => writeFileSync(join(w.dir, 'metrics.jsonl'),
+  costs.map(([task, costUsd]) => `${JSON.stringify({ name: `s${task}`, stage: 'refine', task, costUsd })}\n`).join(''), { flag: 'a' });
+const FOUR = () => [row(1, 41), row(2, 43), row(3, 44), row(4, 45)];
+const alerts = (w) => w.events().filter((e) => e.type === 'cost-alert');
+
+test('cost alert: one judgment for the row above 3× the median, never a second; the row goes on as without it (#58 AC-2 a, c, e)', () => {
+  const COSTS = [[41, 10], [43, 10], [44, 10], [45, 20], [45, 11]];
+  const w = world({ rows: FOUR() });
+  configure(w, { cost_alert: '3' });
+  writeCosts(w, COSTS);
+  const plain = world({ rows: FOUR() });
+  writeCosts(plain, COSTS);
+  const r = w.tick(T(10));
+  const detail = '#45: recorded cost $31.00 is above 3× the batch median $10.00';
+  assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => [e.task, e.detail]), [[45, detail]]);
+  assert.deepEqual(alerts(w).map((e) => [e.task, e.detail]), [[45, detail]]);
+  // AC-2 (e): the same launches, statuses and Next as without the alert.
+  assert.deepEqual(r.launched, plain.tick(T(10)).launched);
+  assert.ok(r.launched.includes('er-i45r'));
+  for (const issue of [41, 43, 44, 45]) assert.deepEqual(rowOf(w, issue), rowOf(plain, issue));
+  assert.deepEqual(alerts(plain), []);
+  // AC-2 (c): later ticks, with the cost unchanged and then higher, raise no second one.
+  w.tick(T(10, 5));
+  writeCosts(w, [[45, 50]]);
+  w.tick(T(10, 10));
+  assert.deepEqual(alerts(w).map((e) => e.task), [45]);
+  assert.deepEqual(w.loop().costAlerted, [45]);
+});
+
+test('with the default slots, rows labelled slot:e2e launch as without the label (#58 AC-3 c)', () => {
+  for (const old of [false, true]) { // the defaults, and a settings.json written before the setting existed
+    const rows = [A_HOLDS(), row(2, 43), row(3, 44)];
+    const labelled = world({ rows });
+    const plain = world({ rows });
+    if (old) forget(labelled);
+    labelled.issues[41] = { refined: true, labels: ['slot:e2e'] };
+    for (const issue of [43, 44]) labelled.issues[issue] = { labels: ['slot:e2e'] };
+    plain.issues[41] = { refined: true };
+    holder(labelled, 'er-i41a', { stage: 'implement', issue: 41 });
+    plain.agent('er-i41a', { state: 'working', stage: 'implement', issue: 41 });
+    const r = labelled.tick(T(10));
+    assert.deepEqual(r.launched, ['er-i43r', 'er-i44r']);
+    assert.deepEqual(r.launched, plain.tick(T(10)).launched);
+    assert.deepEqual(labelled.status(), plain.status());
+  }
+});
+
+test('with the default cost_alert, a row far above the median raises no cost alert (#58 AC-3 c)', () => {
+  for (const old of [false, true]) {
+    const w = world({ rows: FOUR() });
+    if (old) forget(w);
+    writeCosts(w, [[41, 10], [43, 10], [44, 10], [45, 1000]]);
+    w.tick(T(10));
+    w.tick(T(10, 5));
+    assert.deepEqual(alerts(w), []);
+  }
+});

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { batchSummary, sessionRecord, summarizeTranscript } from './metrics.mjs';
+import { batchSummary, costAlerts, sessionRecord, summarizeTranscript } from './metrics.mjs';
 
 const read = (n) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8').split('\n');
 const main = read('transcript-main.jsonl');
@@ -65,4 +65,30 @@ test('error lines without an error field fall back to the text', () => {
   const line = (text) => JSON.stringify({ type: 'assistant', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text }] } });
   const s = summarizeTranscript([line('API Error: rate limit reached'), line('API Error: boom')], []);
   assert.deepEqual([s.rateLimits, s.apiErrors], [1, 1]);
+});
+
+// #58, AC-2: a row's recorded cost is the sum of its non-null costUsd; the median covers every row with one.
+const cost = (task, costUsd) => ({ name: `s${task}`, stage: 'implement', task, costUsd });
+const ABC = [cost(41, 10), cost(43, 10), cost(44, 10)];
+
+test('cost alert: a row above the multiple of the median alerts once, the others never (AC-2 a)', () => {
+  assert.deepEqual(costAlerts([...ABC, cost(45, 20), cost(45, 11)], 3), [{ task: 45, cost: 31, median: 10 }]);
+  assert.deepEqual(costAlerts([...ABC, cost(45, 20), cost(45, 11)], 3, [45]), []); // already alerted
+  assert.deepEqual(costAlerts([...ABC, cost(45, 20), cost(45, 11)], 'off'), []);
+});
+
+test('cost alert: exactly the multiple of the median does not pass (AC-2 b)', () => {
+  assert.deepEqual(costAlerts([...ABC, cost(45, 30)], 3), []);
+});
+
+test('cost alert: null costs add nothing, a row with none is left out of the median, a median of 0 alerts nothing (AC-2 d)', () => {
+  // 45's null record adds nothing: 31 is still its cost.
+  assert.deepEqual(costAlerts([...ABC, cost(45, 20), cost(45, null), cost(45, 11)], 3), [{ task: 45, cost: 31, median: 10 }]);
+  // 46–49 have only null costs. Counted as 0 they would make the median 5 (0, 0, 0, 0, 10, 10, 10, 16), and 16 would pass.
+  const nulls = [46, 47, 48, 49].map((task) => cost(task, null));
+  assert.deepEqual(costAlerts([...ABC, cost(45, 16), ...nulls], 3), []);
+  assert.deepEqual(costAlerts([...ABC, cost(45, 16), ...nulls.map((r) => ({ ...r, costUsd: 0 }))], 3), [{ task: 45, cost: 16, median: 5 }]);
+  assert.deepEqual(costAlerts([cost(41, 0), cost(43, 0), cost(44, 5)], 3), []); // median 0
+  assert.deepEqual(costAlerts([cost(41, null)], 3), []);
+  assert.deepEqual(costAlerts([], 3), []);
 });

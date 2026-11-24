@@ -415,6 +415,10 @@ function launchStage(dir, flags) {
     }
     const facts = issueFacts(fetchFacts({ repo: s.repo, issues: [issue], gh }), issue, { repo: s.repo, login: s.login, pr: row.pr, sessions: records.filter((r) => r.issue === issue) });
     if (facts.closedAs) refuse('issue-closed', { detail: `#${issue} is closed (${facts.closedAs}): nothing to launch` });
+    // #58: the named slots it needs, counted as the cap is: the records it retires and the row's limited sessions free theirs.
+    const slots = loop.slotsNeeded(s, facts.labels, stage);
+    const full = loop.fullSlot(s, records, slots, [...old, ...limited]);
+    if (full) refuse('slot-full', { slot: full.name, holders: full.holders, detail: `slot ${full.name} (${full.count}): ${full.holders.join(', ')} hold it` });
     const pr = facts.pr?.number ?? row.pr;
     if (!pr && (stage === 'review' || stage === 'merge')) refuse('no-pr', { detail: `#${issue} has no pull request to ${stage}` });
     let prompt;
@@ -447,7 +451,8 @@ function launchStage(dir, flags) {
       Object.assign(r, { state: 'stopped', limited: true }); // no endedAt yet: the next tick records its end and metrics
     }
     const autocompact = stage === 'merge' ? null : s.autocompact;
-    const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working', effort: s.effort, autocompact };
+    const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working', effort: s.effort, autocompact,
+      ...(slots.length && { slots }) };
     writeJson(join(dir, 'sessions.json'), [...records, rec]); // R9: recorded before it launches, as the loop does
     const launched = sessions.launch(cli(account), { name, model: s.model, effort: s.effort, autocompact,
       mcp: s.mcp ?? 'none', scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt });
