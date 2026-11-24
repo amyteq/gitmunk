@@ -117,8 +117,8 @@ npm ci --prefix "${CODEX_HOME:-$HOME/.codex}/plugins/cache/gitmunk/dev-skills/<v
 
 | القناة | السوق | المرجع | معرّفات الإضافات | القالب |
 | --- | --- | --- | --- | --- |
-| المستقرة (الافتراضية) | `gitmunk` | آخر إيداع في `main` | `dev-skills@gitmunk`، `dev-hooks@gitmunk` | [`templates/claude/settings.json`](../templates/claude/settings.json) |
-| التجريبية | `gitmunk-beta` ([الفهرس](../channels/beta/.claude-plugin/marketplace.json)) | آخر إيداع في `develop`، بإصدارات مثل `0.3.0-beta.1` | `dev-skills@gitmunk-beta`، `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) |
+| المستقرة (الافتراضية) | `gitmunk` | آخر إيداع في `main` | `dev-skills@gitmunk`، `dev-hooks@gitmunk` | [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) |
+| التجريبية | `gitmunk-beta` ([الفهرس](../channels/beta/.claude-plugin/marketplace.json)) | آخر إيداع في `develop`، بإصدارات مثل `0.3.0-beta.1` | `dev-skills@gitmunk-beta`، `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.beta.json) |
 
 </div>
 

@@ -89,8 +89,8 @@ Codex はプラグインの npm 依存関係をインストールしないため
 
 | チャンネル | マーケットプレイス | 参照先 | プラグイン ID | テンプレート |
 | --- | --- | --- | --- | --- |
-| 安定版（デフォルト） | `gitmunk` | `main` の最新コミット | `dev-skills@gitmunk`、`dev-hooks@gitmunk` | [`templates/claude/settings.json`](../templates/claude/settings.json) |
-| ベータ版 | `gitmunk-beta`（[カタログ](../channels/beta/.claude-plugin/marketplace.json)） | `develop` の最新コミット。バージョンは `0.3.0-beta.1` の形式 | `dev-skills@gitmunk-beta`、`dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) |
+| 安定版（デフォルト） | `gitmunk` | `main` の最新コミット | `dev-skills@gitmunk`、`dev-hooks@gitmunk` | [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) |
+| ベータ版 | `gitmunk-beta`（[カタログ](../channels/beta/.claude-plugin/marketplace.json)） | `develop` の最新コミット。バージョンは `0.3.0-beta.1` の形式 | `dev-skills@gitmunk-beta`、`dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.beta.json) |
 
 プロジェクトでベータ版を使うには、ベータ版テンプレートを `.claude/settings.local.json`（自分だけ）または `.claude/settings.json`（チーム全体）にマージします。2 つのマーケットプレイスの名前が異なるのは、Claude Code がマシン全体でマーケットプレイス名ごとに 1 つのソースしか登録しないためです。ベータ版テンプレートは安定版プラグインを `false` にも設定するので、ユーザーレベルで安定版をインストールしていても、そのプロジェクトで同じスキルが二重に読み込まれることはありません。Codex には 2 つ目のチャンネルがありません。代わりに、`.codex/config.toml` にあるプロジェクトの `[marketplaces.gitmunk]` の `ref` を `main` ではなく `develop` に向けてください。ベータ版がリリースになると、そのプラグインのバージョンから `-beta.N` サフィックスが外れ、`develop` が `main` にマージされ、ベータ版のプロジェクトはベータ版テンプレートを外せるようになります。[リリースワークフロー](../.github/workflows/release.yml) は、`main` への PR を、`CHANGELOG.md` の先頭セクションが単純な `## X.Y.Z` であり、どのバージョンにもプレリリースサフィックスが付いておらず、`vX.Y.Z` タグがまだ存在しない場合を除いて失敗させます。マージ後は `vX.Y.Z` タグを作成し、そのセクションをリリースノートとして GitHub リリースを公開します。
 

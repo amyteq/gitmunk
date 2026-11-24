@@ -4,28 +4,24 @@
   "permissions": {
     "allow": [
       "Agent(Explore)", "Agent(Plan)",
-      "Bash(bun*)", "Bash(bunx*)", "Bash(chmod +x*)", "Bash(cp*)", "Bash(deno*)",
-      "Bash(docker compose*)", "Bash(docker*)", "Bash(eslint*)", "Bash(export*)",
-      "Bash(gh pr merge*)", "Bash(gh release create*)", "Bash(gh release edit*)", "Bash(gh release upload*)",
-      "Bash(gh*)", "Bash(git*)", "Bash(make*)", "Bash(mkdir*)", "Bash(mv*)", "Bash(mypy*)", "Bash(node*)", "Bash(npm*)",
-      "Bash(npx*)", "Bash(playwright*)", "Bash(pnpm*)", "Bash(prettier*)", "Bash(psql*)", "Bash(pyright*)",
+      "Bash(bunx*)", "Bash(chmod +x*)", "Bash(cp*)", "Bash(eslint*)", "Bash(export*)", "Bash(make*)", "Bash(mkdir*)",
+      "Bash(mv*)", "Bash(mypy*)", "Bash(node*)", "Bash(npx*)", "Bash(playwright*)", "Bash(prettier*)", "Bash(pyright*)",
       "Bash(pytest*)", "Bash(python*)", "Bash(ruff*)", "Bash(scripts/*)", "Bash(source*)",
-      "Bash(supabase db diff*)", "Bash(supabase gen types*)", "Bash(supabase migration up*)",
-      "Bash(supabase migration*)", "Bash(supabase start*)", "Bash(supabase status*)", "Bash(supabase stop*)",
-      "Bash(touch*)", "Bash(tsc*)", "Bash(uv*)", "Bash(vite*)", "Bash(vitest*)",
+      "Bash(supabase db diff*)", "Bash(supabase gen types*)", "Bash(supabase start*)", "Bash(supabase status*)",
+      "Bash(touch*)", "Bash(tsc*)", "Bash(vite*)",
       "Edit", "Glob", "Grep", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "WebSearch", "Write"
     ],
     "deny": [
       "Bash(chmod 777*)", "Bash(chown * / *)",
       "Bash(curl *169.254.169.254*)", "Bash(curl *metadata.google*)", "Bash(dd *of=/dev*)", "Bash(doas*)",
       "Bash(docker run *--privileged*)",
-      "Bash(git branch -D*)", "Bash(git clean -fd*)", "Bash(git clean -fdx*)", "Bash(git clean -xfd*)",
+      "Bash(git branch -D*)", "Bash(git clean -fd*)", "Bash(git clean -xfd*)",
       "Bash(git filter-branch*)", "Bash(git filter-repo*)", "Bash(git push * -f*)", "Bash(git push *--delete*)",
-      "Bash(git push *--force*)", "Bash(git push *-f *)", "Bash(git push --force*)", "Bash(git push -f *)",
+      "Bash(git push *--force*)", "Bash(git push *-f *)",
       "Bash(git push -f*)", "Bash(git reset --hard*)", "Bash(git update-ref -d*)", "Bash(halt*)", "Bash(mkfs*)",
       "Bash(psql * -c *alter * drop*)", "Bash(psql * -c *delete from*)", "Bash(psql * -c *drop database*)",
       "Bash(psql * -c *drop schema*)", "Bash(psql * -c *drop table*)", "Bash(psql * -c *truncate*)", "Bash(reboot*)",
-      "Bash(rm -rf $HOME*)", "Bash(rm -rf / *)", "Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(shutdown*)", "Bash(su *)",
+      "Bash(rm -rf $HOME*)", "Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(shutdown*)", "Bash(su *)",
       "Bash(wget *169.254.169.254*)", "Bash(wget *metadata.google*)",
       "Edit(./.env.production)", "Edit(~/.aws/**)", "Edit(~/.config/gcloud/**)", "Edit(~/.ssh/**)",
       "Read(./.env.production)", "Read(~/.ssh/**)"
@@ -63,7 +59,7 @@
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": false,
-    "autoAllowBashIfSandboxed": true,
+    "autoAllowBashIfSandboxed": false,
     "allowUnsandboxedCommands": true,
     "network": {
       "allowedDomains": [
@@ -135,6 +131,6 @@
       "The current repository and its configured remotes are destinations for its own code and task reports authorized for publication there.",
       "Use dependency sources and tooling approved for the current task. Keep credentials in their existing account profile."
     ],
-    "classifyAllShell": false
+    "classifyAllShell": true
   }
 }

@@ -70,7 +70,13 @@ For a plugin installation, merge the `extraKnownMarketplaces` and `enabledPlugin
 
 Both templates enable automatic marketplace updates and `dev-hooks`. Omit the enabled `dev-hooks` entry for a skills-only installation. Teammates are prompted to trust a project's marketplace on first run.
 
-The remaining fields are an optional personal development profile. Review its command permissions, sandbox access, model, retention and Remote Control preferences before merging selected fields into your user settings. The profile asks before native file reads of cloud and GitHub CLI credentials. Its shell allow rules include development tools and interpreters. Set those rules for the tools you use. The auto-mode classifier reads `autoMode` from user or managed settings. See [Claude Code auto mode configuration](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration).
+The remaining fields are an optional personal development profile. Review each one before you merge it into your user settings:
+
+- **Auto mode.** Sessions start in auto mode. `autoMode.classifyAllShell` suspends the shell allow rules there, so the classifier reviews shell commands. The `autoMode` block keeps the default rules and adds exceptions: work you authorized in the current repository, including task-branch pushes; a `sudo` installation of a system package the task needs; development subagents; and a squash merge you explicitly authorize for a named PR and target branch, only at the head an independent review marked approval-eligible and with required CI passing. The classifier reads `autoMode` only from user or managed settings; see [Claude Code auto mode configuration](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration).
+- **Shell allow rules** apply outside auto mode, where a matching command runs without a prompt. They cover file commands, linters, type checkers, test runners and local Supabase commands, and also interpreters, `make`, `npx`, `bunx` and `scripts/*`, which run arbitrary code. Git, the GitHub CLI, package managers, `psql` and Docker have no allow rule. Set those rules for the tools you use.
+- **Sandbox.** Shell commands run sandboxed, with writes limited to the project, `/tmp` and the pnpm store and network limited to the listed hosts. A sandboxed command still needs an allow rule, your approval or the classifier. A command that fails in the sandbox can be retried outside it, and an allow rule that matches the command approves that retry. Where the sandbox is unavailable, commands run without it.
+- **Credentials.** The Read tool asks before it reads cloud and GitHub CLI credentials, and it cannot read SSH keys or `.env.production`. These rules do not cover shell commands.
+- **Preferences.** The profile also sets the model and effort, keeps sessions for 365 days, starts Remote Control with every session, and sets the theme and notifications.
 
 ### Manual commands
 
