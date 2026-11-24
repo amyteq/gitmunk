@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, createReadStream, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync,
-  writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, realpathSync,
+  rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,22 +30,44 @@ const ROUTES = {
   claude: { cli: 'claude' },
 };
 const PHASES = { reviewer: ['review', 'closing-review', 'final-review'], writer: ['writer', 'closing-writer'] };
+const QUOTE_HANDOFF = 'For line-number checks on known quotes in saved evidence, return candidates for the coordinator to verify with check-text.mjs. '
+  + 'In the relevant finding or disposition, give the snapshot-relative file and an exact single-line literal that occurs on only one line of it. '
+  + 'Skip inline lookup loops and leave the manifest to the coordinator. Pass this rule to any reader already authorized to supply evidence. Do not start subagents.';
+
+// Hands each stdout line to onLine as it arrives, so the capture cap never hides a later event. A line longer than the cap
+// is not kept and arrives as null.
+function lineReader(onLine) {
+  let parts = [];
+  let size = 0;
+  const add = (piece) => { size += piece.length; if (size <= STREAM_LIMIT) parts.push(piece); };
+  const emit = () => { onLine(size > STREAM_LIMIT ? null : Buffer.concat(parts).toString('utf8')); parts = []; size = 0; };
+  return {
+    write(chunk) {
+      let start = 0;
+      for (let end = chunk.indexOf(10); end >= 0; start = end + 1, end = chunk.indexOf(10, start)) { add(chunk.subarray(start, end)); emit(); }
+      add(chunk.subarray(start));
+    },
+    end() { if (size) emit(); },
+  };
+}
 
 // Every probe and phase runs as its own process group, so a timeout, or the end of the phase,
 // stops the whole tree, including children that outlive their parent.
-function runBounded(command, args, { cwd, env, stdinPath, timeoutSeconds, label }) {
+function runBounded(command, args, { cwd, env, promptPath, timeoutSeconds, label, onLine }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const out = [];
     const err = [];
     let timedOut = false;
     let settled = false;
-    const child = spawn(command, args, { cwd, env, detached: true, stdio: [stdinPath ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    const lines = onLine && lineReader(onLine);
+    const child = spawn(command, args, { cwd, env, detached: true, stdio: [promptPath ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     groups.add(child.pid);
     const signalGroup = (signal) => killGroup(child.pid, signal);
     const finish = (fields) => {
       if (settled) return;
       settled = true;
+      lines?.end();
       clearTimeout(timer); groups.delete(child.pid);
       if (timedOut) timeouts.push(`${label} timed out after ${Math.round((Date.now() - started) / 1000)}s`);
       resolve({ stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'),
@@ -63,14 +85,18 @@ function runBounded(command, args, { cwd, env, stdinPath, timeoutSeconds, label 
     // Each stream is capped, so a flooding or malfunctioning CLI cannot exhaust the helper before its timeout.
     const capture = (sink) => { let size = 0; return (chunk) => { if (size > STREAM_LIMIT) return; size += chunk.length;
       sink.push(size <= STREAM_LIMIT ? chunk : Buffer.concat([chunk.subarray(0, STREAM_LIMIT + chunk.length - size), Buffer.from('\n[stream truncated]\n')])); }; };
-    child.stdout.on('data', capture(out));
+    const keep = capture(out);
+    child.stdout.on('data', (chunk) => { lines?.write(chunk); keep(chunk); });
     child.stderr.on('data', capture(err));
     child.on('error', (error) => finish({ code: null, signal: null, spawnError: error.code ?? error.message }));
     child.on('exit', () => signalGroup('SIGKILL'));
     child.on('close', (code, signal) => finish({ code, signal }));
-    if (stdinPath) {
+    if (promptPath) {
       child.stdin.on('error', () => {});
-      createReadStream(stdinPath).on('error', () => child.stdin.end()).pipe(child.stdin);
+      const prompt = createReadStream(promptPath);
+      prompt.on('error', () => child.stdin.end());
+      prompt.on('end', () => child.stdin.end(`\n\n${QUOTE_HANDOFF}\n`));
+      prompt.pipe(child.stdin, { end: false });
     }
   });
 }
@@ -198,7 +224,9 @@ function codexSettings(home, request) {
     ...profile };
   if (request.model) delete settings.model;
   if (request.effort) delete settings.model_reasoning_effort;
+  const named = (value) => typeof value === 'string' && value !== '';
   const provider = settings.model_provider;
+  if (provider !== undefined && !named(provider)) return { blocker: `codex-provider: model_provider in ${path} is not a provider name` };
   const definition = typeof provider === 'string' ? config.model_providers?.[provider] : undefined;
   if (definition !== undefined) {
     const unsafe = isTable(definition) ? Object.keys(definition).filter((key) => !PROVIDER_SETTINGS.has(key)) : ['its definition'];
@@ -208,7 +236,13 @@ function codexSettings(home, request) {
   }
   const unreadable = Object.keys(settings).filter((key) => !plain(settings[key]));
   if (unreadable.length) return { blocker: `codex-config: ${unreadable.join(', ')} in ${path} cannot be passed on as a literal value` };
-  return { settings };
+  // Under --json the CLI reports no model, provider or effort, so the phase records the values passed here.
+  const model = request.model ?? settings.model;
+  const effort = request.effort ?? settings.model_reasoning_effort;
+  if (!named(model)) return { blocker: `codex-model: no model is pinned; pass --model, or set model in ${path} or the selected profile` };
+  if (effort !== undefined && !named(effort)) return { blocker: `codex-config: model_reasoning_effort in ${path} is not an effort name` };
+  return { settings, identity: { provider: provider === undefined ? 'openai (default)' : `${provider} (requested)`, model: `${model} (requested)`,
+    effort: effort === undefined ? 'N/A (not emitted)' : `${effort} (requested)` } };
 }
 
 // Provider credentials stay in the installed CLI's own process; model-directed tools reach only the bounded worker. Optional
@@ -240,22 +274,61 @@ function launchCommand(request, bounds, settings = {}) {
     ...(request.model ? ['-m', request.model] : []), ...(request.effort ? ['-c', `model_reasoning_effort="${request.effort}"`] : []),
     ...profile, '-c', 'shell_environment_policy.inherit="none"',
     '-c', `shell_environment_policy.set=${toml({ PATH: bounds.path, LANG: 'C.UTF-8', HOME: bounds.scratch, TMPDIR: bounds.scratch })}`,
-    '-c', 'approval_policy="never"', '--ephemeral', '-'] };
+    // Stdout carries JSONL events and -o the last message, written by the CLI itself outside the worker.
+    '-c', 'approval_policy="never"', '--json', '-o', bounds.last, '--ephemeral', '-'] };
 }
 
-// Codex prints its session header between the first two dashed lines on stderr; anything
-// later is transcript and may quote prompt text, so it is never read as metadata.
-function codexObserved(stderr) {
-  const lines = stderr.split(/\r\n|\n|\r/);
-  const open = lines.findIndex((line) => /^-{4,}$/.test(line));
-  const close = lines.findIndex((line, index) => index > open && /^-{4,}$/.test(line));
-  const header = {};
-  for (const line of open < 0 || close < 0 ? [] : lines.slice(open + 1, close)) {
-    const match = line.match(/^([a-z ]+):\s*(.+)$/);
-    if (match) header[match[1]] = match[2].trim();
-  }
-  return { provider: header.provider ?? null, model: header.model ?? null, effort: header['reasoning effort'] ?? null,
-    context: 'N/A (not emitted)', session: header['session id'] ?? null, sandbox: header.sandbox ?? null, completed: true };
+const count = (value) => Number.isSafeInteger(value) && value >= 0;
+// Each row is [input, cached_input, cache_write, output, reasoning] as the CLI reports them, reasoning optional. One missing
+// or invalid count makes the whole usage malformed, because a partial sum would understate it. Usage never decides a status.
+function usageOf(rows, fields) {
+  if (rows === null) return { usage: null, usage_reason: 'malformed' };
+  if (!rows.length) return { usage: null, usage_reason: 'not-reported' };
+  if (!rows.every((row) => row.slice(0, 4).every(count) && (row[4] === undefined || count(row[4])))) return { usage: null, usage_reason: 'malformed' };
+  const sum = (index) => rows.reduce((total, row) => total + (row[index] ?? 0), 0);
+  return { usage: { input: sum(0), cached_input: sum(1), cache_write: sum(2), output: sum(3),
+    ...(rows.some((row) => row[4] !== undefined) ? { reasoning: sum(4) } : {}), ...fields }, usage_reason: undefined };
+}
+
+// Codex --json events, read as each stdout line arrives. Only a whole line that is a JSON object is an event; an agent
+// message's text is a string inside its item, so no line it contains is ever read as one.
+function codexEvents() {
+  const events = { threads: [], turns: [], errors: [], malformed: false };
+  events.line = (line) => {
+    let event = null;
+    try { event = JSON.parse(line); } catch { /* not an event */ }
+    if (!isTable(event)) events.malformed = true;
+    else if (event.type === 'thread.started') events.threads.push(event.thread_id);
+    else if (event.type === 'turn.completed') events.turns.push(isTable(event.usage) ? event.usage : {});
+    else if (event.type === 'error' || event.type === 'turn.failed') {
+      const message = event.type === 'error' ? event.message : event.error?.message;
+      if (typeof message === 'string' && events.errors.length < 3) events.errors.push(message.slice(0, 240));
+    }
+  };
+  return events;
+}
+
+// A Codex phase's model, provider and effort are its launch values; its session id is the one thread.started event's.
+// No stderr line is read as metadata.
+function codexObserved(events, identity) {
+  const [thread, ...more] = events.threads;
+  return { ...identity, context: 'N/A (not emitted)', session: !more.length && typeof thread === 'string' && thread ? thread : null, sandbox: null,
+    completed: true, tokens: usageOf(events.malformed ? null : events.turns.map((u) =>
+      [u.input_tokens, u.cached_input_tokens, u.cache_write_input_tokens, u.output_tokens, u.reasoning_output_tokens]),
+    { cost_usd: null, source: 'codex:turn.completed' }) };
+}
+
+// Claude's input counts cache reads and writes as well, so the record's input adds them; cost is the run's total_cost_usd.
+function claudeUsage(stdout, result) {
+  if (!isTable(result)) return usageOf(stdout.trim() ? null : [], {});
+  const entries = isTable(result.modelUsage) ? Object.values(result.modelUsage) : [];
+  const keys = ['inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens', 'outputTokens'];
+  if (!entries.some((entry) => keys.some((key) => entry?.[key] !== undefined)) || result.total_cost_usd === undefined) return usageOf([], {});
+  if (!(Number.isFinite(result.total_cost_usd) && result.total_cost_usd >= 0)) return usageOf(null, {});
+  const tokens = usageOf(entries.map((entry) => [...keys, 'thinkingTokens'].map((key) => entry?.[key])),
+    { cost_usd: result.total_cost_usd, source: 'claude:modelUsage' });
+  if (tokens.usage) tokens.usage.input += tokens.usage.cached_input + tokens.usage.cache_write;
+  return tokens;
 }
 
 function deniedOperation({ tool_name: tool, tool_input: input }) {
@@ -276,7 +349,18 @@ function claudeObserved(stdout, stderr, request) {
     reported_model: model, context: usage[model]?.contextWindow ?? 'N/A (not emitted)',
     effort: /Unknown --effort value/.test(stderr) ? 'rejected' : request.effort ? `${request.effort} (requested)` : 'N/A (not emitted)',
     session: result?.session_id ?? null, completed: result?.subtype === 'success' && result?.is_error === false,
-    denied: (result?.permission_denials ?? []).map(deniedOperation), text: result?.result };
+    denied: (result?.permission_denials ?? []).map(deniedOperation), text: result?.result, tokens: claudeUsage(stdout, result) };
+}
+
+// The Codex CLI writes the last message to -o without the newline its human-mode stdout adds, so the report restores it.
+// Only a regular file counts; a link or any other node there is not what the CLI wrote.
+function lastMessage(path) {
+  let text = '';
+  try {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try { if (fstatSync(fd).isFile()) text = readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
+  } catch { /* missing */ }
+  return text ? { text: `${text}\n` } : { blocker: 'report: the Codex last-message file is missing, empty or not a regular file' };
 }
 
 // The report the coordinator publishes is the result text with exactly one outer fence removed: a fence line is three
@@ -313,7 +397,7 @@ function verify(request, requested, observed) {
   const blockers = [];
   if (!observed.session) blockers.push('session id not observed');
   if (!observed.model) blockers.push('model not observed unambiguously');
-  else if (requested.model && observed.model !== requested.model) {
+  else if (requested.model && ![requested.model, `${requested.model} (requested)`].includes(observed.model)) {
     blockers.push(`model mismatch: requested ${requested.model}, observed ${observed.model}`);
   }
   if (!observed.provider) blockers.push('provider not observed');
@@ -336,11 +420,12 @@ async function runPhase(request) {
   const record = { run_id: request.runId, round: request.round, phase: request.phase, attempt: request.attempt,
     role: request.role, provider: route.cli, route: request.profile ? `profile:${request.profile}` : 'cli-configured', worktree: request.worktree,
     requested: { model: request.model ?? null, effort: request.effort ?? null, profile: request.profile ?? null },
-    started_at: new Date().toISOString(), blockers: [], coordinator: [] };
+    started_at: new Date().toISOString(), blockers: [], coordinator: [], usage: null, usage_reason: 'not-run' };
   const secrets = Object.entries(env).filter(([name, value]) => /(?:API_KEY|TOKEN|SECRET|PASSWORD)$/.test(name) && value.length >= 8).map(([, value]) => value);
   let scratch;
+  let lastDir;
   const finish = (status, fields = {}) => {
-    if (scratch) rmSync(scratch, { recursive: true, force: true });
+    for (const dir of [scratch, lastDir]) if (dir) rmSync(dir, { recursive: true, force: true });
     if (timeouts.length) { status = 'timeout'; fields = { timeouts, transport_failure: timeouts[0], ...fields }; }
     Object.assign(record, fields, { status, ended_at: new Date().toISOString() });
     return { status, record, secrets }; };
@@ -372,6 +457,13 @@ async function runPhase(request) {
   const gitDirs = await git(request.worktree, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probeSeconds);
   const bounds = { scratch, path: env.PATH ?? '', read: [...toolchainDirs(env.PATH ?? '', process.env), ...(resolved.release ? [resolved.release] : [])],
     git: [...new Set((gitDirs ?? '').split('\n').filter(Boolean))] };
+  if (route.cli === 'codex') {
+    // The CLI writes -o as a host process, so a path the worker could reach would let a role plant the report or redirect the write.
+    lastDir = mkdtempSync(join(tmpdir(), 'dev-review-pr-last-'));
+    bounds.last = join(lastDir, 'last-message.md');
+    const inside = [request.worktree, scratch, ...bounds.read, ...bounds.git].map(real).find((mount) => mount && covers(mount, real(lastDir)));
+    if (inside) { record.blockers.push(`bounded-tools: the last-message directory lies inside the worker mount ${inside}; set TMPDIR outside it`); return finish('refused'); }
+  }
   const { args, env: workerEnv, profile } = launchCommand(request, bounds, codex.settings);
   const phaseEnv = { ...env, ...workerEnv };
   if (route.cli === 'claude') {
@@ -400,15 +492,18 @@ async function runPhase(request) {
   }
   const link = gitLink(request.worktree);
   record.started_at = new Date().toISOString();
-  const phase = await runBounded(cli, args, { cwd: request.worktree, env: phaseEnv, stdinPath: request.prompt,
-    timeoutSeconds: request.timeout, label: `the ${request.role} phase` });
+  const events = route.cli === 'codex' ? codexEvents() : null;
+  const phase = await runBounded(cli, args, { cwd: request.worktree, env: phaseEnv, promptPath: request.prompt,
+    timeoutSeconds: request.timeout, label: `the ${request.role} phase`, onLine: events?.line });
   record.ended_at = new Date().toISOString();
   record.elapsed_seconds = Math.round(phase.elapsedMs / 1000);
   record.exit_code = phase.code;
   // Codex reports no denials; its uncommitted change is the coordinator's to commit, never a denial.
-  const { denied = [], text, ...observed } = route.cli === 'codex' ? codexObserved(phase.stderr) : claudeObserved(phase.stdout, phase.stderr, request);
+  const { denied = [], text, tokens, ...observed } = events ? codexObserved(events, codex.identity) : claudeObserved(phase.stdout, phase.stderr, request);
   record.observed = observed;
-  record.errors = errorLines(phase.stderr);
+  Object.assign(record, tokens);
+  // A failed --json run reports its cause as events and may leave stderr empty.
+  record.errors = [...(events?.errors ?? []), ...errorLines(phase.stderr)].slice(0, 3);
   if (gitLink(request.worktree) !== link) {
     record.blockers.push('git-metadata: the phase changed the worktree\'s .git entry, so no Git command runs in it; inspect it before any commit');
     return { ...finish('blocked'), output: { output: phase.stdout, meta: phase.stderr } };
@@ -426,7 +521,7 @@ async function runPhase(request) {
     return { ...finish('failed', { transport_failure: record.errors[0] ?? phase.spawnError ?? `exit ${phase.code}${phase.signal ? ` (${phase.signal})` : ''}` }), output };
   }
   record.blockers.push(...verify(request, record.requested, observed));
-  const report = route.cli === 'codex' ? { text: phase.stdout } : unwrapReport(text);
+  const report = events ? lastMessage(bounds.last) : unwrapReport(text);
   if (report.blocker) record.blockers.push(report.blocker); else output.report = report.text;
   if (request.role === 'reviewer' && (record.head_after !== record.head_before || record.dirty_after)) record.blockers.push('read-only violation: the reviewer changed the worktree');
   return { ...finish(record.blockers.length ? 'blocked' : 'completed'), output };

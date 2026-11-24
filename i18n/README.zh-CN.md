@@ -69,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-如需与团队共享这些插件，请改为将 [`templates/claude/settings.json`](../templates/claude/settings.json) 合并到项目的 `.claude/settings.json` 中。
+如需与团队共享这些插件，请改为将 [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) 合并到项目的 `.claude/settings.json` 中。
 
 ### Codex
 
@@ -89,8 +89,8 @@ Codex 不会安装插件的 npm 依赖，因此最后一条命令用于安装辅
 
 | 渠道 | 插件市场 | Ref | 插件 ID | 模板 |
 | --- | --- | --- | --- | --- |
-| 稳定版（默认） | `gitmunk` | `main` 的最新提交 | `dev-skills@gitmunk`、`dev-hooks@gitmunk` | [`templates/claude/settings.json`](../templates/claude/settings.json) |
-| 测试版 | `gitmunk-beta`（[目录](../channels/beta/.claude-plugin/marketplace.json)） | `develop` 的最新提交，版本形如 `0.3.0-beta.1` | `dev-skills@gitmunk-beta`、`dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) |
+| 稳定版（默认） | `gitmunk` | `main` 的最新提交 | `dev-skills@gitmunk`、`dev-hooks@gitmunk` | [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) |
+| 测试版 | `gitmunk-beta`（[目录](../channels/beta/.claude-plugin/marketplace.json)） | `develop` 的最新提交，版本形如 `0.3.0-beta.1` | `dev-skills@gitmunk-beta`、`dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.beta.json) |
 
 项目要启用测试版，可将测试版模板合并到项目的 `.claude/settings.local.json`（仅对你生效）或 `.claude/settings.json`（对整个团队生效）中。两个插件市场之所以使用不同的名称，是因为 Claude Code 在整台机器上为每个插件市场名称只登记一个来源；测试版模板还会把稳定版插件设为 `false`，这样用户级的稳定版安装就不会在该项目中重复加载相同的技能。Codex 没有第二个渠道：请把项目 `.codex/config.toml` 中 `[marketplaces.gitmunk]` 的 `ref` 指向 `develop`，而不是 `main`。当某个测试版成为正式发布时，其插件的版本号会去掉 `-beta.N` 后缀，`develop` 会被合并到 `main`，测试版项目也可以移除测试版模板。对于合并到 `main` 的 PR，除非 `CHANGELOG.md` 最上方的章节是纯粹的 `## X.Y.Z`、没有任何版本带预发布后缀，并且 `vX.Y.Z` 尚未被打标签，否则[发布工作流](../.github/workflows/release.yml)会让该 PR 检查失败；合并之后，它会打上 `vX.Y.Z` 标签，并以该章节作为发行说明发布一个 GitHub 发行版。
 

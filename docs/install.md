@@ -63,12 +63,20 @@ Stable is the marketplace `gitmunk`, at the head of `main`. Beta is the marketpl
 
 ### Templates
 
-Instead of running commands, merge a template into a settings file:
+For a plugin installation, merge the `extraKnownMarketplaces` and `enabledPlugins` entries from the chosen template into the settings file for your scope.
 
-- [`templates/claude/settings.json`](../templates/claude/settings.json) is stable: it declares `gitmunk` with `autoUpdate` on, enables `dev-skills@gitmunk` and `dev-hooks@gitmunk`, and adds a few `permissions.deny` rules. Merge it into the project's `.claude/settings.json` to share it with the team, or its `extraKnownMarketplaces` and `enabledPlugins` blocks into your user settings.
-- [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) is beta: it declares `gitmunk-beta` with `autoUpdate` on, enables the `@gitmunk-beta` plugins and sets both stable ids to `false`. Merge it into `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team).
+- The [stable template](../templates/claude/settings.json) enables the two `gitmunk` plugins from `main`.
+- The [beta template](../templates/claude/settings.beta.json) enables the two `gitmunk-beta` plugins from `develop` and disables their stable copies.
 
-Teammates are prompted to trust a project's marketplace on first run. The stable template enables `dev-hooks`, while the installer installs it only with `--with-hooks`; drop the `dev-hooks` line if you do not want the hooks.
+Both templates enable automatic marketplace updates and `dev-hooks`. Omit the enabled `dev-hooks` entry for a skills-only installation. Teammates are prompted to trust a project's marketplace on first run.
+
+The remaining fields are an optional personal development profile. Review each one before you merge it into your user settings:
+
+- **Auto mode.** Sessions start in auto mode. `autoMode.classifyAllShell` suspends shell allow rules there, so a command that a shell allow rule you add would approve goes to the classifier instead. The `autoMode` block keeps the default rules and adds exceptions: work you authorized in the current repository, including task-branch pushes; a `sudo` installation of a system package the task needs; development subagents; and a squash merge you explicitly authorize for a named PR and target branch, only at the head an independent review marked approval-eligible and with required CI passing. The classifier reads `autoMode` from user settings, managed settings and per-invocation configuration (the `--settings` flag or the Agent SDK), not from project settings; see [Claude Code auto mode configuration](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration).
+- **Shell commands.** The profile has no shell allow rules, so outside auto mode Claude Code asks before each shell command that is not read-only. An allow rule you add for a command that runs project code, such as `make`, a test runner, a package script or an interpreter, also approves everything that code runs, including Git and GitHub operations and deletions that the deny and ask rules stop when Claude runs them directly.
+- **Sandbox.** Shell commands run sandboxed, with writes limited to the project, `/tmp` and the pnpm store and network limited to the listed hosts. The sandbox approves no command: a sandboxed command, and its retry outside the sandbox after it fails there, still needs your approval, the classifier or an allow rule you add. Where the sandbox is unavailable, commands run without it.
+- **Credentials.** The Read tool asks before it reads cloud and GitHub CLI credentials, and it cannot read SSH keys or `.env.production`. These rules do not cover shell commands.
+- **Preferences.** The profile also sets the model and effort, keeps sessions for 365 days, starts Remote Control with every session, and sets the theme and notifications.
 
 ### Manual commands
 
@@ -200,6 +208,73 @@ codex plugin marketplace remove gitmunk
 ```
 
 `codex plugin remove` also deletes the plugin's cached folder, `node_modules` included.
+
+## Fewer prompts
+
+One account was measured for 48 hours: 183 Claude Code sessions in `auto` mode, with the Bash sandbox on. 299 tool calls stopped for a human answer, and three quarters of them were `dev-hooks` asks. Every one of those asks was approved, so they added friction and caught nothing (#61):
+
+| Source of the prompt | Prompts |
+| --- | --- |
+| `dev-hooks`: "A substitution or variable decides what this command runs or reads" | 194 |
+| `dev-hooks`: "File deletion outside /tmp or $TMPDIR", for a variable holding a temp path | 21 |
+| `dev-hooks`: quoting it could not read, in long scripts | 7 |
+| `dev-hooks`: a push with `git -c` | 1 |
+| A user `ask` rule `Bash(rm *)`, mostly for `$TMPDIR` scratch | 38 |
+| A user `ask` rule `Bash(gh release*)`, for read-only calls | 15 |
+| A project `ask` rule for a paid run, half of them for a `grep` of its literal string | 19 |
+| `EnterWorktree` outside `.claude/worktrees` | 2 |
+
+User-level hooks that pointed at project files also failed 13,051 times in the same window.
+
+`dev-hooks` 0.2.2 handles the first three rows itself. It reads each simple command on its own, resolves a variable assigned a literal earlier in the same command (`S=$TMPDIR/run; cat $S/a.log`), and skips the ask for read programs when the settings show that the call runs sandboxed. For the rest:
+
+- **Keep `auto` mode.** It ran 98% of the measured calls without a prompt; the other modes prompt more, deny instead of asking, or drop the classifier.
+- **Remove user-level hooks that point at project files.** A hook in `~/.claude/settings.json` that runs `"$CLAUDE_PROJECT_DIR"/.claude/hooks/check.py` fails with exit 127 or 126 in every project without that file. Declare it in that project's `.claude/settings.json`, or ship it in a plugin.
+- **Narrow broad `ask` rules.** `Bash(gh release*)` also stops `gh release list` and `gh release view`. Ask for the writes only: `Bash(gh release create *)`, `Bash(gh release delete *)`, `Bash(gh release upload *)` and `Bash(gh release edit *)`. A rule for a paid run should match the command that starts it, not every `grep` for its name.
+- **Leave `rm` asks to the hook.** With `dev-hooks` installed, drop a `Bash(rm *)` ask rule. The hook asks before deletion outside `/tmp` and `$TMPDIR` and allows temp paths, also through a variable assigned one earlier in the same command.
+
+### When the read skip applies
+
+The hook input does not say whether a call runs sandboxed, so `dev-hooks` reads the settings files the hook can see: the user file (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`), the project's `.claude/settings.json` and `.claude/settings.local.json`, and the managed `managed-settings.json` and `managed-settings.d/*.json` in `/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode` (macOS). It skips the substitution ask for `cat`, `head`, `grep` and the other read programs only when all of these hold, and asks as before otherwise:
+
+- The platform is Linux or macOS, the session is not a hosted one (`CLAUDE_CODE_REMOTE` is unset), and the call does not set `dangerouslyDisableSandbox`.
+- `HOME` and `CLAUDE_PROJECT_DIR` are absolute paths, and so is `CLAUDE_CONFIG_DIR` when it is set.
+- Every settings file that exists is valid JSON with an object where the settings expect one.
+- After precedence (managed over local over project over user, and the last `managed-settings.d` file over the earlier managed ones), `sandbox.enabled` and `sandbox.failIfUnavailable` are `true`. No file sets `sandbox.filesystem.disabled` or `sandbox.enableWeakerNestedSandbox` to `true`, since Claude Code ignores the first in project files and a later `false` there cannot undo it. A value that is not `true` or `false` counts against.
+- No `sandbox.excludedCommands` entry starts with a program the call runs. An entry that starts with a wildcard counts as every program.
+- Reads are denied for each of the 22 protected paths: `secrets`, `.ssh`, `.aws`, `.config/gcloud`, `.config/gh/hosts.yml`, `.netrc`, `id_rsa`, `id_ed25519`, `.env.production`, `.env.test` and `hosts.yml`, under the home directory and under the project directory. A `sandbox.filesystem.denyRead` entry, or a `sandbox.credentials.files` entry with `"mode": "deny"`, covers the path itself and everything beneath it. Only an absolute or `~/` entry without wildcards counts. An `allowRead` entry equal to a protected path, beneath it, or between it and its deny re-opens it, and an `allowRead` entry with a wildcard or a relative path turns the skip off. Write access re-opens a path the same way, so `sandbox.filesystem.allowWrite`, `permissions.additionalDirectories` and the paths of `Edit` allow rules count as `allowRead` entries; an `Edit` rule without a path or with a `/path` relative to its settings file turns the skip off.
+
+For example, the home paths in `~/.claude/settings.json`:
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "denyRead": ["~/secrets", "~/.ssh", "~/.aws", "~/.config/gcloud", "~/.config/gh/hosts.yml", "~/.netrc",
+                   "~/id_rsa", "~/id_ed25519", "~/.env.production", "~/.env.test", "~/hosts.yml"]
+    }
+  }
+}
+```
+
+and the project paths, which must be absolute, in the project's `.claude/settings.local.json`, since an absolute path belongs to one machine:
+
+```json
+{
+  "sandbox": {
+    "filesystem": {
+      "denyRead": ["/path/to/project/secrets", "/path/to/project/.ssh", "/path/to/project/.aws",
+                   "/path/to/project/.config/gcloud", "/path/to/project/.config/gh/hosts.yml",
+                   "/path/to/project/.netrc", "/path/to/project/id_rsa", "/path/to/project/id_ed25519",
+                   "/path/to/project/.env.production", "/path/to/project/.env.test", "/path/to/project/hosts.yml"]
+    }
+  }
+}
+```
+
+The hook cannot see `--settings`, `--setting-sources`, `--add-dir`, `/add-dir`, server-managed settings or macOS managed preferences. If you start Claude Code with one of them, make sure it does not loosen what the files say. The [`dev-hooks` README](../plugins/dev-hooks/README.md#failure-policy) lists the rules that keep their checks with the skip on.
 
 ## Troubleshooting
 
