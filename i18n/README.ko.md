@@ -69,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-팀과 플러그인을 공유하려면 대신 [`templates/claude/settings.json`](../templates/claude/settings.json)을 프로젝트의 `.claude/settings.json`에 병합하세요.
+팀과 플러그인을 공유하려면 대신 [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json)을 프로젝트의 `.claude/settings.json`에 병합하세요.
 
 ### Codex
 

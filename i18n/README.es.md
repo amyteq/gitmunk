@@ -69,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-Para compartir los plugins con un equipo, combina en su lugar [`templates/claude/settings.json`](../templates/claude/settings.json) con el `.claude/settings.json` del proyecto.
+Para compartir los plugins con un equipo, combina en su lugar [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) con el `.claude/settings.json` del proyecto.
 
 ### Codex
 
