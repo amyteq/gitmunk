@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import sys
 from pathlib import Path
 
@@ -388,11 +389,14 @@ DENY_PATTERNS = [
     (r"^(?=.*\b(psql|sqlite3|mysql)\b).*\b(drop\s+database|drop\s+schema)\b", "Refusing database/schema drop from the agent."),
 ]
 
+DATABASE_ASK = "Remote/destructive Supabase database operation requires approval."
+DELETE_ASK = "File deletion outside /tmp or $TMPDIR requires approval."
+
 ASK_PATTERNS = [
     (r"\brmdir\b", "Directory deletion requires approval."),
     (r"\bfind\b.*\s-delete\b", "find -delete requires approval."),
     (r"\bgit\s+clean\b", "git clean requires approval."),
-    (r"\bsupabase\s+db\s+(push|reset)\b", "Remote/destructive Supabase database operation requires approval."),
+    (r"\bsupabase\s+db\s+(push|reset)\b", DATABASE_ASK),
     (r"^(?=.*\b(psql|sqlite3|mysql)\b).*\b(truncate|delete\s+from)\b", "Destructive SQL requires approval."),
     (r"\bdocker\s+compose\s+down\b.*\s-v\b", "Docker volume deletion requires approval."),
 ]
@@ -1036,7 +1040,7 @@ def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, st
     elif structural_ask(reader, sandboxed):
         return "ask", SUBSTITUTION_REASON
     if removes_outside_temp:
-        return "ask", "File deletion outside /tmp or $TMPDIR requires approval."
+        return "ask", DELETE_ASK
     for pattern, reason in ASK_PATTERNS:
         if any(re.search(pattern, lc, flags=re.IGNORECASE) for lc in lowered):
             return "ask", reason
@@ -1193,6 +1197,111 @@ def sandbox_signal(tool_input: dict, env, platform: str, managed_dir: str | None
         return False
 
 
+# These exceptions apply to complete, literal operations after the normal guard has returned a specific ask.
+FILE_NAME = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
+MARKDOWN_GROUP = re.compile(
+    rf"(?:cd (?:\$TMPDIR/|/)?[\w./-]+ && )?\{{ (.+)\n\}} > ({FILE_NAME}\.md)(?:; wc -l \2)?\n?", re.DOTALL)
+QUOTED_CAT = re.compile(r"""cat <<(['"])([A-Za-z_]\w*)\1""")
+LEVELS = ("low", "med", "high")
+GUARD_CEILING = Path("/etc/gitmunk-guard-level")
+
+
+def markdown_shell(command: str) -> str | None:
+    """Preserve the executable shell of a grouped Markdown write and its quoted heredoc delimiters."""
+    group = MARKDOWN_GROUP.fullmatch(command)
+    if not group:
+        return None
+    kept, delimiter = [], None
+    for line in group[1].split("\n"):  # only a literal LF ends a shell heredoc line
+        if delimiter is not None:
+            if line != delimiter:
+                continue
+            delimiter = None
+        elif opener := QUOTED_CAT.fullmatch(line):
+            delimiter = opener[2]
+        elif not re.fullmatch(rf"cat {FILE_NAME}\.md", line):
+            return None
+        kept.append(line)
+    if delimiter is not None:
+        return None
+    return command[:group.start(1)] + "\n".join(kept) + command[group.end(1):]
+
+
+def guard_level() -> str:
+    """The host's optional administrator-owned ceiling bounds even a project-supplied environment."""
+    requested = os.environ.get("GITMUNK_GUARD_LEVEL", "med")
+    try:
+        if requested not in LEVELS:
+            raise ValueError("invalid GITMUNK_GUARD_LEVEL")
+        if requested == "low":
+            return requested
+        with os.fdopen(os.open(GUARD_CEILING, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), encoding="ascii") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                raise ValueError("guard-level ceiling must be a root-owned regular file without shared write access")
+            value = stream.read(16)
+            ceiling = value.strip()
+            if len(value) == 16 or ceiling not in LEVELS:
+                raise ValueError("invalid guard-level ceiling")
+    except FileNotFoundError:
+        ceiling = "med"
+    except (OSError, ValueError) as error:
+        print(f"dev-hooks: {error}; using low", file=sys.stderr)
+        return "low"
+    return min(requested, ceiling, key=LEVELS.index)
+
+
+def private_task_files(cwd: str, scratchpad: str, names: list[str]) -> bool:
+    """The hook identifies the session scratchpad; an environment variable or another user's directory cannot."""
+    if not all(isinstance(p, str) and os.path.isabs(p) for p in (cwd, scratchpad)):
+        return False
+    try:
+        directory, scratch = Path(cwd), Path(scratchpad)
+        if directory != scratch and scratch not in directory.parents:
+            return False
+        if scratch.parent == scratch or directory.resolve(strict=True) != directory:
+            return False
+        uid = os.getuid()
+        for component in [directory, *directory.parents]:
+            info = component.stat()
+            if component == scratch and (info.st_uid != uid or info.st_mode & 0o077):
+                return False
+            # A root-owned sticky ancestor such as /tmp protects each user's directory entry.
+            if info.st_uid not in (0, uid) or info.st_mode & 0o022 and not (
+                info.st_uid == 0 and component in scratch.parents and info.st_mode & stat.S_ISVTX
+            ):
+                return False
+        for name in names:
+            path = directory / name
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_nlink != 1 or path_is_protected(str(path)):
+                return False
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def scoped_operation(command: str, reason: str, payload: dict, level: str) -> bool:
+    if level == "low":
+        return False
+    if reason == DATABASE_ASK:
+        shell = markdown_shell(command)
+        return shell is not None and bash_decision(shell)[0] is None
+    cwd, scratch = payload.get("cwd"), payload.get("scratchpad_dir")
+    prefix = re.match(r"cd (/[\w./-]+) && ", command)
+    if prefix:
+        cwd, command = prefix[1], command[prefix.end():]
+    if reason == DELETE_ASK:
+        match = re.fullmatch(rf"rm (?:-f )?(?:-- )?({FILE_NAME}(?: {FILE_NAME})*)", command)
+        if match:
+            names = match[1].split()
+            return (len(names) == 1 or level == "high") and private_task_files(cwd, scratch, names)
+    if reason == SUBSTITUTION_REASON and level == "high":
+        match = re.fullmatch(rf'grep -nF -- "\$\(cat (?:-- )?({FILE_NAME})\)" ({FILE_NAME})(?: \| head -n [1-9][0-9]*)?', command)
+        return bool(match and private_task_files(cwd, scratch, list(match.groups())))
+    return False
+
+
 def main() -> int:
     payload = json.load(sys.stdin)
     tool = payload.get("tool_name", "")
@@ -1210,6 +1319,10 @@ def main() -> int:
         # The signal only ever relaxes an ask, so the settings files are read only for one.
         if decision == "ask" and sandbox_signal(tool_input, os.environ, sys.platform):
             decision, reason = bash_decision(command, sandboxed=True)
+        if (decision == "ask" and reason in (DATABASE_ASK, DELETE_ASK, SUBSTITUTION_REASON)
+                and sys.platform in MANAGED_DIRS and not tool_input.get("dangerouslyDisableSandbox")
+                and scoped_operation(command, reason, payload, guard_level())):
+            return 0
         if decision and reason:
             emit(decision, reason)
     return 0

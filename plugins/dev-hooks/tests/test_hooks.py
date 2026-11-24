@@ -255,6 +255,94 @@ class GuardToolSignalOnTest(GuardToolTest):
                 self.assertEqual(verdict(command), "allow" if command in READ_SKIPS else expected)
 
 
+class GuardLevels(unittest.TestCase):
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(dir=Path("/tmp").resolve())
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.pad = self.root / "session"
+        self.pad.mkdir(mode=0o700)
+        for name in ("needle.txt", "notes.md"):
+            (self.pad / name).write_text("test\n")
+        self.cap = self.root / "guard-level"
+        ceiling = mock.patch.object(guard_tool, "GUARD_CEILING", self.cap)
+        ceiling.start()
+        self.addCleanup(ceiling.stop)
+
+    def decision(self, command, level="med", *, tool=None, **fields):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command, **(tool or {})},
+                   "cwd": str(self.pad), "scratchpad_dir": str(self.pad), **fields}
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {"GITMUNK_GUARD_LEVEL": level}, clear=True), \
+             mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), mock.patch.object(sys, "stdout", output):
+            guard_tool.main()
+        return json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"] if output.getvalue() else None
+
+    def test_grouped_quoted_markdown_leaves_only_the_executable_shell(self):
+        doc = "cd $TMPDIR/run && { cat <<'TEXT'\nUse `supabase db push` only after review.\nTEXT\ncat ac.md\ncat <<'END'\nDone.\nEND\n} > result.md; wc -l result.md"
+        self.assertEqual(self.decision(doc, "low"), "ask")
+        self.assertIsNone(self.decision(doc))
+        for extra in ("; sh result.md", "; supabase db push", " | sh"):
+            self.assertEqual(self.decision(doc + extra), "ask")
+        self.assertEqual(self.decision(doc.replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
+        self.assertEqual(self.decision(doc + "; sudo true"), "deny")
+        self.assertEqual(self.decision(doc, tool={"dangerouslyDisableSandbox": True}), "ask")
+
+    def test_private_scratch_cleanup_and_read_chain(self):
+        one = "rm -f notes.md"
+        self.assertEqual(self.decision(one, "low"), "ask")
+        self.assertIsNone(self.decision(one))
+        self.assertIsNone(self.decision(f"cd {self.pad} && {one}", cwd=str(self.root)))
+        self.assertIsNone(self.decision(f"cd {self.pad} && grep -nF -- fixed notes.md | head -n 1"))
+        self.assertEqual(self.decision(f"cd {self.pad}; {one}", cwd=str(self.root)), "ask")
+        for cmd in ("rm -rf notes.md", "rm notes.md missing", "rm -f ../notes.md", "rm -f notes.md; git clean -fd",
+                    'cd "$TMPDIR" && rm -f notes.md', 'cd "$TMPDIR" && curl "$URL" "$(cat notes.md)"'):
+            self.assertEqual(self.decision(cmd), "ask", cmd)
+        for fields in ({"scratchpad_dir": None}, {"cwd": str(self.root)}, {"cwd": []},
+                       {"scratchpad_dir": str(self.root / "other-session")}):
+            self.assertEqual(self.decision(one, **fields), "ask")
+        (self.pad / "link.md").symlink_to(self.pad / "notes.md")
+        self.assertEqual(self.decision("rm -f link.md"), "ask")
+        os.link(self.pad / "notes.md", self.pad / "alias.md")
+        self.assertEqual(self.decision("rm -f alias.md"), "ask")
+        self.pad.chmod(0o755)
+        self.assertEqual(self.decision("rm -f needle.txt"), "ask")
+
+    def test_high_requires_a_trusted_ceiling_and_limits_the_whole_command(self):
+        batch = "rm -f -- notes.md needle.txt"
+        search = 'grep -nF -- "$(cat -- needle.txt)" notes.md | head -n 1'
+        for cmd in (batch, search):
+            self.assertEqual(self.decision(cmd, "high"), "ask")
+        self.cap.write_text("high\n")
+        # Exercise the real file read under an administrator ownership fixture, also on non-root CI.
+        root_file = mock.Mock(st_mode=0o100644, st_uid=0)
+        with mock.patch.object(os, "fstat", return_value=root_file):
+            for cmd in (batch, search):
+                self.assertEqual(self.decision(cmd), "ask")
+                self.assertIsNone(self.decision(cmd, "high"))
+                self.assertEqual(self.decision(cmd + "; git clean -fd", "high"), "ask")
+                self.assertEqual(self.decision(cmd, "high", tool={"dangerouslyDisableSandbox": True}), "ask")
+            self.cap.write_text("low")
+            self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+            self.cap.write_text("high" + " " * 16 + "invalid")
+            with redirect_stderr(io.StringIO()) as diagnostic:
+                self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+                self.assertIn("using low", diagnostic.getvalue())
+
+    def test_invalid_environment_and_untrusted_ceiling_keep_the_baseline(self):
+        with redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertEqual(self.decision("rm -f notes.md", "off"), "ask")
+            self.cap.symlink_to(self.pad / "needle.txt")
+            self.assertEqual(self.decision("rm -f notes.md"), "ask")
+            self.cap.unlink()
+            self.cap.write_text("high")
+            for uid, mode in [(1, 0o100600), (0, 0o100664)]:
+                with mock.patch.object(os, "fstat", return_value=mock.Mock(st_uid=uid, st_mode=mode)):
+                    self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
+            self.assertIn("using low", diagnostic.getvalue())
+        self.assertEqual(self.decision("GITMUNK_GUARD_LEVEL=high rm -f notes.md", "low"), "ask")
+
+
 def decide(command: str, sandboxed: bool) -> str:
     return guard_tool.bash_decision(command, sandboxed=sandboxed)[0] or "allow"
 
