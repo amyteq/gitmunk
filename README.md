@@ -10,7 +10,7 @@ A pocket-sized toolkit of agent skills, guardrail hooks and GitHub workflows for
 
 | Plugin | What it adds |
 | --- | --- |
-| [`dev-skills`](plugins/dev-skills) | Nine agent skills for GitHub work: refine issues into work orders, review and merge PRs, explain pending decisions and interview the owner on them, compact long threads, track discussion series, and plan features and stories. See [Skills](#skills). |
+| [`dev-skills`](plugins/dev-skills) | Ten agent skills for GitHub work: refine issues into work orders, review and merge PRs, explain pending decisions and interview the owner on them, compact long threads, track discussion series, and plan features and stories. See [Skills](#skills). |
 | [`dev-hooks`](plugins/dev-hooks) | Guardrail and audit hooks for Claude Code |
 
 GitHub Actions: a reusable "Ask agent" workflow ([`.github/workflows/ask-agent.yml`](.github/workflows/ask-agent.yml)) lets Claude Code or Codex answer mentions in issues, PRs and discussions. Copy the thin callers from [`templates/github/`](templates/github).
@@ -47,6 +47,7 @@ GitHub Actions: a reusable "Ask agent" workflow ([`.github/workflows/ask-agent.y
 | [`dev-track`](plugins/dev-skills/skills/dev-track/SKILL.md) | Collects every unprocessed discussion of one category, such as meeting notes, into that category's tracker discussion, merges their TODOs, marks each one done and closes it. It drafts by default and writes only with `--apply`. |
 | [`dev-analyse-rp`](plugins/dev-skills/skills/dev-analyse-rp/SKILL.md) | Analyses one request pack (a local path, an issue or a discussion) into a planning-only proposal with a story map, delivery slices, candidate units, a dependency graph and an independent review. Only on explicit authorization does it open one PR of feat and story docs, with labels and tracking issues. |
 | [`dev-refine-story`](plugins/dev-skills/skills/dev-refine-story/SKILL.md) | Resolves a `STY_<n>` story to exactly one GitHub issue, then hands off to `dev-refine-issue`. It never implements the story. |
+| [`dev-batch`](plugins/dev-skills/skills/dev-batch/SKILL.md) | Runs a batch of issues through refine, implement, review and squash merge as background sessions across accounts, keeping one ledger in the source issue or discussion. It merges only under the owner's authorization line. |
 
 ## Install
 
@@ -68,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-To share the plugins with a team, merge [`templates/claude/settings.json`](templates/claude/settings.json) into the project's `.claude/settings.json` instead.
+To share the plugins with a team, merge the `extraKnownMarketplaces` and `enabledPlugins` entries from the [stable settings template](templates/claude/settings.json) into the project's `.claude/settings.json`.
 
 ### Codex
 
@@ -89,9 +90,9 @@ Channels are branches: `main` is stable and `develop` is beta. Each plugin's `ve
 | Channel | Marketplace | Ref | Plugin ids | Template |
 | --- | --- | --- | --- | --- |
 | Stable (default) | `gitmunk` | the head of `main` | `dev-skills@gitmunk`, `dev-hooks@gitmunk` | [`templates/claude/settings.json`](templates/claude/settings.json) |
-| Beta | `gitmunk-beta` ([catalog](channels/beta/.claude-plugin/marketplace.json)) | the head of `develop`, versions like `0.3.0-beta.1` | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](templates/claude/settings.beta.json) |
+| Beta | `gitmunk-beta` ([catalog](channels/beta/.claude-plugin/marketplace.json)) | the head of `develop` | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](templates/claude/settings.beta.json) |
 
-A project opts into beta by merging the beta template into its `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team). The two marketplaces have different names because Claude Code registers one source per marketplace name for the whole machine; the beta template also sets the stable plugins to `false`, so a user-level stable install does not load the same skills twice in that project. Codex has no second channel: point the project's `[marketplaces.gitmunk]` `ref` in `.codex/config.toml` at `develop` instead of `main`. When a beta becomes a release, its plugins' versions drop the `-beta.N` suffix, `develop` is merged into `main`, and beta projects can drop the beta template. The [release workflow](.github/workflows/release.yml) fails a PR into `main` unless the top `CHANGELOG.md` section is a plain `## X.Y.Z`, no version carries a pre-release suffix and `vX.Y.Z` is not tagged yet; the merge then tags `vX.Y.Z` and publishes a GitHub release with that section as its notes.
+A project opts into beta by merging the beta template's `extraKnownMarketplaces` and `enabledPlugins` entries into its `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team). The two marketplaces have different names because Claude Code registers one source per marketplace name for the whole machine; the beta template also sets the stable plugins to `false`, so a user-level stable install does not load the same skills twice in that project. Codex has no second channel: point the project's `[marketplaces.gitmunk]` `ref` in `.codex/config.toml` at `develop` instead of `main`. When a beta becomes a release, `develop` is merged into `main`, and beta projects can remove those entries. The [release workflow](.github/workflows/release.yml) fails a PR into `main` unless the top `CHANGELOG.md` section is a plain `## X.Y.Z`, no version carries a pre-release suffix and `vX.Y.Z` is not tagged yet; the merge then tags `vX.Y.Z` and publishes a GitHub release with that section as its notes.
 
 To pin a commit, use the full 40-character SHA where each tool accepts one:
 
@@ -135,7 +136,7 @@ To pin a commit, use the full 40-character SHA where each tool accepts one:
 | [Install guide](docs/install.md) | Installing, updating and removing gitmunk in Claude Code and Codex: the installer, scopes, channels, templates and troubleshooting |
 | [CHANGELOG.md](CHANGELOG.md) | Changes in each release, with migration notes |
 | [AGENTS.md](AGENTS.md) | Rules for working in this repository |
-| [`dev-skills`](plugins/dev-skills/README.md) | The nine skills, their authority and their setup |
+| [`dev-skills`](plugins/dev-skills/README.md) | The ten skills, their authority and their setup |
 | [Work model](plugins/dev-skills/references/work-model.md) | The `ft-sty` feat and story model that `dev-analyse-rp` and `dev-refine-story` follow |
 | [`dev-hooks`](plugins/dev-hooks/README.md) | Each hook, what it denies or asks about, and its failure policy |
 | [Ask agent](scripts/github-agent/README.md) | Setting up the Ask workflow in a repository |
@@ -157,7 +158,7 @@ Edit shared helpers in `shared/` only; plugins carry synced copies because each 
 
 ## Contributing
 
-Changes land on `develop`, the beta channel; `main` receives only releases from `develop`. Work on a task branch and open a focused PR into `develop`. Follow the rules in [AGENTS.md](AGENTS.md): public content only, shared helpers edited in `shared/` only, and a plugin change that consumers should receive bumps that plugin's version as `X.Y.Z-beta.N` with a `CHANGELOG.md` entry. Run the checks in [Develop](#develop) before you push.
+Changes land on `develop`, the beta channel; `main` receives only releases from `develop`. Work on a task branch and open a focused PR into `develop`. Follow the rules in [AGENTS.md](AGENTS.md): public content only, shared helpers edited in `shared/` only, and a plugin change that consumers should receive bumps that plugin's version, with no pre-release suffix, and adds a `CHANGELOG.md` entry. Run the checks in [Develop](#develop) before you push.
 
 ## Sponsors
 

@@ -1,6 +1,6 @@
 {
   "name": "dev-hooks",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "🐿️ Guardrail and audit hooks for Claude Code: deny host-destructive and secret-reading tool calls, block merging PRs authored by someone else, and log redacted tool events.",
   "author": {
     "name": "amyteq",

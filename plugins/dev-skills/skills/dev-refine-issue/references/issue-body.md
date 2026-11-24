@@ -42,13 +42,13 @@ Fill every slot before publication. Omit genuinely inapplicable sections with a 
 **Goal prompt**, only where supported and after readiness:
 
 ```text
-/goal Execute from <returned-and-verified-permalink>. <deliverable and destination>. Continue until <observable completion condition>, or a stated stop condition applies.
+/goal Execute from <returned-and-verified-permalink>. <deliverable and destination>. Continue until <completion artifact> and <PR-head AC IDs> hold at its head, or, at <named owner gate> or another blocker, until its question is posted on issue #<n>, or until a cancellation or budget stop applies. Handed on, not goal conditions: <each review or owner AC as "ID (review)" or "ID (owner)">.
 ```
 
 **Plain-language prompt**, the same task and authority:
 
 ```text
-Execute from <returned-and-verified-permalink>. <the same deliverable, completion condition and stop conditions>.
+Execute from <returned-and-verified-permalink>. <the rest of the /goal line, unchanged>.
 ```
 
 <For a blocked/not-ready task, state that both prompts are prepared and must not be dispatched until the named gates are satisfied.>
@@ -56,6 +56,8 @@ Execute from <returned-and-verified-permalink>. <the same deliverable, completio
 The receiving session must retrieve the task and canonical sources and verify their current authority. A slash command supplies no authorization or readiness transition.
 <!-- AUTO:END -->
 ````
+
+The two prompts follow the stages in the AC block, as [the skill](../SKILL.md) sets out. For a task delivered as a PR, the completion condition names only the criteria marked `Shown at: PR head.`; those marked `review` or `owner` appear only in the separate handed-on part, each with its stage. When the task names an owner gate that blocks the session's work, the goal is met once that gate's question is posted on the issue, and the session then ends without waiting for the answer. Without a named gate, write `or, at a blocker, until …`; a cancellation or budget stop ends the goal without a question. With nothing handed on, the handed-on part names the PR's review and merge. A task not delivered as a PR keeps `Continue until <observable completion artifact and acceptance criteria>, or a stated stop condition applies.` with no handed-on part. The plain-language prompt is the `/goal` line without `/goal `. Keep the `/goal` line one line, alone in the first fenced block under **Goal prompt**: `dev-batch` reads it from there and launches it verbatim.
 
 Use soft-wrapped Markdown and leave a blank line before a thematic `---` separator; `check-publication.mjs --body-file` verifies that on the assembled full body before it is published. Do not alter human-owned text merely to reformat it. Keep unsupported sections visibly unresolved instead of inventing owner, priority, budget or approval.
 

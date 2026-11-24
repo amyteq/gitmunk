@@ -1,0 +1,30 @@
+{
+  "data": {
+    "repository": {
+      "issue_41": {
+        "authorAssociation": "OWNER", "editor": null,
+        "body": "Human intro. /goal not this one\n\n<!-- AUTO:BEGIN -->\n<!-- dev-refine-issue:body -->\n## Execution\n\n**Current task:** [Task instructions, revision 1](https://github.com/example-org/example-repo/issues/41#issuecomment-1).\n\n**Goal prompt**, only where supported and after readiness:\n\n```text\n/goal Execute from https://github.com/example-org/example-repo/issues/41#issuecomment-1. Deliver the change. Continue until done.\n```\n\n**Plain-language prompt**\n\n```text\nExecute from https://github.com/example-org/example-repo/issues/41#issuecomment-1.\n```\n<!-- AUTO:END -->\n",
+        "comments": {
+          "totalCount": 2,
+          "nodes": [
+            { "databaseId": 1, "body": "<!-- dev-refine-issue:task repo=example-org/example-repo issue=41 revision=1 -->\nTask", "authorAssociation": "OWNER", "createdAt": "2026-01-01T10:00:00Z", "url": "https://github.com/example-org/example-repo/issues/41#issuecomment-1", "author": { "login": "bot-user" } },
+            { "databaseId": 2, "body": "<!-- dev-batch:verdict issue=41 revision=1 state=ready -->\nReady.", "authorAssociation": "OWNER", "createdAt": "2026-01-01T11:00:00Z", "url": "https://github.com/example-org/example-repo/issues/41#issuecomment-2", "author": { "login": "bot-user" } }
+          ]
+        },
+        "closedByPullRequestsReferences": {
+          "nodes": [
+            {
+              "number": 50, "state": "OPEN", "merged": false, "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "author": { "login": "bot-user" },
+              "createdAt": "2026-01-02T08:00:00Z", "mergedAt": null, "baseRepository": { "nameWithOwner": "example-org/example-repo" },
+              "commits": { "nodes": [{ "commit": { "committedDate": "2026-01-02T09:00:00Z" } }] },
+              "statusCheckRollup": { "state": "SUCCESS" },
+              "comments": { "nodes": [] },
+              "reviews": { "nodes": [] }
+            }
+          ]
+        },
+        "timelineItems": { "nodes": [] }
+      }
+    }
+  }
+}
