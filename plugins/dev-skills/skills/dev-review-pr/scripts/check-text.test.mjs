@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const script = fileURLToPath(new URL('./check-text.mjs', import.meta.url));
+const script = fileURLToPath(new URL('../../../scripts/check-text.mjs', import.meta.url));
 const run = (...args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' });
 
 function fixture(t) {
