@@ -284,9 +284,14 @@ class GuardLevels(unittest.TestCase):
         with redirect_stderr(io.StringIO()) as diagnostic:
             self.assertIsNone(self.decision(doc))
         self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves quoted Markdown assembly to Claude's permissions\n")
+        with mock.patch.object(sys, "platform", "freebsd13"):  # levels apply on Linux and macOS only
+            self.assertEqual(self.decision(doc), "ask")
         for extra in ("; sh result.md", "; supabase db push", " | sh"):
             self.assertEqual(self.decision(doc + extra), "ask")
         self.assertEqual(self.decision(doc.replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
+        # Only quoted `cat` heredocs and `cat X.md` lines may sit in the group, and every heredoc must close.
+        self.assertEqual(self.decision(doc.replace("cat ac.md", "echo done")), "ask")
+        self.assertEqual(self.decision(doc.replace("\nEND\n}", "\n}")), "ask")
         # The shell left after stripping is checked again: a gated word pair outside the bodies keeps the ask.
         self.assertEqual(self.decision(doc.replace("$TMPDIR/run", "/srv/psql/truncate")), "ask")
         self.assertEqual(self.decision(doc + "; sudo true"), "deny")
@@ -298,6 +303,8 @@ class GuardLevels(unittest.TestCase):
         with redirect_stderr(io.StringIO()) as diagnostic:
             self.assertIsNone(self.decision(one))
         self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves scratchpad file removal to Claude's permissions\n")
+        with mock.patch.object(sys, "platform", "freebsd13"):
+            self.assertEqual(self.decision(one), "ask")
         self.assertIsNone(self.decision(f"cd {self.pad} && {one}", cwd=str(self.root)))
         self.assertIsNone(self.decision(f"cd {self.pad} && grep -nF -- fixed notes.md | head -n 1"))
         self.assertEqual(self.decision(f"cd {self.pad}; {one}", cwd=str(self.root)), "ask")
@@ -346,6 +353,8 @@ class GuardLevels(unittest.TestCase):
                 self.assertEqual(diagnostic.getvalue(), f"dev-hooks: high level leaves {case} to Claude's permissions\n")
                 self.assertEqual(self.decision(cmd + "; git clean -fd", "high"), "ask")
                 self.assertEqual(self.decision(cmd, "high", tool={"dangerouslyDisableSandbox": True}), "ask")
+                with mock.patch.object(sys, "platform", "win32"):
+                    self.assertEqual(self.decision(cmd, "high"), "ask")
             # Each lookup operand and each removed file must pass the scratchpad file checks on its own.
             (self.pad / "link.txt").symlink_to(self.pad / "needle.txt")
             (self.pad / "link.md").symlink_to(self.pad / "notes.md")
