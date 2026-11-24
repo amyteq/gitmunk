@@ -291,7 +291,8 @@ class GuardLevels(unittest.TestCase):
         self.assertEqual(self.decision(doc.replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
         # Only quoted `cat` heredocs and `cat X.md` lines may sit in the group, and every heredoc must close.
         self.assertEqual(self.decision(doc.replace("cat ac.md", "echo done")), "ask")
-        self.assertEqual(self.decision(doc.replace("\nEND\n}", "\n}")), "ask")
+        # Without backticks the base has no substitution ask, so only the closure check keeps this ask.
+        self.assertEqual(self.decision(doc.replace("`", "").replace("\nEND\n}", "\n}")), "ask")
         # The shell left after stripping is checked again: a gated word pair outside the bodies keeps the ask.
         self.assertEqual(self.decision(doc.replace("$TMPDIR/run", "/srv/psql/truncate")), "ask")
         self.assertEqual(self.decision(doc + "; sudo true"), "deny")
