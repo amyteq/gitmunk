@@ -322,8 +322,8 @@ class GuardLevels(unittest.TestCase):
             (self.pad / name).chmod(mode)
             (self.pad / name / "notes.md").write_text("test\n")
             self.assertEqual(self.decision(one, cwd=str(self.pad / name)), "ask", name)
-        self.root.chmod(0o777)
-        self.assertEqual(self.decision(one), "ask")
+        self.root.chmod(0o777)  # needle.txt, unlike notes.md, has no second link that would keep the ask anyway
+        self.assertEqual(self.decision("rm -f needle.txt"), "ask")
         self.root.chmod(0o700)
         self.pad.chmod(0o755)
         self.assertEqual(self.decision("rm -f needle.txt"), "ask")
