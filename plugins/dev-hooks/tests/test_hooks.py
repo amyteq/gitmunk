@@ -287,6 +287,8 @@ class GuardLevels(unittest.TestCase):
         for extra in ("; sh result.md", "; supabase db push", " | sh"):
             self.assertEqual(self.decision(doc + extra), "ask")
         self.assertEqual(self.decision(doc.replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
+        # The shell left after stripping is checked again: a gated word pair outside the bodies keeps the ask.
+        self.assertEqual(self.decision(doc.replace("$TMPDIR/run", "/srv/psql/truncate")), "ask")
         self.assertEqual(self.decision(doc + "; sudo true"), "deny")
         self.assertEqual(self.decision(doc, tool={"dangerouslyDisableSandbox": True}), "ask")
 
@@ -344,6 +346,12 @@ class GuardLevels(unittest.TestCase):
                 self.assertEqual(diagnostic.getvalue(), f"dev-hooks: high level leaves {case} to Claude's permissions\n")
                 self.assertEqual(self.decision(cmd + "; git clean -fd", "high"), "ask")
                 self.assertEqual(self.decision(cmd, "high", tool={"dangerouslyDisableSandbox": True}), "ask")
+            # Each lookup operand and each removed file must pass the scratchpad file checks on its own.
+            (self.pad / "link.txt").symlink_to(self.pad / "needle.txt")
+            (self.pad / "link.md").symlink_to(self.pad / "notes.md")
+            for cmd in ('grep -nF -- "$(cat -- link.txt)" notes.md', 'grep -nF -- "$(cat -- needle.txt)" link.md',
+                        "rm -f -- notes.md link.md"):
+                self.assertEqual(self.decision(cmd, "high"), "ask", cmd)
             self.cap.write_text("low")
             self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
             self.cap.write_text("high" + " " * 16 + "invalid")
@@ -354,11 +362,14 @@ class GuardLevels(unittest.TestCase):
     def test_invalid_environment_and_untrusted_ceiling_keep_the_baseline(self):
         with redirect_stderr(io.StringIO()) as diagnostic:
             self.assertEqual(self.decision("rm -f notes.md", "off"), "ask")
-            self.cap.symlink_to(self.pad / "needle.txt")
-            self.assertEqual(self.decision("rm -f notes.md"), "ask")
+            # A symlinked ceiling is refused even when its target would pass as a root-owned "high".
+            (self.root / "target").write_text("high")
+            self.cap.symlink_to(self.root / "target")
+            with mock.patch.object(os, "fstat", return_value=mock.Mock(st_uid=0, st_mode=0o100644)):
+                self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
             self.cap.unlink()
             self.cap.write_text("high")
-            for uid, mode in [(1, 0o100600), (0, 0o100664)]:
+            for uid, mode in [(1, 0o100600), (0, 0o100664), (0, 0o010644)]:  # the last is a root-owned FIFO
                 with mock.patch.object(os, "fstat", return_value=mock.Mock(st_uid=uid, st_mode=mode)):
                     self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
             self.assertIn("using low", diagnostic.getvalue())
