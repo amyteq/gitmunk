@@ -281,7 +281,9 @@ class GuardLevels(unittest.TestCase):
     def test_grouped_quoted_markdown_leaves_only_the_executable_shell(self):
         doc = "cd $TMPDIR/run && { cat <<'TEXT'\nUse `supabase db push` only after review.\nTEXT\ncat ac.md\ncat <<'END'\nDone.\nEND\n} > result.md; wc -l result.md"
         self.assertEqual(self.decision(doc, "low"), "ask")
-        self.assertIsNone(self.decision(doc))
+        with redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertIsNone(self.decision(doc))
+        self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves quoted Markdown assembly to Claude's permissions\n")
         for extra in ("; sh result.md", "; supabase db push", " | sh"):
             self.assertEqual(self.decision(doc + extra), "ask")
         self.assertEqual(self.decision(doc.replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
@@ -291,7 +293,9 @@ class GuardLevels(unittest.TestCase):
     def test_private_scratch_cleanup_and_read_chain(self):
         one = "rm -f notes.md"
         self.assertEqual(self.decision(one, "low"), "ask")
-        self.assertIsNone(self.decision(one))
+        with redirect_stderr(io.StringIO()) as diagnostic:
+            self.assertIsNone(self.decision(one))
+        self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves scratchpad file removal to Claude's permissions\n")
         self.assertIsNone(self.decision(f"cd {self.pad} && {one}", cwd=str(self.root)))
         self.assertIsNone(self.decision(f"cd {self.pad} && grep -nF -- fixed notes.md | head -n 1"))
         self.assertEqual(self.decision(f"cd {self.pad}; {one}", cwd=str(self.root)), "ask")
@@ -312,6 +316,15 @@ class GuardLevels(unittest.TestCase):
         self.assertEqual(self.decision("rm -f link.md"), "ask")
         os.link(self.pad / "notes.md", self.pad / "alias.md")
         self.assertEqual(self.decision("rm -f alias.md"), "ask")
+        # A protected path below the scratchpad, and shared write access below or above it, keep the ask.
+        for name, mode in (("secrets", 0o700), ("shared", 0o777)):
+            (self.pad / name).mkdir()
+            (self.pad / name).chmod(mode)
+            (self.pad / name / "notes.md").write_text("test\n")
+            self.assertEqual(self.decision(one, cwd=str(self.pad / name)), "ask", name)
+        self.root.chmod(0o777)
+        self.assertEqual(self.decision(one), "ask")
+        self.root.chmod(0o700)
         self.pad.chmod(0o755)
         self.assertEqual(self.decision("rm -f needle.txt"), "ask")
 
@@ -324,9 +337,11 @@ class GuardLevels(unittest.TestCase):
         # Exercise the real file read under an administrator ownership fixture, also on non-root CI.
         root_file = mock.Mock(st_mode=0o100644, st_uid=0)
         with mock.patch.object(os, "fstat", return_value=root_file):
-            for cmd in (batch, search):
+            for cmd, case in ((batch, "scratchpad file removal"), (search, "scratchpad fixed-string lookup")):
                 self.assertEqual(self.decision(cmd), "ask")
-                self.assertIsNone(self.decision(cmd, "high"))
+                with redirect_stderr(io.StringIO()) as diagnostic:
+                    self.assertIsNone(self.decision(cmd, "high"))
+                self.assertEqual(diagnostic.getvalue(), f"dev-hooks: high level leaves {case} to Claude's permissions\n")
                 self.assertEqual(self.decision(cmd + "; git clean -fd", "high"), "ask")
                 self.assertEqual(self.decision(cmd, "high", tool={"dangerouslyDisableSandbox": True}), "ask")
             self.cap.write_text("low")

@@ -1292,25 +1292,26 @@ def private_task_files(cwd: str, scratchpad: str, names: list[str]) -> bool:
         return False
 
 
-def scoped_operation(command: str, reason: str, payload: dict, level: str) -> bool:
+def scoped_operation(command: str, reason: str, payload: dict, level: str) -> str | None:
+    """Name the documented case this complete command matches at this level, or None to keep the ask."""
     if level == "low":
-        return False
+        return None
     if reason == DATABASE_ASK:
         shell = markdown_shell(command)
-        return shell is not None and bash_decision(shell)[0] is None
+        return "quoted Markdown assembly" if shell is not None and bash_decision(shell)[0] is None else None
     cwd, scratch = payload.get("cwd"), payload.get("scratchpad_dir")
     prefix = re.match(r"cd (/[\w./-]+) && ", command)
     if prefix:
         cwd, command = prefix[1], command[prefix.end():]
     if reason == DELETE_ASK:
         match = re.fullmatch(rf"rm (?:-f )?(?:-- )?({FILE_NAME}(?: {FILE_NAME})*)", command)
-        if match:
-            names = match[1].split()
-            return (len(names) == 1 or level == "high") and private_task_files(cwd, scratch, names)
+        if match and (len(names := match[1].split()) == 1 or level == "high") and private_task_files(cwd, scratch, names):
+            return "scratchpad file removal"
     if reason == SUBSTITUTION_REASON and level == "high":
         match = re.fullmatch(rf'grep -nF -- "\$\(cat (?:-- )?({FILE_NAME})\)" ({FILE_NAME})(?: \| head -n [1-9][0-9]*)?', command)
-        return bool(match and private_task_files(cwd, scratch, list(match.groups())))
-    return False
+        if match and private_task_files(cwd, scratch, list(match.groups())):
+            return "scratchpad fixed-string lookup"
+    return None
 
 
 def main() -> int:
@@ -1331,9 +1332,12 @@ def main() -> int:
         if decision == "ask" and sandbox_signal(tool_input, os.environ, sys.platform):
             decision, reason = bash_decision(command, sandboxed=True)
         if (decision == "ask" and reason in (DATABASE_ASK, DELETE_ASK, SUBSTITUTION_REASON)
-                and sys.platform in MANAGED_DIRS and not tool_input.get("dangerouslyDisableSandbox")
-                and scoped_operation(command, reason, payload, guard_level())):
-            return 0
+                and sys.platform in MANAGED_DIRS and not tool_input.get("dangerouslyDisableSandbox")):
+            level = guard_level()
+            if case := scoped_operation(command, reason, payload, level):
+                # Record why the hook abstains without copying the command into a log.
+                print(f"dev-hooks: {level} level leaves {case} to Claude's permissions", file=sys.stderr)
+                return 0
         if decision and reason:
             emit(decision, reason)
     return 0

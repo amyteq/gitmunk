@@ -227,7 +227,7 @@ User-level hooks that pointed at project files also failed 13,051 times in the s
 
 ### Guard levels
 
-On Linux and macOS, `GITMUNK_GUARD_LEVEL` selects how the hook handles three specific Bash asks. Other commands follow the existing rules. A recognized operation returns no hook decision, so Claude continues its normal permission checks.
+On Linux and macOS, `GITMUNK_GUARD_LEVEL` selects how the hook handles three specific Bash asks. Other commands follow the existing rules. A recognized operation returns no hook decision, so Claude continues its normal permission checks. The hook then writes one line to stderr that names the level and the case, without the command, for example `dev-hooks: med level leaves scratchpad file removal to Claude's permissions`. The other cases are `quoted Markdown assembly` and `scratchpad fixed-string lookup`.
 
 | Level | Additional cases |
 |---|---|
