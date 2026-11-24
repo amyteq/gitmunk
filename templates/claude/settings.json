@@ -1,24 +1,137 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "extraKnownMarketplaces": {
-    "gitmunk": {
-      "source": { "source": "github", "repo": "amyteq/gitmunk", "ref": "main" },
-      "autoUpdate": true
-    }
+  "cleanupPeriodDays": 365,
+  "permissions": {
+    "allow": [
+      "Agent(Explore)", "Agent(Plan)",
+      "Bash(bun*)", "Bash(bunx*)", "Bash(chmod +x*)", "Bash(cp*)", "Bash(deno*)",
+      "Bash(docker compose*)", "Bash(docker*)", "Bash(eslint*)", "Bash(export*)",
+      "Bash(gh pr merge*)", "Bash(gh release create*)", "Bash(gh release edit*)", "Bash(gh release upload*)",
+      "Bash(gh*)", "Bash(git*)", "Bash(make*)", "Bash(mkdir*)", "Bash(mv*)", "Bash(mypy*)", "Bash(node*)", "Bash(npm*)",
+      "Bash(npx*)", "Bash(playwright*)", "Bash(pnpm*)", "Bash(prettier*)", "Bash(psql*)", "Bash(pyright*)",
+      "Bash(pytest*)", "Bash(python*)", "Bash(ruff*)", "Bash(scripts/*)", "Bash(source*)",
+      "Bash(supabase db diff*)", "Bash(supabase gen types*)", "Bash(supabase migration up*)",
+      "Bash(supabase migration*)", "Bash(supabase start*)", "Bash(supabase status*)", "Bash(supabase stop*)",
+      "Bash(touch*)", "Bash(tsc*)", "Bash(uv*)", "Bash(vite*)", "Bash(vitest*)",
+      "Edit", "Glob", "Grep", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "WebSearch", "Write"
+    ],
+    "deny": [
+      "Bash(chmod 777*)", "Bash(chown * / *)",
+      "Bash(curl *169.254.169.254*)", "Bash(curl *metadata.google*)", "Bash(dd *of=/dev*)", "Bash(doas*)",
+      "Bash(docker run *--privileged*)",
+      "Bash(git branch -D*)", "Bash(git clean -fd*)", "Bash(git clean -fdx*)", "Bash(git clean -xfd*)",
+      "Bash(git filter-branch*)", "Bash(git filter-repo*)", "Bash(git push * -f*)", "Bash(git push *--delete*)",
+      "Bash(git push *--force*)", "Bash(git push *-f *)", "Bash(git push --force*)", "Bash(git push -f *)",
+      "Bash(git push -f*)", "Bash(git reset --hard*)", "Bash(git update-ref -d*)", "Bash(halt*)", "Bash(mkfs*)",
+      "Bash(psql * -c *alter * drop*)", "Bash(psql * -c *delete from*)", "Bash(psql * -c *drop database*)",
+      "Bash(psql * -c *drop schema*)", "Bash(psql * -c *drop table*)", "Bash(psql * -c *truncate*)", "Bash(reboot*)",
+      "Bash(rm -rf $HOME*)", "Bash(rm -rf / *)", "Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(shutdown*)", "Bash(su *)",
+      "Bash(wget *169.254.169.254*)", "Bash(wget *metadata.google*)",
+      "Edit(./.env.production)", "Edit(~/.aws/**)", "Edit(~/.config/gcloud/**)", "Edit(~/.ssh/**)",
+      "Read(./.env.production)", "Read(~/.ssh/**)"
+    ],
+    "ask": [
+      "Bash(gh release delete*)",
+      "Bash(git clean*)",
+      "Bash(rmdir *)",
+      "Bash(supabase db push*)",
+      "Bash(supabase db reset*)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.config/gh/hosts.yml)"
+    ],
+    "defaultMode": "auto"
   },
+  "model": "opus",
   "enabledPlugins": {
     "dev-skills@gitmunk": true,
     "dev-hooks@gitmunk": true
   },
-  "permissions": {
-    "deny": [
-      "Bash(git push *--force*)",
-      "Bash(git push -f*)",
-      "Bash(git push * -f*)",
-      "Bash(git filter-branch*)",
-      "Bash(git filter-repo*)",
-      "Read(./.env.production)",
-      "Read(~/.ssh/**)"
-    ]
+  "extraKnownMarketplaces": {
+    "gitmunk": {
+      "source": {
+        "source": "github",
+        "repo": "amyteq/gitmunk",
+        "ref": "main"
+      },
+      "autoUpdate": true
+    }
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": false,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": true,
+    "network": {
+      "allowedDomains": [
+        "api.anthropic.com",
+        "claude.ai",
+        "github.com",
+        "api.github.com",
+        "raw.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "supabase.co",
+        "*.supabase.co",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "playwright.dev",
+        "localhost",
+        "127.0.0.1"
+      ],
+      "deniedDomains": [
+        "169.254.169.254",
+        "metadata.google"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        ".",
+        "/tmp",
+        "~/.local/share/pnpm/store"
+      ],
+      "denyWrite": [
+        "/etc",
+        "/usr",
+        "/var",
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gcloud",
+        "~/.config/gh"
+      ],
+      "denyRead": [
+        "~/.ssh"
+      ]
+    }
+  },
+  "modelSettings": {
+    "claude-opus-5": {
+      "effortLevel": "xhigh"
+    }
+  },
+  "theme": "dark",
+  "autoScrollEnabled": false,
+  "remoteControlAtStartup": true,
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": false,
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "For work the user authorized in the current repository, allow the local edits, dependencies, checks, isolated worktrees, task-branch commits and pushes, and review PR updates required by that task. Follow its scope, acceptance criteria and independent review requirements.",
+      "Allow a specifically needed system dependency installation using sudo and the system package manager when it directly supports the authorized setup or development task. Do not interpret this as authorization for arbitrary privileged changes.",
+      "Allow authorized development subagents to run through their normal supported CLI with their own permission controls; preserve read-only reviewers and separate writer worktrees. This does not authorize bypass flags or weakened controls.",
+      "When the user explicitly authorizes a squash merge for a named PR and target branch in the current task, allow the merge only at the exact head marked approval-eligible by the independent review, with required CI passing. Use --squash and --match-head-commit. Keep direct pushes to protected branches and force pushes outside this exception."
+    ],
+    "soft_deny": [
+      "$defaults"
+    ],
+    "hard_deny": [
+      "$defaults"
+    ],
+    "environment": [
+      "$defaults",
+      "The current repository and its configured remotes are destinations for its own code and task reports authorized for publication there.",
+      "Use dependency sources and tooling approved for the current task. Keep credentials in their existing account profile."
+    ],
+    "classifyAllShell": false
   }
 }

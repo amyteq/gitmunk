@@ -69,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-To share the plugins with a team, merge [`templates/claude/settings.json`](templates/claude/settings.json) into the project's `.claude/settings.json` instead.
+To share the plugins with a team, merge the `extraKnownMarketplaces` and `enabledPlugins` entries from the [stable settings template](templates/claude/settings.json) into the project's `.claude/settings.json`.
 
 ### Codex
 

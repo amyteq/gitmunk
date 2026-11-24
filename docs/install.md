@@ -63,12 +63,14 @@ Stable is the marketplace `gitmunk`, at the head of `main`. Beta is the marketpl
 
 ### Templates
 
-Instead of running commands, merge a template into a settings file:
+For a plugin installation, merge the `extraKnownMarketplaces` and `enabledPlugins` entries from the chosen template into the settings file for your scope.
 
-- [`templates/claude/settings.json`](../templates/claude/settings.json) is stable: it declares `gitmunk` with `autoUpdate` on, enables `dev-skills@gitmunk` and `dev-hooks@gitmunk`, and adds a few `permissions.deny` rules. Merge it into the project's `.claude/settings.json` to share it with the team, or its `extraKnownMarketplaces` and `enabledPlugins` blocks into your user settings.
-- [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) is beta: it declares `gitmunk-beta` with `autoUpdate` on, enables the `@gitmunk-beta` plugins and sets both stable ids to `false`. Merge it into `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team).
+- The [stable template](../templates/claude/settings.json) enables the two `gitmunk` plugins from `main`.
+- The [beta template](../templates/claude/settings.beta.json) enables the two `gitmunk-beta` plugins from `develop` and disables their stable copies.
 
-Teammates are prompted to trust a project's marketplace on first run. The stable template enables `dev-hooks`, while the installer installs it only with `--with-hooks`; drop the `dev-hooks` line if you do not want the hooks.
+Both templates enable automatic marketplace updates and `dev-hooks`. Omit the enabled `dev-hooks` entry for a skills-only installation. Teammates are prompted to trust a project's marketplace on first run.
+
+The remaining fields are an optional personal development profile. Review its command permissions, sandbox access, model, retention and Remote Control preferences before merging selected fields into your user settings. The profile asks before native file reads of cloud and GitHub CLI credentials. Its shell allow rules include development tools and interpreters. Set those rules for the tools you use. The auto-mode classifier reads `autoMode` from user or managed settings. See [Claude Code auto mode configuration](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration).
 
 ### Manual commands
 
