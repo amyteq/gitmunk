@@ -27,6 +27,25 @@ To install the plugin in Claude Code or Codex, see the [install guide](../../doc
 
 The skills also need `gh` (authenticated), and `dev-review-pr` needs the `claude` and/or `codex` CLI for the sessions it launches. `dev-merge` reads `dev-review-pr`'s review reports (or a formal approval) as its merge evidence; `dev-hooks`' `guard_pr_merge` still blocks merging a PR the signed-in account did not author.
 
+## Check quoted evidence
+
+To find several literal quotations in saved evidence, write a nonempty JSON array to `checks.json` in the run's private scratch directory.
+
+```json
+[
+  {"file": "review.md", "literal": "Acceptance criteria", "lines": "first"},
+  {"file": "review.md", "literal": "Integration tests passed"}
+]
+```
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-text.mjs" --input "/path/to/run/checks.json"
+```
+
+Each `file` is a regular UTF-8 file beneath the directory containing the manifest. Use relative paths. The manifest and the entries below its directory must not be symlinks. Each `literal` is a nonempty, single-line string. The optional `lines` field selects `first` or `all` (the default).
+
+The helper returns one `{file, literal, lines}` object per request in a JSON array, preserving order and duplicates. Lines are numbered from 1. A missing quote has `lines: []`. Exit 0 means all checks matched, exit 1 includes the full results with at least one miss, and exit 2 indicates invalid input or a file error. For a quote that could appear in any of several snapshots, list each file explicitly and use the per-file matches.
+
 ## Test
 
 ```bash

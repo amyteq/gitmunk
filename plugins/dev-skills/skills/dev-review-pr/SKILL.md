@@ -43,6 +43,8 @@ An agent may also select this skill for a natural-language request for iterative
 
 Load [reports.md](references/reports.md) before the first handoff. Import relevant existing findings and their dispositions. Assign stable IDs (`F001`, `F002`, …), preserving existing IDs/links; match duplicates by cause and location, not wording.
 
+When verifying several quoted passages against saved evidence, the coordinator batches them with [`check-text`](../../README.md#check-quoted-evidence). Write `checks.json` beside the snapshots in the run's private scratch directory. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-text.mjs" --input MANIFEST`, substituting the quoted absolute path of that file. Resolve missing or ambiguous matches against their source before citing them.
+
 | State | Meaning / next action |
 |---|---|
 | `open` | Valid issue needing a writer disposition |
