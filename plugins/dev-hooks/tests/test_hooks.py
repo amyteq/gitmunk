@@ -365,11 +365,13 @@ class GuardLevels(unittest.TestCase):
         for target, uid, cwd in cases:
             with self.owned_by(target, uid):
                 self.assertEqual(self.decision(one, cwd=str(cwd)), "ask", target)
-        # Above the scratchpad only a root-owned sticky directory may be shared: not a user-owned or non-sticky one.
-        self.root.chmod(0o1777)
-        self.assertEqual(self.decision(one), "ask")
+        # Above the scratchpad only a root-owned sticky directory may be shared: not a non-sticky one,
+        # and not one an unprivileged session user owns.
         self.root.chmod(0o777)
         with self.owned_by(self.root, 0):
+            self.assertEqual(self.decision(one), "ask")
+        if os.getuid():  # a root session's own sticky directory is root-owned, which the policy allows
+            self.root.chmod(0o1777)
             self.assertEqual(self.decision(one), "ask")
 
     def test_high_requires_a_trusted_ceiling_and_limits_the_whole_command(self):
