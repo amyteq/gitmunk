@@ -63,12 +63,20 @@ Stable is the marketplace `gitmunk`, at the head of `main`. Beta is the marketpl
 
 ### Templates
 
-Instead of running commands, merge a template into a settings file:
+For a plugin installation, merge the `extraKnownMarketplaces` and `enabledPlugins` entries from the chosen template into the settings file for your scope.
 
-- [`templates/claude/settings.json`](../templates/claude/settings.json) is stable: it declares `gitmunk` with `autoUpdate` on, enables `dev-skills@gitmunk` and `dev-hooks@gitmunk`, and adds a few `permissions.deny` rules. Merge it into the project's `.claude/settings.json` to share it with the team, or its `extraKnownMarketplaces` and `enabledPlugins` blocks into your user settings.
-- [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) is beta: it declares `gitmunk-beta` with `autoUpdate` on, enables the `@gitmunk-beta` plugins and sets both stable ids to `false`. Merge it into `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team).
+- The [stable template](../templates/claude/settings.json) enables the two `gitmunk` plugins from `main`.
+- The [beta template](../templates/claude/settings.beta.json) enables the two `gitmunk-beta` plugins from `develop` and disables their stable copies.
 
-Teammates are prompted to trust a project's marketplace on first run. The stable template enables `dev-hooks`, while the installer installs it only with `--with-hooks`; drop the `dev-hooks` line if you do not want the hooks.
+Both templates enable automatic marketplace updates and `dev-hooks`. Omit the enabled `dev-hooks` entry for a skills-only installation. Teammates are prompted to trust a project's marketplace on first run.
+
+The remaining fields are an optional personal development profile. Review each one before you merge it into your user settings:
+
+- **Auto mode.** Sessions start in auto mode. `autoMode.classifyAllShell` suspends shell allow rules there, so a command that a shell allow rule you add would approve goes to the classifier instead. The `autoMode` block keeps the default rules and adds exceptions: work you authorized in the current repository, including task-branch pushes; a `sudo` installation of a system package the task needs; development subagents; and a squash merge you explicitly authorize for a named PR and target branch, only at the head an independent review marked approval-eligible and with required CI passing. The classifier reads `autoMode` from user settings, managed settings and per-invocation configuration (the `--settings` flag or the Agent SDK), not from project settings; see [Claude Code auto mode configuration](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration).
+- **Shell commands.** The profile has no shell allow rules, so outside auto mode Claude Code asks before each shell command that is not read-only. An allow rule you add for a command that runs project code, such as `make`, a test runner, a package script or an interpreter, also approves everything that code runs, including Git and GitHub operations and deletions that the deny and ask rules stop when Claude runs them directly.
+- **Sandbox.** Shell commands run sandboxed, with writes limited to the project, `/tmp` and the pnpm store and network limited to the listed hosts. The sandbox approves no command: a sandboxed command, and its retry outside the sandbox after it fails there, still needs your approval, the classifier or an allow rule you add. Where the sandbox is unavailable, commands run without it.
+- **Credentials.** The Read tool asks before it reads cloud and GitHub CLI credentials, and it cannot read SSH keys or `.env.production`. These rules do not cover shell commands.
+- **Preferences.** The profile also sets the model and effort, keeps sessions for 365 days, starts Remote Control with every session, and sets the theme and notifications.
 
 ### Manual commands
 
@@ -224,6 +232,20 @@ User-level hooks that pointed at project files also failed 13,051 times in the s
 - **Remove user-level hooks that point at project files.** A hook in `~/.claude/settings.json` that runs `"$CLAUDE_PROJECT_DIR"/.claude/hooks/check.py` fails with exit 127 or 126 in every project without that file. Declare it in that project's `.claude/settings.json`, or ship it in a plugin.
 - **Narrow broad `ask` rules.** `Bash(gh release*)` also stops `gh release list` and `gh release view`. Ask for the writes only: `Bash(gh release create *)`, `Bash(gh release delete *)`, `Bash(gh release upload *)` and `Bash(gh release edit *)`. A rule for a paid run should match the command that starts it, not every `grep` for its name.
 - **Leave `rm` asks to the hook.** With `dev-hooks` installed, drop a `Bash(rm *)` ask rule. The hook asks before deletion outside `/tmp` and `$TMPDIR` and allows temp paths, also through a variable assigned one earlier in the same command.
+
+### Guard levels
+
+On Linux and macOS, `GITMUNK_GUARD_LEVEL` selects how the hook handles three specific Bash asks. Other commands follow the existing rules. A recognized operation returns no hook decision, so Claude continues its normal permission checks. The hook then writes one line to stderr that names the level and the case, without the command, for example `dev-hooks: med level leaves scratchpad file removal to Claude's permissions`. The other cases are `quoted Markdown assembly` and `scratchpad fixed-string lookup`.
+
+| Level | Additional cases |
+|---|---|
+| `low` | Uses the 0.2.2 decisions. |
+| `med` (default) | A brace group that writes Markdown using `cat` with quoted heredocs and local Markdown files can mention a database push or reset. The hook rechecks the shell outside the literal bodies. In the session scratchpad, a nonrecursive `rm -f -- result.md` can remove one explicitly named, existing regular file. |
+| `high` | Also handles several such files in one `rm`, and `grep -nF -- "$(cat -- needle.txt)" report.md`, optionally piped into `head -n N`. Both search files must pass the same scratchpad checks. |
+
+The ceiling defaults to `med`. A host administrator can set it to `low`, `med` or `high` in the one-line file `/etc/gitmunk-guard-level`. The hook accepts a root-owned regular file without group or other write permission. The effective level is the lower of the requested level and the ceiling. An invalid level or unreadable ceiling selects `low` and writes a diagnostic to stderr. A command's own environment assignments cannot select its hook level.
+
+For the new file cases, the hook uses Claude's session-specific `scratchpad_dir` and current `cwd`. A literal `cd /absolute/path &&` can select the directory instead. It must be the private scratchpad or a directory below it. This works under system or user-configured temp roots. Missing scratchpad evidence, unknown paths, linked files, shared writable directories and additional commands keep the original decision. These checks inspect the filesystem before Bash runs. They do not serialize other processes running as the same user. A request to disable the sandbox keeps the original decision at every level. Older Claude versions continue to use the existing temp rules when the scratchpad field is absent. [Claude hook input fields](https://code.claude.com/docs/en/hooks#common-input-fields)
 
 ### When the read skip applies
 
