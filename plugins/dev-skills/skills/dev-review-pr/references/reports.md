@@ -72,7 +72,7 @@ Verdict: continue / approval-eligible / blocked / budget-exhausted.
 Unresolved P0/P1: IDs or none. Residual P2/P3: IDs or none.
 
 ---
-🔎 ACTUAL_AGENT·ACTUAL_MODEL·ACTUAL_EFFORT · read-only head: [HEAD_SHA_SHORT](HEAD_COMMIT_URL) · context: OBSERVED_CONTEXT_OR_NA · STARTED_TIMESTAMP TZ · MEASURED_ELAPSED · VERDICT
+🔎 ACTUAL_AGENT·ACTUAL_MODEL·ACTUAL_EFFORT · read-only head: [HEAD_SHA_SHORT](HEAD_COMMIT_URL) · context: OBSERVED_CONTEXT_OR_NA · STARTED_TIMESTAMP TZ · MEASURED_ELAPSED · USAGE · VERDICT
 ```
 
 In round 1 write `previous review: none` and `writer disposition: none` as plain text rather than empty links, and drop the delta range from a full review. Write exactly one `Verdict:` line, outside any code block: a merge gate reads the verdict and both SHAs from the report.
@@ -96,7 +96,7 @@ Push: verified remote head / no code changes / blocked (reason)
 Cover every open finding handed to this phase. Prefer removal or narrowing to a new guard. A safety fix repairs its invariant wherever it is broken, not only the reported reproduction. Propose follow-ups without filing new issues unless authorized. State failed or unrun tests; do not imply a rebuttal/deferral is accepted.
 
 ---
-✏️ ACTUAL_AGENT·ACTUAL_MODEL·ACTUAL_EFFORT · head: [RESULT_SHA_SHORT](RESULT_COMMIT_URL) · context: OBSERVED_CONTEXT_OR_NA · STARTED_TIMESTAMP TZ · MEASURED_ELAPSED
+✏️ ACTUAL_AGENT·ACTUAL_MODEL·ACTUAL_EFFORT · head: [RESULT_SHA_SHORT](RESULT_COMMIT_URL) · context: OBSERVED_CONTEXT_OR_NA · STARTED_TIMESTAMP TZ · MEASURED_ELAPSED · USAGE
 ```
 
 The closing phases keep `round=LIMIT` under their own tokens: `closing-review` and `final-review` carry the `closing-full` and `final-full` labels, and `closing-writer` heads its report `## Fix dispositions — closing`. Every published report therefore has one marker identity to reconcile an uncertain write against.
@@ -107,15 +107,16 @@ Each signature is a single rendered line: fields joined by ` · `, with the prov
 
 | Field | Meaning | Example |
 |---|---|---|
-| `ACTUAL_AGENT·ACTUAL_MODEL·ACTUAL_EFFORT` | Provider value, which names the route, then the model and reasoning effort for the session | `codex·observed-model·high`, `claude·observed-model·high (requested)` |
+| `ACTUAL_AGENT·ACTUAL_MODEL·ACTUAL_EFFORT` | Provider value, which names the route, then the model and reasoning effort for the session | `codex·pinned-model (requested)·high (requested)`, `claude·observed-model·high (requested)` |
 | `OBSERVED_CONTEXT_OR_NA` | Context window available to that session as reported — not tokens consumed | `context: 1M`, `context: 200k`, `context: N/A (not emitted)` |
 | `STARTED_TIMESTAMP TZ` | Coordinator wall clock when the phase started, `yyyy-MM-dd HH:mm`, zone named | `2026-09-16 08:24 AEST` |
 | `MEASURED_ELAPSED` | Measured duration of that phase as `H:mm` | `0:04` (4 minutes), `1:37` (1 hour 37 minutes) |
+| `USAGE` | Token usage from the phase record's `usage`, written `in <input> (cached <cached_input>) · out <output>`: a number below 1,000 exact, below 1,000,000 rounded to whole `k`, from 1,000,000 in `M` with two decimals. Before `VERDICT` in a reviewer signature, last in a writer signature; omitted with its separator when `usage` is `null` | `in 1.24M (cached 1.10M) · out 18k`, `in 950 (cached 0) · out 120` |
 | `VERDICT` (reviewer only) | Outcome label for this review; always the last field | `CHANGE REQUIRED`, `APPROVAL ELIGIBLE`, `APPROVED`, `BLOCKED`, `BUDGET EXHAUSTED` |
 
 The end timestamp, the requested profile and the rest of the [phase record](agents.md#phase-record) stay in scratch rather than being published here. Elapsed hours are unbounded and minutes are rounded, so a sub-minute phase shows `0:00`; keep raw ISO timestamps and seconds in the record instead of inflating the published value. Use the phase's own wall time, not total loop time.
 
-`ACTUAL_EFFORT` is the value the CLI reported; an unreported effort is published as the requested value plus ` (requested)`, or `N/A (not emitted)` when none was requested, and does not block. Agent, model and phase timing are verify-or-block: mark an unobservable one `unverified` and stop. `N/A (not emitted)` belongs only to a context field the CLI never reports, and a value contradicting the request is a blocker ([phase record](agents.md#phase-record)). Publish only the non-secret summary, never raw transcripts, tokens or credentials; a phase that failed before model execution is "not run", not signed.
+`ACTUAL_EFFORT` is the value the CLI reported; an unreported effort is published as the requested value plus ` (requested)`, or `N/A (not emitted)` when none was requested, and does not block. A Codex phase's model and effort are the launch values the helper passed, marked ` (requested)`, not values the CLI reported ([phase record](agents.md#phase-record)). Agent, model and phase timing are verify-or-block: mark an unobservable one `unverified` and stop. `N/A (not emitted)` belongs only to a context field the CLI never reports, and a value contradicting the request is a blocker ([phase record](agents.md#phase-record)). Publish only the non-secret summary, never raw transcripts, tokens or credentials; a phase that failed before model execution is "not run", not signed.
 
 The body `Verdict:` line records loop state; the footer `VERDICT` labels the review outcome. Keep them consistent:
 

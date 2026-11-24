@@ -189,6 +189,20 @@ test('a blocked reviewer report ends the review', () => {
   assert.equal(f.pr.reviewEnded, 'blocked');
 });
 
+test('a usage field in the reviewer signature gives the same round, phase and review end', () => {
+  const signed = (verdict, label, usage) => facts(build((n) => {
+    const r = report(3, 'review', verdict);
+    r.body += `\n\n---\n🔎 codex·pinned-model (requested)·high (requested) · read-only head: [x](https://github.com/example-org/example-repo/commit/${SHA1}) · context: N/A (not emitted) · 2026-01-03 10:00 AEST · 0:05${usage} · ${label}`;
+    pr(n).comments.nodes.push(r);
+  })).pr;
+  for (const [verdict, label, ended] of [['blocked', 'BLOCKED', 'blocked'], ['approval-eligible', 'APPROVAL ELIGIBLE', null]]) {
+    const plain = signed(verdict, label, '');
+    const withUsage = signed(verdict, label, ' · in 1.24M (cached 1.10M) · out 18k');
+    assert.deepEqual([withUsage.round, withUsage.phase, withUsage.reviewEnded], [3, 'review', ended]);
+    assert.deepEqual([withUsage.round, withUsage.phase, withUsage.reviewEnded, withUsage.evidence], [plain.round, plain.phase, plain.reviewEnded, plain.evidence]);
+  }
+});
+
 test('checks: PENDING pending, SUCCESS and FAILURE done, null none', () => {
   const at = (state) => facts(build((n) => { pr(n).statusCheckRollup = state && { state }; })).pr.checks;
   assert.deepEqual(['PENDING', 'SUCCESS', 'FAILURE', null].map(at), ['pending', 'done', 'done', 'none']);
