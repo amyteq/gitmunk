@@ -46,6 +46,13 @@ Keep stable acceptance IDs and their meaning. Reuse existing IDs; append newly a
 
 Write each acceptance criterion as a finite list of named cases, each with its expected outcome and the test or artifact that shows it. Write no universal claim over an open input space ("any", "all", "never", "arbitrary", "prove no …") unless the criterion also says that every unlisted shape stops. Name platform limits, such as having no conditional write, as non-goals. A criterion that no finite set of tests can show is not observable: report the issue **not ready** and propose the closed form.
 
+For a task delivered as a PR, record where each acceptance criterion is shown by ending its first line with `Shown at: PR head.`, `Shown at: review.` or `Shown at: owner.`, and build its launch prompts from these stages (a task not delivered as a PR records no stage and keeps the earlier completion condition):
+
+- A criterion that a test, file or check shows at the PR head, run offline by the implement session, is a goal condition.
+- A criterion shown only by the review, such as one confirmed in the PR review, is handed to the review; one shown only by the owner or after the merge, such as an approval, a live run or post-merge evidence, is handed to the owner. Neither is a goal condition: the implement session cannot meet it, so the `/goal` completion condition names only the PR-head criteria and lists the others as handed on, each with its stage.
+- A named owner gate that blocks the session's work is a stop condition: the goal is met once that gate's question is posted on the issue, and the session then ends without waiting for the answer.
+- A criterion whose stage cannot be told is not observable: report the issue **not ready** and propose the closed form.
+
 The task comment is the standalone work order and fills every section of its template; the issue region is a short summary that links it. A fresh session holding only the permalink must be able to retrieve the canonical sources and understand the whole task. The comment does not supersede linked canonical decisions.
 
 Write English operational content and soft-wrapped Markdown. Leave a blank line before every thematic `---` separator; YAML frontmatter delimiters are exempt, and the [publication check](#publication-order-and-verification) enforces the rule on the assembled payload. Never publish template slots or invented URLs.
@@ -113,12 +120,14 @@ Exit `1` prints one `file:line` per offending separator and exit `2` is a usage 
 Return the issue URL, task permalink and revision, concrete changes, open decisions/assumptions, readiness state and both copyable launch forms:
 
 ```text
-/goal Execute from <real-permalink>. <bounded deliverable and destination>. Continue until <observable completion artifact and acceptance criteria>, or a stated stop condition applies.
+/goal Execute from <real-permalink>. <bounded deliverable and destination>. Continue until <completion artifact> and <PR-head AC IDs> hold at its head, or, at <named owner gate> or another blocker, until its question is posted on issue #<n>, or until a cancellation or budget stop applies. Handed on, not goal conditions: <each review or owner AC as "ID (review)" or "ID (owner)">.
 ```
 
 ```text
-Execute from <real-permalink>. <the same bounded task, completion condition and stop conditions>.
+Execute from <real-permalink>. <the rest of the /goal line, unchanged>.
 ```
+
+Without a named owner gate, write `or, at a blocker, until its question is posted on issue #<n>`. The closing `or until a cancellation or budget stop applies` keeps the task's bound a terminal stop that posts no question. With no criterion handed on, the handed-on part names the PR's review and merge. The plain-language prompt is the `/goal` line without `/goal `, so both carry the same completion condition and handed-on part. Keep the `/goal` line one line: `dev-batch` launches it verbatim. A task not delivered as a PR keeps the earlier form, `Continue until <observable completion artifact and acceptance criteria>, or a stated stop condition applies.`, with no handed-on part.
 
 Use `/goal` only on a receiving host that supports it; it grants no authority and overrides no gate, and the receiving session must confirm that the linked contract is still current. For a not-ready task, mark the prompts as prepared but not dispatchable and name the unmet gate.
 
