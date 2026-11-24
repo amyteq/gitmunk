@@ -288,7 +288,8 @@ class GuardLevels(unittest.TestCase):
             self.assertEqual(self.decision(doc), "ask")
         for extra in ("; sh result.md", "; supabase db push", " | sh"):
             self.assertEqual(self.decision(doc + extra), "ask")
-        self.assertEqual(self.decision(doc.replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
+        # Without backticks only the quoted-delimiter check keeps the ask for an unquoted heredoc.
+        self.assertEqual(self.decision(doc.replace("`", "").replace("cat <<'TEXT'", "cat <<TEXT")), "ask")
         # Only quoted `cat` heredocs and `cat X.md` lines may sit in the group, and every heredoc must close.
         self.assertEqual(self.decision(doc.replace("cat ac.md", "echo done")), "ask")
         # Without backticks the base has no substitution ask, so only the closure check keeps this ask.
