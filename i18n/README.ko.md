@@ -69,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-팀과 플러그인을 공유하려면 대신 [`templates/claude/settings.json`](../templates/claude/settings.json)을 프로젝트의 `.claude/settings.json`에 병합하세요.
+팀과 플러그인을 공유하려면 대신 [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json)을 프로젝트의 `.claude/settings.json`에 병합하세요.
 
 ### Codex
 
@@ -89,8 +89,8 @@ Codex는 플러그인의 npm 의존성을 설치하지 않으므로, 마지막 �
 
 | 채널 | 마켓플레이스 | Ref | 플러그인 ID | 템플릿 |
 | --- | --- | --- | --- | --- |
-| 안정(기본값) | `gitmunk` | `main`의 헤드 | `dev-skills@gitmunk`, `dev-hooks@gitmunk` | [`templates/claude/settings.json`](../templates/claude/settings.json) |
-| 베타 | `gitmunk-beta` ([카탈로그](../channels/beta/.claude-plugin/marketplace.json)) | `develop`의 헤드, `0.3.0-beta.1` 같은 버전 | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) |
+| 안정(기본값) | `gitmunk` | `main`의 헤드 | `dev-skills@gitmunk`, `dev-hooks@gitmunk` | [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) |
+| 베타 | `gitmunk-beta` ([카탈로그](../channels/beta/.claude-plugin/marketplace.json)) | `develop`의 헤드, `0.3.0-beta.1` 같은 버전 | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.beta.json) |
 
 프로젝트는 베타 템플릿을 `.claude/settings.local.json`(본인만) 또는 `.claude/settings.json`(팀 전체)에 병합해 베타를 사용합니다. Claude Code는 마켓플레이스 이름마다 머신 전체에서 소스 하나만 등록하므로 두 마켓플레이스의 이름이 다릅니다. 또한 베타 템플릿은 안정 플러그인을 `false`로 설정하므로, 사용자 수준에서 설치한 안정 버전이 그 프로젝트에서 같은 스킬을 두 번 불러오지 않습니다. Codex에는 두 번째 채널이 없으므로, `.codex/config.toml`에서 프로젝트의 `[marketplaces.gitmunk]` `ref`를 `main`이 아닌 `develop`으로 지정하세요. 베타가 릴리스가 되면 해당 플러그인 버전에서 `-beta.N` 접미사가 빠지고, `develop`이 `main`에 병합되며, 베타 프로젝트는 베타 템플릿을 제거해도 됩니다. [릴리스 워크플로](../.github/workflows/release.yml)는 `main`으로 향하는 PR에서 맨 위 `CHANGELOG.md` 섹션이 단순한 `## X.Y.Z`가 아니거나, 어떤 버전이 프리릴리스 접미사를 달고 있거나, `vX.Y.Z` 태그가 이미 있으면 실패합니다. 이후 병합되면 `vX.Y.Z` 태그를 만들고 그 섹션을 릴리스 노트로 삼아 GitHub 릴리스를 게시합니다.
 

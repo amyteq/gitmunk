@@ -69,7 +69,7 @@ claude plugin install dev-skills@gitmunk
 claude plugin install dev-hooks@gitmunk      # optional: the guardrail hooks
 ```
 
-Para compartir los plugins con un equipo, combina en su lugar [`templates/claude/settings.json`](../templates/claude/settings.json) con el `.claude/settings.json` del proyecto.
+Para compartir los plugins con un equipo, combina en su lugar [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) con el `.claude/settings.json` del proyecto.
 
 ### Codex
 
@@ -89,8 +89,8 @@ Los canales son ramas: `main` es el estable y `develop` el beta. El `version` de
 
 | Canal | Marketplace | Ref | IDs de plugin | Plantilla |
 | --- | --- | --- | --- | --- |
-| Estable (predeterminado) | `gitmunk` | el último commit de `main` | `dev-skills@gitmunk`, `dev-hooks@gitmunk` | [`templates/claude/settings.json`](../templates/claude/settings.json) |
-| Beta | `gitmunk-beta` ([catálogo](../channels/beta/.claude-plugin/marketplace.json)) | el último commit de `develop`, con versiones como `0.3.0-beta.1` | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) |
+| Estable (predeterminado) | `gitmunk` | el último commit de `main` | `dev-skills@gitmunk`, `dev-hooks@gitmunk` | [`templates/claude/settings.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.json) |
+| Beta | `gitmunk-beta` ([catálogo](../channels/beta/.claude-plugin/marketplace.json)) | el último commit de `develop`, con versiones como `0.3.0-beta.1` | `dev-skills@gitmunk-beta`, `dev-hooks@gitmunk-beta` | [`templates/claude/settings.beta.json`](https://github.com/amyteq/gitmunk/blob/5ed427694c220c82f7394498f1d8067f0d31f5d5/templates/claude/settings.beta.json) |
 
 Un proyecto se apunta al canal beta combinando la plantilla beta con su `.claude/settings.local.json` (solo para ti) o con su `.claude/settings.json` (para todo el equipo). Los dos marketplaces tienen nombres distintos porque Claude Code registra una sola fuente por nombre de marketplace para toda la máquina; la plantilla beta además pone los plugins estables a `false`, para que una instalación estable a nivel de usuario no cargue las mismas skills dos veces en ese proyecto. Codex no tiene un segundo canal: apunta el `ref` de `[marketplaces.gitmunk]` del proyecto en `.codex/config.toml` a `develop` en lugar de a `main`. Cuando una beta se convierte en release, las versiones de sus plugins pierden el sufijo `-beta.N`, `develop` se fusiona en `main` y los proyectos beta pueden retirar la plantilla beta. El [flujo de trabajo de release](../.github/workflows/release.yml) hace fallar un PR hacia `main` salvo que la primera sección de `CHANGELOG.md` sea un `## X.Y.Z` sin más, ninguna versión lleve sufijo de prerelease y `vX.Y.Z` aún no exista como etiqueta; después, la fusión crea la etiqueta `vX.Y.Z` y publica una release de GitHub con esa sección como notas.
 

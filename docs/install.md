@@ -63,12 +63,20 @@ Stable is the marketplace `gitmunk`, at the head of `main`. Beta is the marketpl
 
 ### Templates
 
-Instead of running commands, merge a template into a settings file:
+For a plugin installation, merge the `extraKnownMarketplaces` and `enabledPlugins` entries from the chosen template into the settings file for your scope.
 
-- [`templates/claude/settings.json`](../templates/claude/settings.json) is stable: it declares `gitmunk` with `autoUpdate` on, enables `dev-skills@gitmunk` and `dev-hooks@gitmunk`, and adds a few `permissions.deny` rules. Merge it into the project's `.claude/settings.json` to share it with the team, or its `extraKnownMarketplaces` and `enabledPlugins` blocks into your user settings.
-- [`templates/claude/settings.beta.json`](../templates/claude/settings.beta.json) is beta: it declares `gitmunk-beta` with `autoUpdate` on, enables the `@gitmunk-beta` plugins and sets both stable ids to `false`. Merge it into `.claude/settings.local.json` (only you) or `.claude/settings.json` (the whole team).
+- The [stable template](../templates/claude/settings.json) enables the two `gitmunk` plugins from `main`.
+- The [beta template](../templates/claude/settings.beta.json) enables the two `gitmunk-beta` plugins from `develop` and disables their stable copies.
 
-Teammates are prompted to trust a project's marketplace on first run. The stable template enables `dev-hooks`, while the installer installs it only with `--with-hooks`; drop the `dev-hooks` line if you do not want the hooks.
+Both templates enable automatic marketplace updates and `dev-hooks`. Omit the enabled `dev-hooks` entry for a skills-only installation. Teammates are prompted to trust a project's marketplace on first run.
+
+The remaining fields are an optional personal development profile. Review each one before you merge it into your user settings:
+
+- **Auto mode.** Sessions start in auto mode. `autoMode.classifyAllShell` suspends shell allow rules there, so a command that a shell allow rule you add would approve goes to the classifier instead. The `autoMode` block keeps the default rules and adds exceptions: work you authorized in the current repository, including task-branch pushes; a `sudo` installation of a system package the task needs; development subagents; and a squash merge you explicitly authorize for a named PR and target branch, only at the head an independent review marked approval-eligible and with required CI passing. The classifier reads `autoMode` from user settings, managed settings and per-invocation configuration (the `--settings` flag or the Agent SDK), not from project settings; see [Claude Code auto mode configuration](https://code.claude.com/docs/en/auto-mode-config#where-the-classifier-reads-configuration).
+- **Shell commands.** The profile has no shell allow rules, so outside auto mode Claude Code asks before each shell command that is not read-only. An allow rule you add for a command that runs project code, such as `make`, a test runner, a package script or an interpreter, also approves everything that code runs, including Git and GitHub operations and deletions that the deny and ask rules stop when Claude runs them directly.
+- **Sandbox.** Shell commands run sandboxed, with writes limited to the project, `/tmp` and the pnpm store and network limited to the listed hosts. The sandbox approves no command: a sandboxed command, and its retry outside the sandbox after it fails there, still needs your approval, the classifier or an allow rule you add. Where the sandbox is unavailable, commands run without it.
+- **Credentials.** The Read tool asks before it reads cloud and GitHub CLI credentials, and it cannot read SSH keys or `.env.production`. These rules do not cover shell commands.
+- **Preferences.** The profile also sets the model and effort, keeps sessions for 365 days, starts Remote Control with every session, and sets the theme and notifications.
 
 ### Manual commands
 
