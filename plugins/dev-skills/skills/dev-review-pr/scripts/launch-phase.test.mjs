@@ -50,7 +50,8 @@ if (argv[0] === 'sandbox') {
 }
 if (argv[0] === '--version') { if (env.STUB_VERSION_FAIL) process.exit(1); console.log(cli + ' 9.9.9'); process.exit(0); }
 if (argv[0] === 'login') { console.log(env.STUB_LOGIN ?? 'Logged in using ChatGPT'); process.exit(0); }
-readFileSync(0);
+const prompt = readFileSync(0);
+if (env.STUB_PROMPT) writeFileSync(env.STUB_PROMPT, prompt);
 if (env.STUB_LEAK) { console.log(env.AZURE_OPENAI_API_KEY); console.error('leak ' + env.AZURE_OPENAI_API_KEY); }
 if (env.STUB_DIRTY) writeFileSync((after('-C') ?? '.') + '/change.txt', 'writer change');
 if (env.STUB_GITLINK) writeFileSync('.git', 'gitdir: ' + env.STUB_GITLINK + '\\n');
@@ -137,14 +138,22 @@ function launch(f, options = {}) {
 
 const hasPair = (argv, flag, value) => argv.some((arg, index) => arg === flag && argv[index + 1] === value);
 
-test('each supported CLI role uses configured defaults without rewriting configuration', () => {
+test('each supported CLI role receives the quote handoff and uses configured defaults without rewriting configuration', () => {
   for (const provider of ['codex', 'claude']) {
     for (const role of ['reviewer', 'writer']) {
       const f = fixture();
       const config = join(f.home, '.codex', 'config.toml');
       const before = readFileSync(config, 'utf8');
-      const run = launch(f, { provider, role });
+      const received = join(f.root, 'received-prompt.md');
+      const original = readFileSync(join(f.root, 'prompt.md'), 'utf8');
+      const run = launch(f, { provider, role, env: { STUB_PROMPT: received } });
       assert.equal(run.code, 0, run.stderr + run.recordText);
+      const packet = readFileSync(received, 'utf8');
+      assert.equal(packet.slice(0, original.length), original);
+      const handoff = packet.slice(original.length);
+      assert.match(handoff, /coordinator to verify with check-text\.mjs/);
+      assert.match(handoff, /finding or disposition.*file.*single-line literal that occurs on only one line/);
+      assert.match(handoff, /reader already authorized.*Do not start subagents/);
       assert.equal(run.record.route, 'cli-configured');
       assert.deepEqual(run.record.requested, { model: null, effort: null, profile: null });
       const { argv } = run.exec;
