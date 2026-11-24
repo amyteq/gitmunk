@@ -28,18 +28,20 @@ function assertError(result) {
   assert.notEqual(result.stderr, '');
 }
 
-test('ordered first and all matches across files, including repeated checks', (t) => {
+test('ordered single-line matches across files exit 0; an ambiguous quote exits 1 with every matching line', (t) => {
   const { root, check } = fixture(t);
   const literal = '- [x] $(example) * café';
   writeFileSync(join(root, 'a.md'), `heading\r\n${literal} ${literal}\r\n\r\n${literal}\r\n\r\n`);
   writeFileSync(join(root, 'b.md'), literal);
   const a = { file: 'a.md', literal };
   const b = { file: 'b.md', literal };
-  const result = check([a, b, { ...a, lines: 'first' }, { ...a, lines: 'all' }]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), [
-    { ...a, lines: [2, 4] }, { ...b, lines: [1] }, { ...a, lines: [2] }, { ...a, lines: [2, 4] },
-  ]);
+  const heading = { file: 'a.md', literal: 'heading' };
+  const unique = check([b, heading, b]);
+  assert.equal(unique.status, 0, unique.stderr);
+  assert.deepEqual(JSON.parse(unique.stdout), [{ ...b, lines: [1] }, { ...heading, lines: [1] }, { ...b, lines: [1] }]);
+  const ambiguous = check([b, a, heading]);
+  assert.equal(ambiguous.status, 1, ambiguous.stderr);
+  assert.deepEqual(JSON.parse(ambiguous.stdout), [{ ...b, lines: [1] }, { ...a, lines: [2, 4] }, { ...heading, lines: [1] }]);
 });
 
 test('a missing literal exits 1 and preserves later matches', (t) => {
@@ -60,7 +62,7 @@ test('bad arguments, malformed JSON and invalid checks exit 2', (t) => {
   assertError(run());
   const invalidCases = [
     [], {}, [null], [{ file: 'a.md', literal: '' }],
-    [{ file: 'a.md', literal: 'a\nb' }], [{ file: 'a.md', literal: 'a', lines: 'last' }],
+    [{ file: 'a.md', literal: 'a\nb' }], [{ file: 'a.md', literal: 'a', lines: 'first' }],
   ];
   for (const entries of invalidCases) {
     assertError(check(entries));

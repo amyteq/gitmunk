@@ -33,7 +33,7 @@ To find several literal quotations in saved evidence, write a nonempty JSON arra
 
 ```json
 [
-  {"file": "review.md", "literal": "Acceptance criteria", "lines": "first"},
+  {"file": "review.md", "literal": "Acceptance criteria"},
   {"file": "review.md", "literal": "Integration tests passed"}
 ]
 ```
@@ -42,9 +42,9 @@ To find several literal quotations in saved evidence, write a nonempty JSON arra
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-text.mjs" --input "/path/to/run/checks.json"
 ```
 
-Each `file` is a regular UTF-8 file beneath the directory containing the manifest. Use relative paths. The manifest and the entries below its directory must not be symlinks. Each `literal` is a nonempty, single-line string. The optional `lines` field selects `first` or `all` (the default).
+Each `file` is a regular UTF-8 file beneath the directory containing the manifest. Use relative paths. The manifest and the entries below its directory must not be symlinks. Each `literal` is a nonempty, single-line string.
 
-The helper returns one `{file, literal, lines}` object per request in a JSON array, preserving order and duplicates. Lines are numbered from 1. A missing quote has `lines: []`. Exit 0 means all checks matched, exit 1 includes the full results with at least one miss, and exit 2 indicates invalid input or a file error. For a quote that could appear in any of several snapshots, list each file explicitly and use the per-file matches.
+The helper returns one `{file, literal, lines}` object per request in a JSON array, preserving order and duplicates. `lines` lists every line that contains the quote, numbered from 1; a missing quote has `lines: []`. Exit 0 means every quote matched exactly one line. Exit 1 returns the full results when at least one quote is missing or ambiguous (on more than one line); lengthen an ambiguous quote until it is unique. Exit 2 indicates invalid input or a file error. For a quote that could appear in any of several snapshots, list each file explicitly and use the per-file matches.
 
 ## Test
 

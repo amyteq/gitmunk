@@ -152,7 +152,7 @@ test('each supported CLI role receives the quote handoff and uses configured def
       assert.equal(packet.slice(0, original.length), original);
       const handoff = packet.slice(original.length);
       assert.match(handoff, /coordinator to verify with check-text\.mjs/);
-      assert.match(handoff, /finding or disposition.*file.*literal.*lines mode \(first or all\)/);
+      assert.match(handoff, /finding or disposition.*file.*single-line literal that occurs on only one line/);
       assert.match(handoff, /reader already authorized.*Do not start subagents/);
       assert.equal(run.record.route, 'cli-configured');
       assert.deepEqual(run.record.requested, { model: null, effort: null, profile: null });

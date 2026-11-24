@@ -31,7 +31,7 @@ const ROUTES = {
 };
 const PHASES = { reviewer: ['review', 'closing-review', 'final-review'], writer: ['writer', 'closing-writer'] };
 const QUOTE_HANDOFF = 'For line-number checks on known quotes in saved evidence, return candidates for the coordinator to verify with check-text.mjs. '
-  + 'In the relevant finding or disposition, give the snapshot-relative file, exact single-line literal, and optional lines mode (first or all). '
+  + 'In the relevant finding or disposition, give the snapshot-relative file and an exact single-line literal that occurs on only one line of it. '
   + 'Skip inline lookup loops and leave the manifest to the coordinator. Pass this rule to any reader already authorized to supply evidence. Do not start subagents.';
 
 // Every probe and phase runs as its own process group, so a timeout, or the end of the phase,

@@ -27,11 +27,11 @@ function checkText(input) {
 
   const files = new Map();
   const results = checks.map((check, index) => {
-    const { file, literal, lines = 'all' } = check ?? {};
+    const { file, literal } = check ?? {};
     if (typeof file !== 'string' || !file || win32.parse(file).root || file.split(/[\\/]/).includes('..') ||
         typeof literal !== 'string' || !literal || /[\r\n\0]/.test(literal) ||
-        !['first', 'all'].includes(lines) || Object.keys(check).some(k => !['file', 'literal', 'lines'].includes(k))) {
-      throw new Error(`Invalid check at index ${index}; expected file, literal and optional lines (first or all)`);
+        Object.keys(check).some(k => !['file', 'literal'].includes(k))) {
+      throw new Error(`Invalid check at index ${index}; expected only file and literal`);
     }
     const path = join(root, file);
     if (!files.has(path)) files.set(path, []);
@@ -44,10 +44,7 @@ function checkText(input) {
     for (const index of indices) {
       const result = results[index];
       for (let line = 0; line < lines.length; line++) {
-        if (lines[line].includes(result.literal)) {
-          result.lines.push(line + 1);
-          if (checks[index].lines === 'first') break;
-        }
+        if (lines[line].includes(result.literal)) result.lines.push(line + 1);
       }
     }
   }
@@ -59,7 +56,8 @@ try {
   if (flag !== '--input' || !input || extra.length) throw new Error('Usage: node check-text.mjs --input MANIFEST');
   const results = checkText(input);
   console.log(JSON.stringify(results));
-  process.exitCode = results.every(result => result.lines.length > 0) ? 0 : 1;
+  // A quote is citable only on exactly one line: a miss or an ambiguous quote fails the batch.
+  process.exitCode = results.every(result => result.lines.length === 1) ? 0 : 1;
 } catch (error) {
   console.error(`check-text: ${error.message}`);
   process.exitCode = 2;
