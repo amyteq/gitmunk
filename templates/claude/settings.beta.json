@@ -4,11 +4,6 @@
   "permissions": {
     "allow": [
       "Agent(Explore)", "Agent(Plan)",
-      "Bash(bunx*)", "Bash(chmod +x*)", "Bash(cp*)", "Bash(eslint*)", "Bash(export*)", "Bash(make*)", "Bash(mkdir*)",
-      "Bash(mv*)", "Bash(mypy*)", "Bash(node*)", "Bash(npx*)", "Bash(playwright*)", "Bash(prettier*)", "Bash(pyright*)",
-      "Bash(pytest*)", "Bash(python*)", "Bash(ruff*)", "Bash(scripts/*)", "Bash(source*)",
-      "Bash(supabase db diff*)", "Bash(supabase gen types*)", "Bash(supabase start*)", "Bash(supabase status*)",
-      "Bash(touch*)", "Bash(tsc*)", "Bash(vite*)",
       "Edit", "Glob", "Grep", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "WebSearch", "Write"
     ],
     "deny": [
