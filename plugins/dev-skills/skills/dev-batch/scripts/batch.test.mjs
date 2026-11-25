@@ -721,6 +721,26 @@ test('launch counts a session adopted at takeover, its labels not yet read, as h
   assert.deepEqual([r.code, r.out?.error, r.out?.holders], [1, 'slot-full', ['er-i43a']], r.text);
 });
 
+test('launch refuses slot-full before it stops a running loop or takes its lease (#58 AC-1 i)', async (t) => {
+  const w = world();
+  w.init();
+  w.cli('pause');
+  assert.equal(w.cli('config', 'slots=e2e=1').code, 0);
+  const refined = json(fileURLToPath(new URL('./fixtures/facts-base.json', import.meta.url))).data.repository.issue_41;
+  w.set((v) => { v.node = { ...refined, labels: { nodes: [{ name: 'slot:e2e' }] } }; });
+  writeFileSync(w.file('sessions.json'), JSON.stringify([{ name: 'er-i43a', stage: 'implement', issue: 43, pr: null, attempt: 1, account: 'A1', id: 'er-i43a',
+    sessionId: null, startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'working', slots: ['e2e'] }]));
+  const before = readFileSync(w.file('sessions.json'), 'utf8');
+  // A sleeper whose arguments look like the loop's stands in for a running loop: stopping it would take its lease.
+  const child = spawn(process.execPath, ['-e', "console.log('ready'); setInterval(() => {}, 1000)", 'run', '--batch', w.dir], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => child.kill('SIGKILL'));
+  await new Promise((ready) => child.stdout.once('data', ready));
+  writeFileSync(w.file('lease.json'), JSON.stringify({ pid: child.pid, host: hostname(), nonce: 'n1' }));
+  const r = w.cli('launch', '--task', '41', '--stage', 'implement');
+  assert.deepEqual([r.code, r.out?.error, r.out?.holders], [1, 'slot-full', ['er-i43a']], r.text);
+  assert.deepEqual([json(w.file('lease.json')).nonce, readFileSync(w.file('sessions.json'), 'utf8'), w.calls('claude', '--bg')], ['n1', before, []]);
+});
+
 test('ask and config refuse an invalid slots or cost_alert with exit 2 naming the key; settings.json is unchanged (#58 AC-3 b)', () => {
   const w = world();
   w.init();

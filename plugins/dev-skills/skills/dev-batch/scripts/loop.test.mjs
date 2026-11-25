@@ -1195,3 +1195,38 @@ test('cost alert: a tick cut short after writing its events raises no second ale
   assert.deepEqual(alerts(w).map((e) => e.task), [45]);
   assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => e.task), [45]);
 });
+
+test('cost alert: an alert whose loop died before its judgment file was written is raised again; a delivered one never is (#58 AC-2 c)', () => {
+  const w = world({ rows: FOUR() });
+  configure(w, { cost_alert: '3' });
+  w.tick(T(10));
+  mkdirSync(join(w.dir, 'delivered')); // an earlier judgment of #45 of another type is no record of its alert
+  writeFileSync(join(w.dir, 'delivered', '0000000000000-00000000.json'), JSON.stringify({ type: 'session-blocked', task: 45 }));
+  writeCosts(w, [[41, 10], [43, 10], [44, 10], [45, 31]]);
+  // The loop died between the alert's line in events.jsonl and its file in pending/.
+  const log = join(w.dir, 'events.jsonl');
+  writeFileSync(log, `${readFileSync(log, 'utf8')}${JSON.stringify({ at: new Date(T(10, 5)).toISOString(), type: 'cost-alert', task: 45, detail: '#45' })}\n`);
+  w.tick(T(10, 10));
+  w.tick(T(10, 15));
+  assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => e.task), [45]);
+  // `wait` hands it over by moving its file to delivered/, which records it from then on.
+  const pending = join(w.dir, 'pending');
+  for (const n of readdirSync(pending)) { writeFileSync(join(w.dir, 'delivered', n), readFileSync(join(pending, n))); rmSync(join(pending, n)); }
+  w.tick(T(10, 20));
+  assert.deepEqual([w.pending(), alerts(w).map((e) => e.task)], [[], [45, 45]]);
+});
+
+test('a limited merge whose replacement waits for a full slot keeps the merge lock from a later merge (#58 AC-1 b)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+    row(3, 44, { status: 'implementing', session: 'er-i44a' })], accounts: ['A1', 'A2'] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+  const id = w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 });
+  w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  holder(w, 'er-i44a', { stage: 'implement', issue: 44 }); // e2e is full, and no merge lock is on disk (a takeover whose facts query failed)
+  assert.deepEqual(w.tick(T(12)).launched, []); // #41's limited merge can still resume, so #43 waits for the lock
+  assert.deepEqual(w.sessions().filter((s) => s.stage === 'merge').map((s) => [s.name, s.state]), [['er-pr50m', 'limited']]);
+});

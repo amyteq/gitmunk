@@ -28,8 +28,7 @@ const LIVE = RUNNING; // may still merge
 export const slotsNeeded = (settings, labels, stage) => (Array.isArray(settings.slots) ? settings.slots : [])
   .filter((x) => x.stages.includes(stage) && labels.some((l) => l.toLowerCase() === `slot:${x.name}`)).map((x) => x.name);
 // A session holds the slots recorded at its launch or adoption while it holds a cap slot, whatever its labels say since;
-// `slots: null` (adopted at takeover, its labels not yet read) holds every slot. `except`: the records the launch
-// replaces. → the first needed slot that is full, { name, count, holders }, or null.
+// `slots: null` (adopted at takeover, labels not yet read) holds them all. `except`: records the launch replaces. → { name, count, holders } of the first full one, or null.
 export function fullSlot(settings, records, need, except = []) {
   for (const name of need) {
     const { count } = settings.slots.find((x) => x.name === name);
@@ -288,9 +287,9 @@ export function tick(ctx) {
       && r.actions.some((a) => a.type === 'launch' || a.kind === 'authorization-missing')) {
       r = { ...r, status: 'waiting', next: '', actions: r.actions.filter((a) => a.type === 'stop') };
     }
-    // #58: a merge that waits for a full slot launches nothing this tick, so it leaves the lock to a later row.
+    // #58: a merge that waits for a full slot, with no session of its row still running, leaves the lock to a later row.
     const launch = r.actions.find((a) => a.type === 'launch');
-    const slotWait = launch && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
+    const slotWait = launch && !records.some((x) => x.issue === row.issue && RUNNING.has(x.state)) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
     if (!holder && !slotWait && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
     return { row, batch: row.batch, priority: f.priority, facts: f, actions: r.actions,
@@ -333,9 +332,10 @@ export function tick(ctx) {
     if (h?.key === key && h.issue === d.row.issue) dropLock(dir, h);
   }
   for (const d of decided) if (d.actions.some((a) => a.type === 'lock') && !d.actions.some((a) => a.type === 'launch')) acquireLock(dir, d.row.issue, now);
-  // #58: one cost-alert judgment per row and batch; its line in events.jsonl is the record that it was raised, so a
-  // tick cut short after writing it never raises it again. The row, its Next and its launches stay as they are.
-  const alerted = readLines(at('events.jsonl')).filter((e) => e.type === 'cost-alert').map((e) => e.task);
+  // #58: one cost-alert judgment per row and batch, recorded by its file in pending/ or delivered/: a tick cut short
+  // before that file exists raises it again, one after never does. The row, its Next and its launches stay as they are.
+  const alerted = ['pending', 'delivered'].flatMap((d) => (existsSync(at(d)) ? readdirSync(at(d)) : []).filter((n) => n.endsWith('.json'))
+    .map((n) => readJson(join(at(d), n)))).filter((e) => e?.type === 'cost-alert').map((e) => e.task);
   for (const x of costAlerts(readLines(at('metrics.jsonl')), s.cost_alert, alerted)) {
     ev({ type: 'cost-alert', task: x.task, judgment: true,
       detail: `#${x.task}: recorded cost $${x.cost.toFixed(2)} is above ${s.cost_alert}× the batch median $${x.median.toFixed(2)}` });
@@ -377,8 +377,8 @@ export function tick(ctx) {
     if (orphan) {
       const { alias, agent } = orphan;
       adoptable.delete(agent.name);
-      records.push({ name: agent.name, stage, issue, pr, attempt, account: alias, id: agent.id, sessionId: agent.sessionId, startedAt: iso(now), endedAt: null, state: agent.state,
-        ...(slots.length && { slots }) });
+      records.push({ name: agent.name, stage, issue, pr, attempt, account: alias, id: agent.id, sessionId: agent.sessionId, startedAt: iso(now), endedAt: null, state: agent.state });
+      if (slots.length) records.at(-1).slots = slots;
       d.next.session = agent.name;
       free--;
       ev({ type: 'adopt', task: issue, stage, session: agent.name, account: alias, detail: `${agent.name} is already ${agent.state}: adopted, not relaunched` });
@@ -591,8 +591,7 @@ export function reconcile(ctx) {
       const firstName = sessionName({ abbr, stage, issue: row.issue, pr: row.pr, attempt: 1 });
       const retry = row.session.startsWith(firstName) ? row.session.slice(firstName.length) : '';
       records.push({ name: row.session, stage, issue: row.issue, pr: row.pr, attempt: /^\d+$/.test(retry) ? Number(retry) : 1, account: alias,
-        id: agent?.id ?? null, sessionId: agent?.sessionId ?? null, startedAt: iso(now), endedAt: null, state: agent?.state ?? 'unknown',
-        slots: null }); // #58: its slots once the tick reads the labels
+        id: agent?.id ?? null, sessionId: agent?.sessionId ?? null, startedAt: iso(now), endedAt: null, state: agent?.state ?? 'unknown', slots: null }); // #58: slots once a tick reads its labels
       (agent ? adopted : unknown).push(row.session);
       const detail = `#${row.issue}: ${row.session} is not listed by any configured account; its stage is not relaunched until the coordinator decides`;
       if (!agent) queueJudgment(dir, { type: 'session-unknown', task: row.issue, stage, session: row.session, detail }, now);
