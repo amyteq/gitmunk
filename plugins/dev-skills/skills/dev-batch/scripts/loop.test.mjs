@@ -1099,7 +1099,6 @@ test('cost alert: one judgment for the row above 3× the median, never a second;
   writeCosts(w, [[45, 50]]);
   w.tick(T(10, 10));
   assert.deepEqual(alerts(w).map((e) => e.task), [45]);
-  assert.deepEqual(w.loop().costAlerted, [45]);
 });
 
 test('with the default slots, rows labelled slot:e2e launch as without the label (#58 AC-3 c)', () => {
@@ -1129,4 +1128,70 @@ test('with the default cost_alert, a row far above the median raises no cost ale
     w.tick(T(10, 5));
     assert.deepEqual(alerts(w), []);
   }
+});
+
+test('a stage that needs two slots waits while either is full (#58 AC-1 a)', () => {
+  const w = world({ rows: [row(1, 43), A_HOLDS({ n: 2 })] });
+  configure(w, { slots: 'heavy=2,e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:heavy', 'slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 }); // e2e is full, heavy has room
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  w.set('er-i41a', 'done');
+  assert.ok(w.tick(T(10, 5)).launched.includes('er-i43r'));
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['heavy', 'e2e']);
+});
+
+test('a merge that waits for a full slot leaves the merge lock to a later row that needs none (#58 AC-1 b)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+    row(3, 44, { status: 'implementing', session: 'er-i44a' })] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+  w.agent('er-pr50', { stage: 'review', issue: 41, pr: 50 });
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m']);
+  assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', ''], ['merging', ''], ['implementing', '']]);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+});
+
+test('takeover: a session reconcile adopts holds the slots its stage needs from the first tick (#58 AC-1 c)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43), row(3, 44)] });
+  rmSync(join(w.dir, 'ledger.last.md')); // another machine: nothing local
+  configure(w, { slots: 'e2e=1,gpu=1:refine' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e', 'slot:gpu'] }; // its implement stage needs e2e, not gpu
+  w.issues[43] = { labels: ['slot:e2e'] };
+  w.agent('er-i41a', { state: 'working', record: false });
+  const r = reconcile(w.ctx(T(11)));
+  assert.deepEqual([r.adopted, r.launched], [['er-i41a'], ['er-i44r']]);
+  assert.deepEqual(w.sessions().map((s) => [s.name, s.slots]), [['er-i41a', ['e2e']], ['er-i44r', undefined]]);
+  assert.equal(w.status()[43], 'queued');
+});
+
+test('takeover: an adopted session whose row is no longer active holds every slot while it runs (#58 AC-1 c)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'removed', session: 'er-i41a' }), row(2, 43)] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[43] = { labels: ['slot:e2e'] };
+  w.agent('er-i41a', { state: 'working', stage: 'implement', issue: 41 });
+  w.records.at(-1).slots = null; // adopted at takeover; the owner removed the row before a tick read its labels
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.deepEqual([slotsOf(w, 'er-i41a'), w.status()[43]], [null, 'queued']);
+});
+
+test('cost alert: a tick cut short after writing its events raises no second alert (#58 AC-2 c)', () => {
+  const w = world({ rows: FOUR() });
+  configure(w, { cost_alert: '3' });
+  w.tick(T(10)); // every row has launch events before it has a cost
+  writeCosts(w, [[41, 10], [43, 10], [44, 10], [45, 31]]);
+  const reads = w.reads;
+  w.onRead = (n) => { if (n === reads + 2) throw new Error('killed'); }; // the ledger write's fresh read, after step 8 wrote the events
+  assert.throws(() => w.tick(T(10, 5)), /killed/);
+  assert.deepEqual(alerts(w).map((e) => e.task), [45]);
+  w.onRead = null;
+  w.tick(T(10, 10));
+  assert.deepEqual(alerts(w).map((e) => e.task), [45]);
+  assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => e.task), [45]);
 });

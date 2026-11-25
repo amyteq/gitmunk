@@ -81,6 +81,12 @@ test('cost alert: exactly the multiple of the median does not pass (AC-2 b)', ()
   assert.deepEqual(costAlerts([...ABC, cost(45, 30)], 3), []);
 });
 
+test('cost alert: the median is over rows, not records (AC-2 a)', () => {
+  // Rows 41, 43 and 44 cost $10 each in two records: the row median is $10, so 45's $20 does not pass. Over records it would be $5.
+  const two = (task) => [cost(task, 5), cost(task, 5)];
+  assert.deepEqual(costAlerts([...two(41), ...two(43), ...two(44), cost(45, 20)], 3), []);
+});
+
 test('cost alert: null costs add nothing, a row with none is left out of the median, a median of 0 alerts nothing (AC-2 d)', () => {
   // 45's null record adds nothing: 31 is still its cost.
   assert.deepEqual(costAlerts([...ABC, cost(45, 20), cost(45, null), cost(45, 11)], 3), [{ task: 45, cost: 31, median: 10 }]);
