@@ -82,7 +82,8 @@ const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkR
 // Raw <a> and <code> tags sit in HTML nodes apart from the text they wrap, and GitHub keeps an unclosed one
 // open across blocks, so count them in document order over every HTML node and drop text while one is open.
 // Every tag is matched whole, quoted values included, so a value such as title="<code>" is no tag of its own.
-const TAG = /<(\/?)([a-z][a-z0-9-]*)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/gi;
+// A tag name runs to whitespace, `/` or `>`, as in HTML's tokenizer.
+const TAG = /<(\/?)([a-z][^\s/>]*)(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/gi;
 const HIDING = new Set(['a', 'code']);
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 function plain(node, state = { open: 0 }, quiet = false) {
