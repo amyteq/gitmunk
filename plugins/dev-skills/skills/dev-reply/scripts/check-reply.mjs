@@ -79,17 +79,19 @@ export function resolveArgs({ repo, text, now }) {
 
 // Code, quoted text, HTML and link text never mention anyone a reply should answer.
 const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkReference', 'definition', 'image', 'imageReference']);
-// Inline HTML arrives as one node per tag, so the text between <code>…</code> or <a>…</a> is a sibling.
-const HIDING_TAG = /^<(\/)?(?:a|code)(?:\s[^>]*)?>$/i;
-function plain(node) {
-  if (SKIP.has(node.type)) return ' ';
-  if (node.type === 'text') return node.value;
-  let hidden = 0;
-  return (node.children ?? []).map((child) => {
-    const tag = child.type === 'html' && HIDING_TAG.exec(child.value.trim());
-    if (tag) hidden = Math.max(0, hidden + (tag[1] ? -1 : 1));
-    return hidden || tag ? ' ' : plain(child);
-  }).join(' ');
+// Raw <a> and <code> tags sit in HTML nodes apart from the text they wrap, and GitHub keeps an unclosed one
+// open across blocks, so count them in document order over every HTML node and drop text while one is open.
+const HIDING_TAG = /<(\/?)(?:a|code)(?=[\s/>])[^>]*?(\/?)>/gi;
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+function plain(node, state = { open: 0 }, quiet = false) {
+  if (node.type === 'html') {
+    for (const [, close, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(HIDING_TAG)) {
+      if (!selfClosing) state.open = Math.max(0, state.open + (close ? -1 : 1));
+    }
+  }
+  const skip = quiet || SKIP.has(node.type);
+  if (node.type === 'text') return skip || state.open ? ' ' : node.value;
+  return (node.children ?? []).map((child) => plain(child, state, skip)).join(' ');
 }
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
