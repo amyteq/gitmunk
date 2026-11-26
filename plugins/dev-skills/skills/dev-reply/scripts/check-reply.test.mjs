@@ -84,13 +84,15 @@ test('dry-run is a flag, and the first other word starts the verbatim notes', ()
 test('a direct mention counts; code, quotes, links, emails, paths, teams and longer logins do not', () => {
   for (const body of [`@${ME} can you check?`, `Thanks (@${ME}).`, `cc @EXAMPLE-OWNER`, `- [ ] @${ME}: decide`, `<code>x</code> then @${ME}`, `<b>@${ME}</b>`,
     `<a href="https://example.com">\n\nDocumentation\n\n</a>\n<br>\n\n@${ME} which option?`, `<code>*x</code>* then @${ME}`,
-    `<a href="https://example.com">\n\n> quoted </a>\n\n@${ME} next`, `<!-- <code> in a template -->\n\n@${ME} hi`, `<a name="top"/> @${ME}`]) {
+    `<a href="https://example.com">\n\n> quoted </a>\n\n@${ME} next`, `<!-- <code> in a template -->\n\n@${ME} hi`, `<a name="top"/> @${ME}`,
+    `<span title="<code>">documentation</span>\n\n@${ME} which option?`, `<abbr title='<a>'>CI</abbr> @${ME}`]) {
     assert.equal(mentions(body, ME), true, body);
   }
   for (const body of [`\`@${ME}\``, `\`\`\`\n@${ME}\n\`\`\``, `> @${ME} wrote this earlier`, `[@${ME}](https://example.com)`,
     `mail ${ME}@example.com`, `see a@${ME}`, `path/@${ME}`, `@${ME}/reviewers`, `@${ME}-bot`, `@${ME}x`, '', null,
     `run <code>@${ME}</code> here`, `see <a href="https://example.com">the @${ME} page</a>`, `<CODE class="x">**@${ME}**</CODE>`,
-    `<a href="https://example.com">\n<div>\n\n@${ME}\n\n</div>\n</a>`, `See <code>literal\n\n@${ME}\n\n</code>`]) {
+    `<a href="https://example.com">\n<div>\n\n@${ME}\n\n</div>\n</a>`, `See <code>literal\n\n@${ME}\n\n</code>`,
+    `See <code title="a/>b">@${ME}</code>`, `See <a href="https://example.com/>">@${ME}</a>`]) {
     assert.equal(mentions(body, ME), false, String(body));
   }
 });

@@ -81,12 +81,14 @@ export function resolveArgs({ repo, text, now }) {
 const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkReference', 'definition', 'image', 'imageReference']);
 // Raw <a> and <code> tags sit in HTML nodes apart from the text they wrap, and GitHub keeps an unclosed one
 // open across blocks, so count them in document order over every HTML node and drop text while one is open.
-const HIDING_TAG = /<(\/?)(?:a|code)(?=[\s/>])[^>]*?(\/?)>/gi;
+// Every tag is matched whole, quoted values included, so a value such as title="<code>" is no tag of its own.
+const TAG = /<(\/?)([a-z][a-z0-9-]*)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/gi;
+const HIDING = new Set(['a', 'code']);
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 function plain(node, state = { open: 0 }, quiet = false) {
   if (node.type === 'html') {
-    for (const [, close, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(HIDING_TAG)) {
-      if (!selfClosing) state.open = Math.max(0, state.open + (close ? -1 : 1));
+    for (const [, close, name, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(TAG)) {
+      if (HIDING.has(name.toLowerCase()) && !selfClosing) state.open = Math.max(0, state.open + (close ? -1 : 1));
     }
   }
   const skip = quiet || SKIP.has(node.type);
