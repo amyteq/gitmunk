@@ -79,7 +79,18 @@ export function resolveArgs({ repo, text, now }) {
 
 // Code, quoted text, HTML and link text never mention anyone a reply should answer.
 const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkReference', 'definition', 'image', 'imageReference']);
-const plain = (node) => (SKIP.has(node.type) ? ' ' : node.type === 'text' ? node.value : (node.children ?? []).map(plain).join(' '));
+// Inline HTML arrives as one node per tag, so the text between <code>…</code> or <a>…</a> is a sibling.
+const HIDING_TAG = /^<(\/)?(?:a|code)(?:\s[^>]*)?>$/i;
+function plain(node) {
+  if (SKIP.has(node.type)) return ' ';
+  if (node.type === 'text') return node.value;
+  let hidden = 0;
+  return (node.children ?? []).map((child) => {
+    const tag = child.type === 'html' && HIDING_TAG.exec(child.value.trim());
+    if (tag) hidden = Math.max(0, hidden + (tag[1] ? -1 : 1));
+    return hidden || tag ? ' ' : plain(child);
+  }).join(' ');
+}
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Whether a Markdown body mentions `login` directly (not a team, an email or a path). */
@@ -129,18 +140,26 @@ const named = (item, comment) => item.id === comment.id && PLACES[comment.kind].
 
 /**
  * The unanswered mentions of `login` per thread: written by someone else at or after `cutoff`, with no
- * later text of `login` in the same reply thread. A named comment is kept whatever its age, answers or mention.
- * Mentions are grouped by reply route and sender, one reply each.
+ * later text of `login` in the same reply thread. A named comment narrows the scan to itself under the same
+ * rules; when it is not taken, `named` says why. Mentions are grouped by reply route and sender, one reply each.
  */
 export function scan({ login, cutoff, threads, comment = null }) {
   const self = (item) => item.author.toLowerCase() === login.toLowerCase();
   const topics = [];
+  let namedReason = 'not-found';
   for (const thread of threads) {
     const { items, ...topic } = itemsOf(thread);
+    // An approval without a body is not text, so it answers nothing.
+    const answers = (later, item) => self(later) && Boolean(later.body?.trim()) && later.in.includes(item.key) && Date.parse(later.createdAt) > Date.parse(item.createdAt);
+    const why = (item) => (self(item) ? 'own-text'
+      : !(Date.parse(item.createdAt) >= Date.parse(cutoff)) ? 'before-cutoff'
+        : !mentions(item.body, login) ? 'no-mention'
+          : items.some((later) => answers(later, item)) ? 'answered' : null);
     const pending = items.filter((item) => {
-      if (comment) return named(item, comment);
-      if (self(item) || !(Date.parse(item.createdAt) >= Date.parse(cutoff)) || !mentions(item.body, login)) return false;
-      return !items.some((later) => self(later) && later.in.includes(item.key) && Date.parse(later.createdAt) > Date.parse(item.createdAt));
+      if (comment && !named(item, comment)) return false;
+      const reason = why(item);
+      if (comment) namedReason = reason;
+      return !reason;
     });
     if (!pending.length) continue;
     const groups = [];
@@ -152,7 +171,7 @@ export function scan({ login, cutoff, threads, comment = null }) {
     }
     topics.push({ ...topic, mentions: pending.length, groups: groups.map(({ id, ...g }) => g) });
   }
-  return { topics };
+  return comment && !topics.length ? { topics, named: namedReason } : { topics };
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────────────────────────

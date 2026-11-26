@@ -82,11 +82,12 @@ test('dry-run is a flag, and the first other word starts the verbatim notes', ()
 // ── Mentions ──
 
 test('a direct mention counts; code, quotes, links, emails, paths, teams and longer logins do not', () => {
-  for (const body of [`@${ME} can you check?`, `Thanks (@${ME}).`, `cc @EXAMPLE-OWNER`, `- [ ] @${ME}: decide`]) {
+  for (const body of [`@${ME} can you check?`, `Thanks (@${ME}).`, `cc @EXAMPLE-OWNER`, `- [ ] @${ME}: decide`, `<code>x</code> then @${ME}`, `<b>@${ME}</b>`]) {
     assert.equal(mentions(body, ME), true, body);
   }
   for (const body of [`\`@${ME}\``, `\`\`\`\n@${ME}\n\`\`\``, `> @${ME} wrote this earlier`, `[@${ME}](https://example.com)`,
-    `mail ${ME}@example.com`, `see a@${ME}`, `path/@${ME}`, `@${ME}/reviewers`, `@${ME}-bot`, `@${ME}x`, '', null]) {
+    `mail ${ME}@example.com`, `see a@${ME}`, `path/@${ME}`, `@${ME}/reviewers`, `@${ME}-bot`, `@${ME}x`, '', null,
+    `run <code>@${ME}</code> here`, `see <a href="https://example.com">the @${ME} page</a>`, `<CODE class="x">**@${ME}**</CODE>`]) {
     assert.equal(mentions(body, ME), false, String(body));
   }
 });
@@ -175,18 +176,38 @@ test('discussion mentions reply in their comment thread; the body is answered by
     ['bob', { kind: 'discussion-reply', discussionId: 'D_7', replyToId: 'DC_1' }, ['discussion-comment']],
     ['alice', { kind: 'discussion-reply', discussionId: 'D_7', replyToId: 'DC_1' }, ['discussion-reply']],
   ]);
-  const named = run([discussion([node(1, 'bob', '2026-01-09T00:00:00Z', 'x', [node(2, 'carol', '2026-01-09T01:00:00Z', 'no mention')])])],
+  const named = run([discussion([node(1, 'bob', '2026-01-09T00:00:00Z', 'x', [node(2, 'carol', '2026-01-09T01:00:00Z', `@${ME} this one`)])])],
     { comment: { id: 2, kind: 'discussion-comment' } }).topics[0];
   assert.deepEqual(named.groups.map((g) => [g.sender, g.route.replyToId, g.comments[0].place]), [['carol', 'DC_1', 'discussion-reply']]);
   const answered = run([discussion([node(5, ME, '2026-01-09T00:00:00Z', 'My answer.')])]);
   assert.deepEqual(answered.topics, []);
 });
 
-test('a named comment is kept whatever its age, answers or mention, and nothing else is', () => {
-  const thread = { issue: issue(), comments: [[comment(1, 'alice', '2025-06-01T00:00:00Z', 'no mention, old'), comment(2, 'bob', '2026-01-09T00:00:00Z', `@${ME} other`)]] };
-  const [topic] = run([thread], { comment: { id: 1, kind: 'issue-comment' } }).topics;
-  assert.deepEqual(topic.groups.map((g) => g.comments.map((c) => c.id)), [[1]]);
-  assert.deepEqual(run([thread], { comment: { id: 1, kind: 'review-comment' } }).topics, []);
+test('a named comment narrows the scan under the same rules, and says why it was not taken', () => {
+  const thread = { issue: issue(), comments: [[
+    comment(1, 'alice', '2025-06-01T00:00:00Z', `@${ME} old`),
+    comment(2, 'bob', '2026-01-09T00:00:00Z', `@${ME} other`),
+    comment(3, 'carol', '2026-01-09T01:00:00Z', 'no mention'),
+    comment(4, 'dave', '2026-01-09T02:00:00Z', `@${ME} answered`),
+    comment(5, ME, '2026-01-09T03:00:00Z', `@${ME} mine, and the answer to 4`),
+    comment(6, 'erin', '2026-01-09T04:00:00Z', `@${ME} open`),
+  ]] };
+  const named = (id, kind = 'issue-comment') => run([thread], { comment: { id, kind } });
+  assert.deepEqual(named(6), { topics: [{ number: 12, kind: 'issue', title: 'Example', url: `${BASE}/issues/12`, mentions: 1, groups: [{
+    route: { kind: 'issue-comment', number: 12 }, sender: 'erin', bot: false, mention: '@erin',
+    comments: [{ place: 'comment', id: 6, url: `${BASE}/issues/12#issuecomment-6`, createdAt: '2026-01-09T04:00:00Z' }] }] }] });
+  for (const [id, reason] of [[1, 'before-cutoff'], [3, 'no-mention'], [4, 'answered'], [5, 'own-text'], [9, 'not-found']]) {
+    assert.deepEqual(named(id), { topics: [], named: reason }, `comment ${id}`);
+  }
+  assert.deepEqual(named(6, 'review-comment'), { topics: [], named: 'not-found' });
+  assert.equal(run([thread]).named, undefined);
+});
+
+test('an approval without a body answers nothing; a review with text answers the conversation', () => {
+  const review = (id, submitted, body, state = 'APPROVED') => ({ id, html_url: `${BASE}/pull/12#pullrequestreview-${id}`, submitted_at: submitted, state, body, user: user(ME) });
+  const thread = (reviews) => ({ issue: issue({ pull_request: {} }), comments: [[comment(1, 'alice', '2026-01-09T00:00:00Z', `@${ME} ok to merge?`)]], reviews: [reviews] });
+  assert.equal(run([thread([review(70, '2026-01-09T01:00:00Z', ''), review(71, '2026-01-09T02:00:00Z', null), review(72, '2026-01-09T03:00:00Z', ' \n')])]).topics.length, 1);
+  assert.deepEqual(run([thread([review(73, '2026-01-09T01:00:00Z', 'Yes, merging.')])]).topics, []);
 });
 
 // ── CLI ──
