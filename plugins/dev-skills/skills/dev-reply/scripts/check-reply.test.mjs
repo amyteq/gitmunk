@@ -87,7 +87,7 @@ test('a direct mention counts; code, quotes, links, emails, paths, teams and lon
     `<a href="https://example.com">\n\n> quoted </a>\n\n@${ME} next`, `<!-- <code> in a template -->\n\n@${ME} hi`, `<a name="top"/> @${ME}`,
     `<span title="<code>">documentation</span>\n\n@${ME} which option?`, `<abbr title='<a>'>CI</abbr> @${ME}`,
     `<div>\n<example.widget-x title="<code>">documentation</example.widget-x>\n</div>\n\n@${ME} which option?`,
-    `<div>\n<x_y title="<a>">docs</x_y>\n</div>\n\n@${ME} next`]) {
+    `<div>\n<x_y title="<a>">docs</x_y>\n</div>\n\n@${ME} next`, `<div>\n<code" ">\n</div>\n\n@${ME} which option?`, `<div>\n<a' '>\n</div>\n\n@${ME} next`]) {
     assert.equal(mentions(body, ME), true, body);
   }
   for (const body of [`\`@${ME}\``, `\`\`\`\n@${ME}\n\`\`\``, `> @${ME} wrote this earlier`, `[@${ME}](https://example.com)`,
