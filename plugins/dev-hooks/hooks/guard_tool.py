@@ -1023,8 +1023,8 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
 #
 # At guard levels `med` and `high` (D1), `main` asks again with `plain`: text that is only read or printed is
 # data. The operands of a reader cannot delete or run anything, so a gated word in a file name or a pattern
-# does not count; printed text, a plain `sed` substitution and an `awk` program that runs nothing hold no
-# substitution. Only in a line whose every command is a direct top-level call of `PLAIN_PROGRAMS` (no wrapper,
+# does not count; text that `echo` or a `%s`-only `printf` prints, a plain `sed` substitution and an `awk`
+# program that runs nothing hold no substitution. Only in a line whose every command is a direct top-level call of `PLAIN_PROGRAMS` (no wrapper,
 # assignment, path, `.`, `source`, group or substitution) with no `$` or backtick outside single quotes and only
 # `PLAIN_LINE` characters outside quotes (no comment or heredoc, whose quotes are no shell quotes, and no glob,
 # brace, `~` or `=` that could expand a redirection target), whose pipeline and redirections hand that output to
@@ -1033,6 +1033,7 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
 
 PLAIN_READERS = {"cat", "head", "tail", "grep"}  # not `rg --pre`, `less` or `more`, which can run commands
 PLAIN_PRINTERS = {"echo", "printf"}
+PLAIN_FORMAT = re.compile(r"(?!-)(?:[^%]|%[s%])*")  # not `printf -v`; zsh reads a numeric argument as arithmetic
 PLAIN_SED = re.compile(r"s([^\w\s\\])(?:(?!\1)[^\\\n]|\\.)*\1(?:(?!\1)[^\\\n]|\\.)*\1[gIip0-9]*")  # no `e` or `w`
 AWK_RUNS = re.compile(r"system|getline|\||@|>")  # `>` writes a file, or a socket in gawk
 SCRIPT_OPTIONS = {"sed": re.compile(r"-[nEri]+"), "awk": re.compile(r"-F[^\s-]\S*")}
@@ -1080,7 +1081,8 @@ def plain_text(command: str) -> str:
         operands = [w for w in cmd.words[cmd.entry() + 1:] if not w.expands and "$'" not in text[w.start:w.end]]
         if target in PLAIN_READERS:
             edits += [(word, True) for word in operands]
-        elif target in PLAIN_PRINTERS and not any(re.match(r"-\w*v", word.text) for word in operands):  # `printf -v`
+        elif target == "echo" or target == "printf" and operands and operands[0] is cmd.words[cmd.entry() + 1] \
+                and PLAIN_FORMAT.fullmatch(operands[0].text):
             edits += [(word, False) for word in operands]
         elif target in SCRIPT_OPTIONS and (script := plain_script(cmd)) in operands:
             edits.append((script, False))
