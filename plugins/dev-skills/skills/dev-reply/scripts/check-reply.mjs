@@ -86,16 +86,27 @@ const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkR
 const TAG = /<(\/?)([a-z][^\s/>]*)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/gi;
 const HIDING = new Set(['a', 'code']);
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
-// GitHub also links a bare URL (a GFM autolink literal) that CommonMark leaves as text; it runs to whitespace or `<`.
+// GitHub also links a bare URL (a GFM autolink literal) that CommonMark leaves as text. It runs to whitespace or `<`
+// over any emphasis or code delimiters inside it, so a URL that ends one text node runs on into the next text when
+// nothing but such delimiters lies between them in the source.
 const BARE_URL = /(?:https?:\/\/|www\.)[^\s<]*/gi;
-function plain(node, state = { open: 0 }, quiet = false) {
+function plain(node, state, quiet = false) {
   if (node.type === 'html') {
     for (const [, close, name, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(TAG)) {
       if (HIDING.has(name.toLowerCase()) && !selfClosing) state.open = Math.max(0, state.open + (close ? -1 : 1));
     }
   }
   const skip = quiet || SKIP.has(node.type);
-  if (node.type === 'text') return skip || state.open ? ' ' : node.value.replace(BARE_URL, ' ');
+  if (node.type === 'text') {
+    if (skip || state.open) return ' ';
+    const carried = state.urlEnd !== undefined && !/[\s<]/.test(state.src.slice(state.urlEnd, node.position.start.offset));
+    const text = (carried ? 'https://' : '') + node.value;
+    state.urlEnd = undefined;
+    return text.replace(BARE_URL, (url, at) => {
+      if (at + url.length === text.length) state.urlEnd = node.position.end.offset;
+      return ' ';
+    });
+  }
   return (node.children ?? []).map((child) => plain(child, state, skip)).join(' ');
 }
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -103,7 +114,8 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Whether a Markdown body mentions `login` directly (not a team, an email or a path). */
 export function mentions(body, login) {
   const re = new RegExp(`(?<![\\w\`/.@-])@${escapeRe(login)}(?![\\w-]|/\\w)`, 'i');
-  return re.test(plain(fromMarkdown(body ?? '')));
+  const src = body ?? '';
+  return re.test(plain(fromMarkdown(src), { open: 0, src }));
 }
 
 /** How a reply names its sender: `@login` for a person; a bot or agent trigger stays in a code span. */
