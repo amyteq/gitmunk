@@ -1,10 +1,12 @@
 import { readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Deterministic decisions for dev-explain: resolving the invocation, vetting a label change and
 // planning or verifying an append-only body. Each decision is a pure function; only the CLI reads
 // and writes files. Exit 0 proceeds, 1 stops (or refuses part of a change), and 2 means the check
-// did not run, which never counts as a pass.
+// did not run, which never counts as a pass. Exit 3, from `branch --dir` only, means
+// DEV_EXPLAIN_BRANCH_HELPER=0 asked for step 1.3's jq recipe instead.
 
 export const TYPES = ['OD', 'SD', 'ALL'];
 export const DEFAULTS = { type: 'OD', lang: 'en' };
@@ -292,6 +294,7 @@ function exactObject(value, schema) {
 export function readInput(argv) {
   const [command, ...args] = argv;
   const flags = Object.hasOwn(COMMANDS, command ?? '') ? COMMANDS[command] : fail('unknown or missing command');
+  if (command === 'branch' && args[0] === '--dir') return readBranchDir(args);
   if (args.length !== flags.length * 2) fail(`${command} takes exactly ${flags.map((f) => `--${f} VALUE`).join(' ')}`);
   const given = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -320,6 +323,32 @@ export function readInput(argv) {
   return { command, ...exactObject(parsed, SCHEMAS[command]) };
 }
 
+// `branch --dir DIR` builds the object step 1.3's jq recipe builds, from the same files in its scratch
+// directory, so the documented call carries no inline program (#76). Each fact loses one trailing newline,
+// as `rtrimstr("\n")` does. shortcut: pulls.json is parsed as one JSON text, where `--slurpfile … $pulls[0]`
+// took the first of several; `gh pr list --json` prints one, so upgrade only if that changes.
+const BRANCH_FILES = { branch: 'branch', push: 'push', remote: 'push-remote', fetch: 'fetch', pushSpecs: 'push-specs', remoteUrl: 'push-url' };
+function readBranchDir(args) {
+  if (args.length !== 2) fail('branch takes exactly --input VALUE or --dir VALUE');
+  const read = (name) => readFileSync(join(args[1], name), 'utf8');
+  const facts = Object.fromEntries(Object.entries(BRANCH_FILES).map(([key, name]) => [key, read(name).replace(/\n$/, '')]));
+  const pullsText = read('pulls.json');
+  let pulls;
+  try {
+    pulls = JSON.parse(pullsText);
+  } catch (error) {
+    fail(`pulls.json is not readable JSON: ${error.message}`);
+  }
+  return { command: 'branch', ...exactObject({ ...facts, pulls }, SCHEMAS.branch) };
+}
+
+// DEV_EXPLAIN_BRANCH_HELPER: unset, empty or 1 runs `branch --dir`; 0 hands step 1.3 back to its jq recipe.
+export function branchHelper(value = '') {
+  if (value === '0') return { use: false };
+  if (value === '' || value === '1') return { use: true };
+  return { use: true, warning: `DEV_EXPLAIN_BRANCH_HELPER="${value}" is not 0 or 1 (unset or empty means 1); using the helper` };
+}
+
 const run = {
   args: (input) => {
     const result = resolveArgs(input);
@@ -343,6 +372,14 @@ const run = {
 };
 
 export function main(argv) {
+  if (argv[0] === 'branch' && argv[1] === '--dir') {
+    const { use, warning } = branchHelper(process.env.DEV_EXPLAIN_BRANCH_HELPER);
+    if (warning) console.error(`check-explain: ${warning}`);
+    if (!use) {
+      console.error('check-explain: DEV_EXPLAIN_BRANCH_HELPER=0 wrote no candidates; run step 1.3\'s jq recipe instead');
+      return 3;
+    }
+  }
   let proceed, output;
   try {
     const { command, ...input } = readInput(argv);
