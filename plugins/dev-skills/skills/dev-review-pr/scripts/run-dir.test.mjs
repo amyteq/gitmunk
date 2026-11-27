@@ -162,6 +162,19 @@ test('run-dir AC-3(e) a temporary folder inside the checkout is refused with not
   assertRefused(f, runDir(f, ['--run-id', ID]), linked);
 });
 
+test('run-dir AC-3(e) when Git cannot run or cannot read the checkout, its .git entry still refuses a folder inside it', () => {
+  const f = fixture();
+  const inside = join(f.repo, 'scratch');
+  mkdirSync(inside);
+  const bin = join(f.root, 'bin');
+  mkdirSync(bin);
+  symlinkSync(process.execPath, join(bin, 'node'));
+  const before = tree(f.root);
+  // No git on PATH; then git on PATH but pointed at a folder that holds no repository.
+  assertRefused(f, runDir(f, ['--run-id', ID], { TMPDIR: inside, PATH: bin }), before);
+  assertRefused(f, runDir(f, ['--run-id', ID], { TMPDIR: inside, GIT_DIR: f.tmp }), before);
+});
+
 // AC-4: one fixture holds a run directory made by run-dir and a run-id file naming it. Each command runs through
 // `bash -c` twice from the same starting state: once re-deriving the directory from the run-id file, once with the
 // printed path spelled literally. Status, stdout, stderr and the run directory's tree must match.

@@ -547,6 +547,8 @@ async function attribute({ record: path, operation, sha }) {
 
 const RUN_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const RUN_DIR_TOGGLE = 'DEV_REVIEW_PR_RUN_DIR_HELPER';
+// When Git cannot run or cannot read the checkout, a `.git` entry here or above still marks one, so the check fails closed.
+const dotGitAbove = (dir) => existsSync(join(dir, '.git')) ? dir : dirname(dir) === dir ? null : dotGitAbove(dirname(dir));
 
 // Returns [exit code, the line to print]. Nothing is created before every check that can refuse has passed, except that a
 // shared temporary folder may already hold a parent or run directory someone else made: only a real directory this user
@@ -562,7 +564,7 @@ async function runDir(args) {
   if (!tmp) return [2, `the temporary folder ${tmpdir()} does not exist`];
   const parent = join(tmp, 'dev-review-pr');
   const dir = join(parent, id);
-  const top = await git(process.cwd(), ['rev-parse', '--show-toplevel'], PROBE_SECONDS);
+  const top = await git(process.cwd(), ['rev-parse', '--show-toplevel'], PROBE_SECONDS) ?? dotGitAbove(process.cwd());
   if (top && covers(real(top) ?? top, parent)) return [2, `${parent} lies inside the Git checkout ${top}; set TMPDIR outside it`];
   for (const path of [parent, dir]) {
     try { mkdirSync(path, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') return [2, `cannot create ${path} (${error.code})`]; }
