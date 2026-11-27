@@ -110,7 +110,7 @@ export function renderLedger(ledger, { eol = '\n' } = {}) {
   const roll = [`${rows.length} tasks`, ...counts.map(([s, n]) => `${STATUS[s]} ${n}`), `❗ ${h.waiting} events waiting`].join(' · ');
   const out = [
     OPEN, '### Batch ledger', '',
-    `Coordinator: ${h.alias} · \`${h.coordinator}\` · ${LOOP[h.loop]} ${h.loop} · cap ${h.cap} · merge ${h.merge} · changed ${h.changed}`,
+    `Coordinator: ${h.alias} · \`${h.coordinator}\` · ${LOOP[h.loop]} ${h.loop} · cap ${h.cap} workers · merge ${h.merge} · changed ${h.changed}`,
     ...(ledger.authorization == null ? [] : [ledger.authorization]),
     `Roll call: ${roll}`, '', LEGEND, '',
     '| # | Task | Deps | Batch | Status | PR · head | Session | Next |', '|---|---|---|---|---|---|---|---|',
