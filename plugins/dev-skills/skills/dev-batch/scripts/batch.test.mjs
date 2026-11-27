@@ -680,3 +680,79 @@ test('bad flags exit 2', () => {
   }
   assert.deepEqual([w.cli('wait', '--timeout', '0').code, w.cli('wait', '--timeout', '0').out], [3, { timeout: true }]);
 });
+
+// #58: named slots and the cost alert.
+test('launch refuses slot-full naming the slot and its holders; its retired records and the row\'s limited sessions hold none (#58 AC-1 i)', () => {
+  const w = world();
+  w.init(); // cap 2
+  w.cli('pause');
+  assert.equal(w.cli('config', 'slots=e2e=1').code, 0);
+  const refined = json(fileURLToPath(new URL('./fixtures/facts-base.json', import.meta.url))).data.repository.issue_41; // task comment, ready, /goal line
+  w.set((v) => { v.node = { ...refined, labels: { nodes: [{ name: 'slot:e2e' }] } }; });
+  const rec = (name, stage, issue, state, id = null) => ({ name, stage, issue, pr: null, attempt: 1, account: id && 'A1', id, sessionId: null,
+    startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state, slots: ['e2e'] });
+  // #41's earlier implement record (retired by the launch) and its limited refine session (stopped by it) each hold e2e too.
+  const records = [rec('er-i43a', 'implement', 43, 'working'), rec('er-i41a', 'implement', 41, 'blocked'), rec('er-i41r', 'refine', 41, 'limited', 'er-i41r')];
+  writeFileSync(w.file('sessions.json'), JSON.stringify(records));
+  const before = readFileSync(w.file('sessions.json'), 'utf8');
+  let r = w.cli('launch', '--task', '41', '--stage', 'implement');
+  assert.deepEqual([r.code, r.out?.error, r.out?.slot, r.out?.holders], [1, 'slot-full', 'e2e', ['er-i43a']], r.text);
+  assert.match(r.out.detail, /slot e2e \(1\): er-i43a hold it/);
+  assert.equal(readFileSync(w.file('sessions.json'), 'utf8'), before);
+  assert.deepEqual([w.calls('claude', '--bg'), w.calls('claude', 'stop')], [[], []]);
+  // Once #43's session is done, only #41's own records hold e2e: the launch goes ahead and its session holds the slot.
+  writeFileSync(w.file('sessions.json'), JSON.stringify([{ ...records[0], state: 'done' }, ...records.slice(1)]));
+  r = w.cli('launch', '--task', '41', '--stage', 'implement');
+  assert.equal(r.code, 0, r.text);
+  assert.deepEqual(json(w.file('sessions.json')).filter((x) => x.issue === 41).map((x) => [x.name, x.state, x.slots]), [['er-i41a', 'stopped', ['e2e']],
+    ['er-i41r', 'stopped', ['e2e']], [r.out.launched, 'working', ['e2e']]]);
+});
+
+test('launch counts a session adopted at takeover, its labels not yet read, as holding every slot (#58 AC-1 i)', () => {
+  const w = world();
+  w.init();
+  w.cli('pause');
+  assert.equal(w.cli('config', 'slots=e2e=1').code, 0);
+  const refined = json(fileURLToPath(new URL('./fixtures/facts-base.json', import.meta.url))).data.repository.issue_41;
+  w.set((v) => { v.node = { ...refined, labels: { nodes: [{ name: 'slot:e2e' }] } }; });
+  writeFileSync(w.file('sessions.json'), JSON.stringify([{ name: 'er-i43a', stage: 'implement', issue: 43, pr: null, attempt: 1, account: 'A1', id: 'er-i43a',
+    sessionId: null, startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'working', slots: null }]));
+  const r = w.cli('launch', '--task', '41', '--stage', 'implement');
+  assert.deepEqual([r.code, r.out?.error, r.out?.holders], [1, 'slot-full', ['er-i43a']], r.text);
+});
+
+test('launch refuses slot-full before it stops a running loop or takes its lease (#58 AC-1 i)', async (t) => {
+  const w = world();
+  w.init();
+  w.cli('pause');
+  assert.equal(w.cli('config', 'slots=e2e=1').code, 0);
+  const refined = json(fileURLToPath(new URL('./fixtures/facts-base.json', import.meta.url))).data.repository.issue_41;
+  w.set((v) => { v.node = { ...refined, labels: { nodes: [{ name: 'slot:e2e' }] } }; });
+  writeFileSync(w.file('sessions.json'), JSON.stringify([{ name: 'er-i43a', stage: 'implement', issue: 43, pr: null, attempt: 1, account: 'A1', id: 'er-i43a',
+    sessionId: null, startedAt: '2026-11-19T09:00:00.000Z', endedAt: null, state: 'working', slots: ['e2e'] }]));
+  const before = readFileSync(w.file('sessions.json'), 'utf8');
+  // A sleeper whose arguments look like the loop's stands in for a running loop: stopping it would take its lease.
+  const child = spawn(process.execPath, ['-e', "console.log('ready'); setInterval(() => {}, 1000)", 'run', '--batch', w.dir], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => child.kill('SIGKILL'));
+  await new Promise((ready) => child.stdout.once('data', ready));
+  writeFileSync(w.file('lease.json'), JSON.stringify({ pid: child.pid, host: hostname(), nonce: 'n1' }));
+  const r = w.cli('launch', '--task', '41', '--stage', 'implement');
+  assert.deepEqual([r.code, r.out?.error, r.out?.holders], [1, 'slot-full', ['er-i43a']], r.text);
+  assert.deepEqual([json(w.file('lease.json')).nonce, readFileSync(w.file('sessions.json'), 'utf8'), w.calls('claude', '--bg')], ['n1', before, []]);
+});
+
+test('ask and config refuse an invalid slots or cost_alert with exit 2 naming the key; settings.json is unchanged (#58 AC-3 b)', () => {
+  const w = world();
+  w.init();
+  const settings = readFileSync(w.file('settings.json'), 'utf8');
+  for (const word of ['slots==1', `slots=${'a'.repeat(33)}=1`, 'slots=E2E=1', 'slots=e2e_x=1', 'slots=e2e', 'slots=e2e=0', 'slots=e2e=1.5', 'slots=e2e=x',
+    'slots=e2e=1,e2e=2', 'slots=e2e=1:deploy', 'cost_alert=lots', 'cost_alert=1', 'cost_alert=0.5', 'cost_alert=-3']) {
+    const key = word.slice(0, word.indexOf('='));
+    for (const args of [['ask', `config ${word}`], ['config', word]]) {
+      const r = w.cli(...args);
+      assert.deepEqual([r.code, r.out?.error], [2, 'usage'], `${args.join(' ')}: ${r.text}`);
+      assert.ok(r.out.detail.startsWith(`${key} `), r.out.detail);
+    }
+  }
+  assert.equal(readFileSync(w.file('settings.json'), 'utf8'), settings);
+});

@@ -57,7 +57,7 @@ With `merge=off`, an approval-eligible row stays 👤 "waiting for merge authori
 
 ## Dispatch order
 
-When a slot frees, the loop takes the dispatchable row whose issue has the highest priority, then the lowest Batch, then the earliest row. This holds for every stage's launch; a running session is never stopped for a higher-priority row.
+When a slot frees, the loop takes the dispatchable row whose issue has the highest priority, then the lowest Batch, then the earliest row. This holds for every stage's launch; a running session is never stopped for a higher-priority row. A stage that needs a full named slot (`slots`, [SKILL.md](../SKILL.md#usage-and-the-ask-round)) waits as at the cap, and the loop goes on to the next row in this order.
 
 The priority comes from the issue's labels at every tick: `P0`–`P9`, `priority:P1`, `priority/high`, `high priority` and similar. `critical` or `urgent` is P0, `high` P1, `medium` or `normal` P2 and `low` P3. Several labels take the highest, and a bare `high` or `low` is not a priority. An issue without one ranks as P2. A labelled priority shows in the Batch cell (`B2 · P0`); change it on the issue, because the loop overwrites the cell.
 

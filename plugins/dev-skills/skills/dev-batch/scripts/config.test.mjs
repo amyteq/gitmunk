@@ -119,3 +119,39 @@ test('reviewer and writer model/effort settings default to null and follow the p
   assert.ok(!ask('init').some((q) => keys.includes(q.key)));
   assert.ok(!ask('config').some((q) => keys.includes(q.key)));
 });
+
+// #58: named slots and the cost alert.
+const ALL = ['refine', 'implement', 'review', 'merge'];
+test('slots and cost_alert default to none and off and follow the precedence (AC-3 a)', () => {
+  const d = resolveSettings({}, {});
+  assert.deepEqual([d.values.slots, d.values.cost_alert, d.sources.slots, d.sources.cost_alert], ['none', 'off', 'default', 'default']);
+  const e = resolveSettings({}, { DEV_BATCH_SLOTS: 'e2e=1', DEV_BATCH_COST_ALERT: '3' });
+  assert.deepEqual([e.values.slots, e.values.cost_alert, e.sources.slots, e.sources.cost_alert], [[{ name: 'e2e', count: 1, stages: ALL }], 3, 'environment', 'environment']);
+  const a = resolveSettings({ slots: 'none', cost_alert: 'off' }, { DEV_BATCH_SLOTS: 'e2e=1', DEV_BATCH_COST_ALERT: '3' });
+  assert.deepEqual([a.values.slots, a.values.cost_alert, a.sources.slots, a.sources.cost_alert], ['none', 'off', 'argument', 'argument']);
+  assert.deepEqual(parseInvocation('config slots=heavy=3,e2e=1 cost_alert=2.5').args, { slots: 'heavy=3,e2e=1', cost_alert: '2.5' });
+});
+
+test('slots parse into name, count and stages; no stage list is every stage (AC-3 a)', () => {
+  const slots = (v) => resolveSettings({ slots: v }, {}).values.slots;
+  assert.deepEqual(slots('heavy=3,e2e=1,live-api=1:implement+review'), [
+    { name: 'heavy', count: 3, stages: ALL }, { name: 'e2e', count: 1, stages: ALL }, { name: 'live-api', count: 1, stages: ['implement', 'review'] }]);
+  assert.deepEqual(slots(`${'a'.repeat(32)}=12:merge`), [{ name: 'a'.repeat(32), count: 12, stages: ['merge'] }]);
+  assert.equal(resolveSettings({ cost_alert: '1.5' }, {}).values.cost_alert, 1.5);
+});
+
+// AC-3 (b): one test per refused value; batch.test.mjs checks exit 2 from `ask` and `config` for the same values.
+const REFUSED = [
+  ['slots', '=1', 'an empty name'], ['slots', `${'a'.repeat(33)}=1`, 'a name over 32 characters'], ['slots', 'E2E=1', 'an upper-case name'],
+  ['slots', 'e2e_x=1', 'a name with _'], ['slots', 'e2e', 'no count'], ['slots', 'e2e=0', 'a count of 0'], ['slots', 'e2e=1.5', 'a fractional count'],
+  ['slots', 'e2e=x', 'a count that is not a number'], ['slots', 'e2e=1,e2e=2', 'a duplicate name'], ['slots', 'e2e=1:deploy', 'an unknown stage'],
+  ['slots', 'e2e=1:', 'an empty stage'], ['cost_alert', 'lots', 'not a number'], ['cost_alert', '1', 'exactly 1'], ['cost_alert', '0.5', 'below 1'],
+  ['cost_alert', '-3', 'a negative number'],
+];
+for (const [key, value, why] of REFUSED) {
+  test(`${key}=${value} is refused naming the key: ${why} (AC-3 b)`, () => {
+    assert.throws(() => resolveSettings({ [key]: value }, {}), (e) => e instanceof InputError && e.message.startsWith(`${key} `));
+    const env = `DEV_BATCH_${key.toUpperCase()}`;
+    assert.throws(() => resolveSettings({}, { [env]: value }), (e) => e instanceof InputError && e.message.startsWith(`${env}: ${key} `));
+  });
+}
