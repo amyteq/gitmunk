@@ -287,9 +287,10 @@ export function tick(ctx) {
       && r.actions.some((a) => a.type === 'launch' || a.kind === 'authorization-missing')) {
       r = { ...r, status: 'waiting', next: '', actions: r.actions.filter((a) => a.type === 'stop') };
     }
-    // #58: a merge that waits for a full slot leaves the lock to a later row, unless a merge session of its row may still merge.
+    // #58: a merge that waits for a full slot leaves the lock, free or its own, to a later row, unless a merge session of its row may still merge.
     const launch = r.actions.find((a) => a.type === 'launch');
     const slotWait = launch && !records.some((x) => x.issue === row.issue && x.stage === 'merge' && LIVE.has(x.state)) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
+    if (mergeLock === 'mine' && slotWait) r.actions.push({ type: 'unlock' }); // released below, and on disk in step 6
     if (!holder && !slotWait && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
     return { row, batch: row.batch, priority: f.priority, facts: f, actions: r.actions,
