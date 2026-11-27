@@ -659,6 +659,10 @@ class StructuralAskTest(unittest.TestCase):
             "grep 'rm -rf' f; printf '%d\\n' 'path[$(example-tool)]'", "grep 'rm -rf' f; sed 's/.*/example-tool/e' f",
             "grep 'rm -rf' f | printf '%f' 'path[`example-tool`]'", "grep 'rm -rf' f; awk 'BEGIN{\"example-tool\" | getline x}'",
             "grep 'rm -rf' f; printf '%d' 'path[$(example-tool)]' | sed 's/a/b/'",
+            "for p in 'BEGIN{system(\"example-tool\")}'; do d=$(date); awk \"$p\"; done",
+            "for v in 'path[$(example-tool)]'; do d=$(date); printf '%d' \"$v\"; grep x \"$v\"; done",
+            "for v in example-tool; do d=$(date); rg --pre \"$v\" x .; done",
+            "for v in example-tool; do d=$(date); watch \"$v\"; grep x $v; done",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:

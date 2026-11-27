@@ -974,11 +974,12 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
     words = [word for cmd in reader.commands for word in cmd.words + cmd.targets]
     if any(word.subst for word in words) or any(cmd.body_subst for cmd in reader.commands):
         # A variable the text sets, while a substitution runs somewhere in it, may carry that
-        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one. With `plain`,
-        # not a variable that only `for NAME in` sets, over words with no expansion, unless the shell sets it too.
+        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one. With `plain`, not one that
+        # only `for NAME in` sets over unexpanded words, unless the shell sets it too or a command fails `loop_reads`.
+        loops = reader.loops if plain and all(loop_reads(cmd) for cmd in reader.commands) else {}
         for word in words:
             word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower(), 0)
-                              > (reader.loops.get(name.lower(), 0) if plain else 0) for name in word.names)
+                              > loops.get(name.lower(), 0) for name in word.names)
     # An interpreter in command position, as written or as read (`"$S"/sh`), may run what a data sink wrote.
     runner = mentions_interpreter(reader.s) or any(c.target() in INTERPRETERS or c.named() for c in reader.commands)
     for cmd in reader.commands:
@@ -1058,6 +1059,14 @@ def plain_script(cmd: Command) -> Word | None:
         return None
     runs_nothing = PLAIN_SED.fullmatch(word.text) if cmd.target() == "sed" else not AWK_RUNS.search(word.text)
     return word if runs_nothing else None
+
+
+def loop_reads(cmd: Command) -> bool:
+    """A `for` header, keywords and assignments, or a direct reader, `echo` or `stat` call with no hidden text."""
+    lead = [word.text for word in cmd.words[:cmd.entry()]]
+    return cmd.program() is None or lead[-1:] == ["for"] or set(lead) <= KEYWORDS and not cmd.runnable \
+        and not cmd.body_subst and cmd.target() in PLAIN_READERS | {"echo", "stat"} \
+        and all(t.text == "/dev/null" or not t.text.startswith("/dev/") for t in cmd.targets)
 
 
 def plain_text(command: str) -> str:
