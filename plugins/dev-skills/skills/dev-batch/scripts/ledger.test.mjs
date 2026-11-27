@@ -16,13 +16,24 @@ const example = () => ({
 
 test('round trip', () => {
   const text = renderLedger(example(), { eol: '\n' });
-  assert.match(text, /^<!-- dev-batch:ledger v=1 -->\n### Batch ledger\n\nCoordinator: A1 · `ex-i40c` · 🟢 running · cap 4 · merge auto · changed 2026-11-18 10:12 UTC\nOwner authorization/);
+  assert.match(text, /^<!-- dev-batch:ledger v=1 -->\n### Batch ledger\n\nCoordinator: A1 · `ex-i40c` · 🟢 running · cap 4 workers · merge auto · changed 2026-11-18 10:12 UTC\nOwner authorization/);
   assert.match(text, /\nRoll call: 3 tasks · ✅ 1 · 🔄 1 · 👤 1 · ❗ 0 events waiting\n/);
   assert.match(text, /\| 2 \| #42 Import from CSV \| #41 \| B2 \| 🔄 \| #55 · `9b0e7d3` \| ex-pr55 \| round 2 of 10 \|/);
   assert.ok(text.endsWith('<!-- /dev-batch:ledger -->'));
   const { ledger, problems } = parseLedger(text);
   assert.deepEqual(problems, []);
   assert.deepEqual(ledger, example());
+});
+
+test('the old `cap N` Coordinator line reads as `cap N workers` and renders in the new form', () => {
+  const text = renderLedger(example());
+  assert.ok(text.includes('· cap 4 workers ·'));
+  const old = parseLedger(text.replace('· cap 4 workers ·', '· cap 4 ·')).ledger;
+  const now = parseLedger(text).ledger;
+  assert.equal(old.header.cap, 4);
+  assert.deepEqual(now.header, old.header);
+  assert.ok(renderLedger(old).includes('· cap 4 workers ·'));
+  assert.deepEqual(ownerEdits(old, now), []);
 });
 
 test('a labelled priority shows in the Batch cell and reads back; none shows nothing', () => {
