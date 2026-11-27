@@ -12,10 +12,10 @@ Write every published comment as **soft-wrapped Markdown**: one paragraph, list 
 
 Leave a blank line before any `---`. Without it the preceding paragraph parses as a setext H2 and renders as a heading, which is how a signature separator silently turns the line above it bold.
 
-That rule does not enforce itself, so check it. Both skills share one checker at the plugin root. Run it against the exact payload about to be published, and call `gh` only on exit `0`:
+That rule does not enforce itself, so check it. Both skills share one checker at the plugin root. Write the Markdown body with the host's file tool (Claude Code `Write` or `Edit`, Codex `apply_patch`) at a literal path in the run's private scratch directory, never through a shell heredoc or `echo`; a host without a file tool writes that literal file as before. A script the coordinator will execute is not such a draft and keeps the shell route and its normal checks. Then run the checker as its own Bash call naming that literal path, against the exact payload about to be published, and call `gh` only on exit `0`:
 
 ```sh
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-publication.mjs" --body-file "$BODY_FILE"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-publication.mjs" --body-file "/absolute/path/to/body.md"
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-publication.mjs" --review-json "$REVIEW_JSON_FILE"
 ```
 

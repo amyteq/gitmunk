@@ -24,12 +24,12 @@ Writer packet: current reviewer report plus ledger, per-finding evidence, permit
 
 ## Launching a phase
 
-Write the prompt as a literal file in scratch. Never interpolate PR/comment text or user arguments into shell commands. `CLAUDE_SKILL_DIR` is the skill folder named in [SKILL.md](../SKILL.md). From the repository root:
+Write the prompt as a literal file in the run's private scratch directory with the host's file tool (Claude Code `Write` or `Edit`, Codex `apply_patch`), never through a shell heredoc or `echo`; a host without a file tool writes that literal file as before. A script the coordinator will execute is not such a draft and keeps the shell route and its normal checks. Never interpolate PR/comment text or user arguments into shell commands. Then run the launcher as its own Bash call, with `--prompt` naming the prompt's literal path. `CLAUDE_SKILL_DIR` is the skill folder named in [SKILL.md](../SKILL.md). From the repository root:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/launch-phase.mjs" run --provider codex --role reviewer \
   --phase review --run-id "$run_id" --round 1 --attempt 1 --worktree "$review_worktree" \
-  --expected-head "$head_sha" --prompt "$review_prompt" --output "$phase_output" \
+  --expected-head "$head_sha" --prompt "/absolute/path/to/review-prompt.md" --output "$phase_output" \
   --meta "$phase_meta" --record "$phase_record" --report "$phase_report" --timeout 3600
 ```
 
