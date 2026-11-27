@@ -101,7 +101,9 @@ test('a direct mention counts; code, quotes, links, bare URLs, emails, paths, te
     `This search shows no results: https://github.com/search?q=@${ME}&type=issues`, `See www.example.com/?by=@${ME}`,
     `This search shows no results: https://github.com/search?q=label:*bug*+mentions:@${ME}&type=issues`,
     `See https://github.com/search?q=path:*.test.*+author:@${ME}`, `See https://example.com/?q=*bug*&nbsp;@${ME}`,
-    `See https://example.com/?q=*bug*&lt;@${ME}`, `See https://example.com/\`a\`@${ME}`, `See https://localhost/a@${ME}`]) {
+    `See https://example.com/?q=*bug*&lt;@${ME}`, `See https://example.com/\`a\`@${ME}`, `See https://localhost/a@${ME}`,
+    `See https://example.com path&#47;@${ME}`, `See https://☃.example/?by=@${ME}`, `See www.☃.example/?by=@${ME}`,
+    `[https://example.com](https://example.com)https://example.org/?by=@${ME}`]) {
     assert.equal(mentions(body, ME), false, String(body));
   }
 });

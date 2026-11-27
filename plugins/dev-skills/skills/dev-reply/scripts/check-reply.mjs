@@ -87,10 +87,11 @@ const TAG = /<(\/?)([a-z][^\s/>]*)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/g
 const HIDING = new Set(['a', 'code']);
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
 // GitHub also links a bare URL (a GFM autolink literal) that CommonMark leaves as text: `http(s)://` after anything
-// but a letter, or `www.` after whitespace, `*`, `_`, `~` or `(`; then a domain with no `_` in its last two labels;
-// then on to whitespace or `<`. It spans the source, emphasis, code and character references inside it included, so
-// each URL that starts in shown text is cut out of every text node it reaches.
-const BARE_URL = /(?:(?<![a-z])https?:\/\/|(?<![^\s*_~(])www\.)(?:(?:[\p{L}\p{N}_-]+\.)*[\p{L}\p{N}-]+\.)?[\p{L}\p{N}-]+(?!\.?[\p{L}\p{N}_-])[^\s<]*/giu;
+// but a letter, or `www.` after whitespace, `*`, `_`, `~` or `(`; then a domain whose labels hold no whitespace or
+// punctuation but `-` and `_` (cmark-gfm's host characters), with no `_` in the last two; then on to whitespace or
+// `<` in the source, so emphasis, code and character references inside it are part of it.
+const HOST = String.raw`[^\s\p{P}!-/:-@[-\x60{-~]`;
+const BARE_URL = new RegExp(String.raw`(?:(?<![a-z])https?://|(?<![^\s*_~(])www\.)(?:(?:(?:${HOST}|[-_])+\.)*(?:${HOST}|-)+\.)?(?:${HOST}|-)+(?!\.?(?:${HOST}|[-_]))[^\s<]*`, 'giu');
 function plain(node, state, quiet = false) {
   if (node.type === 'html') {
     for (const [, close, name, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(TAG)) {
@@ -100,16 +101,8 @@ function plain(node, state, quiet = false) {
   const skip = quiet || SKIP.has(node.type);
   if (node.type === 'text') {
     if (skip || state.open) return ' ';
-    const { start: { offset: s }, end: { offset: e } } = node.position;
-    const cuts = state.urls.filter(([a]) => a >= s && a < e);
-    if (state.urlEnd > s) cuts.unshift([s, state.urlEnd]);
-    if (!cuts.length) return node.value;
-    let text = state.src.slice(s, e);
-    for (const [a, b] of cuts) {
-      text = text.slice(0, a - s) + ' '.repeat(Math.min(b, e) - a) + text.slice(Math.min(b, e) - s);
-      state.urlEnd = Math.max(state.urlEnd, b);
-    }
-    return text;
+    state.shown?.push(node.position);
+    return node.value;
   }
   return (node.children ?? []).map((child) => plain(child, state, skip)).join(' ');
 }
@@ -118,9 +111,20 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Whether a Markdown body mentions `login` directly (not a team, an email or a path). */
 export function mentions(body, login) {
   const re = new RegExp(`(?<![\\w\`/.@-])@${escapeRe(login)}(?![\\w-]|/\\w)`, 'i');
+  // Mask, in the source, each bare URL that starts in shown text, then read the masked body: the prose around a URL
+  // decodes as before, and a URL in code or link text never reaches the text after it.
   const src = body ?? '';
-  const urls = [...src.matchAll(BARE_URL)].map((m) => [m.index, m.index + m[0].length]);
-  return re.test(plain(fromMarkdown(src), { open: 0, src, urls, urlEnd: 0 }));
+  const shown = [];
+  plain(fromMarkdown(src), { open: 0, shown });
+  let masked = src;
+  for (const { start, end } of shown) {
+    for (BARE_URL.lastIndex = start.offset; ;) {
+      const url = BARE_URL.exec(src);
+      if (!url || url.index >= end.offset) break;
+      masked = masked.slice(0, url.index) + 'x'.repeat(url[0].length) + masked.slice(BARE_URL.lastIndex);
+    }
+  }
+  return re.test(plain(fromMarkdown(masked), { open: 0 }));
 }
 
 /** How a reply names its sender: `@login` for a person; a bot or agent trigger stays in a code span. */
