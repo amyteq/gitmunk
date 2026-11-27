@@ -8,7 +8,7 @@ The ledger is one marker-delimited region in the batch's source: an issue or dis
 <!-- dev-batch:ledger v=1 -->
 ### Batch ledger
 
-Coordinator: A1 · `er-i40c` · 🟢 running · cap 4 · merge auto · changed 2026-11-18 10:12 UTC
+Coordinator: A1 · `er-i40c` · 🟢 running · cap 4 workers · merge auto · changed 2026-11-18 10:12 UTC
 Owner authorization (2026-11-18 09:58 UTC, coordinator session `er-i40c`, owner's invocation `/dev-batch init src=40 merge=auto`): for every task in this ledger, …
 Roll call: 3 tasks · ✅ 1 · 🔄 1 · 👤 1 · ❗ 0 events waiting
 
@@ -30,7 +30,7 @@ Status: 🆕 queued · ⏳ waiting on dependencies · 🔍 refining · 🛠️ i
 <!-- /dev-batch:ledger -->
 ```
 
-- **Coordinator line**: the coordinator's account alias, its session name, the loop's state (🟢 running, 🟡 paused, 🔴 stopped), `cap`, `merge`, and the time of the last write.
+- **Coordinator line**: the coordinator's account alias, its session name, the loop's state (🟢 running, 🟡 paused, 🔴 stopped), `cap N workers`, `merge`, and the time of the last write. `cap` is the most worker sessions (refine, implement, review, merge) running at once; the coordinator and `/dev-review-pr`'s own reviewer and writer phases do not count. A ledger written with the earlier `cap N` form reads the same, and the loop writes the new form at its next ledger write.
 - **Owner authorization line**: present only when the owner recorded it; the full template is in [prompts.md](prompts.md#authorization-line).
 - **Roll call**: the count per status, and the judgment events waiting for the coordinator (❗).
 - **Columns**: row order, the task issue and title, its dependencies, its Batch layer (with the issue's priority label, if any), Status, the PR and its short head, the latest session, and Next (a review round, a wait reason or a decision link).
