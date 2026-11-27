@@ -560,7 +560,6 @@ class ShellReader:
         self.uses: list[tuple[int, int, str]] = []  # (start, stop, name) of `$NAME` and `${NAME}`
         self.assigned: dict[str, list[tuple[str, int, bool]]] = {}  # name -> (raw value, end, eligible)
         self.mentions: dict[str, int] = {}  # bare names outside quotes, lowercased (zsh ties `path` to PATH)
-        self.loops: dict[str, int] = {}  # the mentions that are `for NAME in` over words with no expansion
         self.dynamic = False  # something may set a variable without naming it
         self.compound = self.quiet = 0
         self.pending: list[tuple[str, bool, bool, Command]] = []  # heredocs waiting for a newline
@@ -643,10 +642,6 @@ class ShellReader:
         self.commands.append(cmd)
         texts = [word.text for word in cmd.words]
         lead = next((n for n, text in enumerate(texts) if text not in KEYWORDS), len(texts))
-        if 0 < lead < len(texts) - 1 and texts[lead - 1] == "for" and texts[lead + 1] == "in" \
-                and NAME.fullmatch(texts[lead]) and not any(word.expands for word in cmd.words[lead + 2:]) \
-                and texts[lead].lower() not in SHELL_VARIABLES and not texts[lead].lower().startswith(SHELL_PREFIXES):
-            self.loops[texts[lead].lower()] = self.loops.get(texts[lead].lower(), 0) + 1
         self.compound += sum(text in COMPOUND_OPEN for text in texts[:lead]) + texts[lead:].count("{") \
             - sum(text in COMPOUND_CLOSE for text in texts[:lead])
         if len(cmd.words) == 1 and not cmd.targets:
@@ -969,17 +964,15 @@ def read_shell(text: str, raw: str | None = None, plain: bool = False) -> tuple[
         return None, text, text
 
 
-def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) -> bool:
+def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
     """I3 and I4: one simple command at a time, does a substitution decide what a gated command runs or reads?"""
     words = [word for cmd in reader.commands for word in cmd.words + cmd.targets]
     if any(word.subst for word in words) or any(cmd.body_subst for cmd in reader.commands):
         # A variable the text sets, while a substitution runs somewhere in it, may carry that
-        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one. With `plain`, not one that
-        # only `for NAME in` sets over unexpanded words, unless the shell sets it too or a command fails `loop_reads`.
-        loops = reader.loops if plain and all(loop_reads(cmd) for cmd in reader.commands) else {}
+        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one.
         for word in words:
-            word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower(), 0)
-                              > loops.get(name.lower(), 0) for name in word.names)
+            word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower())
+                              for name in word.names)
     # An interpreter in command position, as written or as read (`"$S"/sh`), may run what a data sink wrote.
     runner = mentions_interpreter(reader.s) or any(c.target() in INTERPRETERS or c.named() for c in reader.commands)
     for cmd in reader.commands:
@@ -1059,14 +1052,6 @@ def plain_script(cmd: Command) -> Word | None:
         return None
     runs_nothing = PLAIN_SED.fullmatch(word.text) if cmd.target() == "sed" else not AWK_RUNS.search(word.text)
     return word if runs_nothing else None
-
-
-def loop_reads(cmd: Command) -> bool:
-    """A `for` header, keywords and assignments, or a direct reader, `echo` or `stat` call with no hidden text."""
-    lead = [word.text for word in cmd.words[:cmd.entry()]]
-    return cmd.program() is None or lead[-1:] == ["for"] or set(lead) <= KEYWORDS and not cmd.runnable \
-        and not cmd.body_subst and cmd.target() in PLAIN_READERS | {"echo", "stat"} \
-        and all(t.text == "/dev/null" or not t.text.startswith("/dev/") for t in cmd.targets)
 
 
 def plain_text(command: str) -> str:
@@ -1150,7 +1135,7 @@ def bash_decision(command: str, sandboxed: bool = False, plain: bool = False) ->
     if reader is None:  # the per-command reader cannot parse it: the whole-command rule (I5)
         if structural and UNRESOLVED.search(LITERAL_SUBSTITUTION.sub(" ", text)):
             return "ask", SUBSTITUTION_REASON
-    elif structural_ask(reader, sandboxed, plain):
+    elif structural_ask(reader, sandboxed):
         return "ask", SUBSTITUTION_REASON
     if removes_outside_temp:
         return "ask", DELETE_ASK

