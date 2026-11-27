@@ -277,6 +277,7 @@ export function tick(ctx) {
   // #58: a session adopted at takeover gets the slots its stage needs once its issue's labels are read.
   for (const x of records) if (x.slots === null && facts.has(x.issue)) x.slots = slotsNeeded(s, facts.get(x.issue).labels, x.stage);
   const merged = new Set(rows.filter((r) => r.status === 'merged' || facts.get(r.issue)?.pr?.merged).map((r) => r.issue));
+  const listedMerge = (pr) => Object.values(agents).some((l) => l?.some((x) => (x.state === 'working' || x.state === 'blocked') && ours(x) && new RegExp(`-pr${pr}m\\d*$`).test(x.name) && !records.some((y) => y.name === x.name)));
   const decideRow = (row) => {
     const f = facts.get(row.issue);
     if (!f) return { row, batch: row.batch, priority: row.priority, actions: [], next: row };
@@ -287,9 +288,9 @@ export function tick(ctx) {
       && r.actions.some((a) => a.type === 'launch' || a.kind === 'authorization-missing')) {
       r = { ...r, status: 'waiting', next: '', actions: r.actions.filter((a) => a.type === 'stop') };
     }
-    // #58: a merge that waits for a full slot leaves the lock, free or its own, to a later row, unless a merge session of its row may still merge.
+    // #58: a merge that waits for a full slot leaves the lock, free or its own, to a later row, unless a merge session of its row may still merge (live, or listed for step 7 to adopt).
     const launch = r.actions.find((a) => a.type === 'launch');
-    const slotWait = launch && !records.some((x) => x.issue === row.issue && x.stage === 'merge' && LIVE.has(x.state)) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
+    const slotWait = launch && !records.some((x) => x.issue === row.issue && x.stage === 'merge' && LIVE.has(x.state)) && !listedMerge(r.pr) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
     if (mergeLock === 'mine' && slotWait) r.actions.push({ type: 'unlock' }); // released below, and on disk in step 6
     if (!holder && !slotWait && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
@@ -368,8 +369,7 @@ export function tick(ctx) {
     const limited = records.filter((x) => x.issue === issue && x.state === 'limited'); // stopped below; the launch takes its slot
     if (paused || free + limited.length <= 0 || noAccount) { keep(); continue; }
     const { stage, attempt } = a;
-    const slots = slotsNeeded(s, d.facts.labels, stage); // #58: checked after the cap; the row's limited sessions free theirs
-    if (fullSlot(s, records, slots, limited)) { keep(); continue; }
+    const slots = slotsNeeded(s, d.facts.labels, stage); // #58: checked after the cap and adoption; the row's limited sessions free theirs
     const pr = d.next.pr;
     const first = sessionName({ abbr, stage, issue, pr, attempt });
     let orphan = null;
@@ -384,6 +384,7 @@ export function tick(ctx) {
       ev({ type: 'adopt', task: issue, stage, session: agent.name, account: alias, detail: `${agent.name} is already ${agent.state}: adopted, not relaunched` });
       continue;
     }
+    if (fullSlot(s, records, slots, limited)) { keep(); continue; }
     let prompt;
     try {
       prompt = stagePrompt({ stage, issue, pr, goal: d.facts.goal, settings: s, authorization: s.authorization, ledgerUrl: sourceUrl(s.repo, s.src) });

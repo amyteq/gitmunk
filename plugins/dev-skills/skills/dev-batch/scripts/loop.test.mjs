@@ -1257,18 +1257,22 @@ test('a merge that waits for a full slot leaves the merge lock to a later merge 
 });
 
 test('a merge whose earlier merge session was stopped at a usage limit leaves the lock to a later merge while its replacement waits for a full slot (#58 AC-1 b)', () => {
-  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
-    row(3, 44, { status: 'implementing', session: 'er-i44a' })] });
-  configure(w, { slots: 'e2e=1' });
-  w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
-  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
-  w.issues[44] = { refined: true, labels: ['slot:e2e'] };
-  w.agent('er-pr50m', { state: 'stopped', stage: 'merge', issue: 41, pr: 50 });
-  Object.assign(w.records.at(-1), { limited: true, endedAt: new Date(T(11)).toISOString() }); // stopped for a replacement that never launched: it cannot merge
-  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
-  holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
-  assert.deepEqual(w.tick(T(12)).launched, ['er-pr51m']);
-  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+  // Also with a listed session no record knows that cannot merge for #41: one that has ended, or a merge of another PR.
+  for (const listed of [null, { name: 'er-pr50m2', state: 'done' }, { name: 'er-pr60m', state: 'working' }]) {
+    const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+      row(3, 44, { status: 'implementing', session: 'er-i44a' })] });
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    w.agent('er-pr50m', { state: 'stopped', stage: 'merge', issue: 41, pr: 50 });
+    Object.assign(w.records.at(-1), { limited: true, endedAt: new Date(T(11)).toISOString() }); // stopped for a replacement that never launched: it cannot merge
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+    if (listed) w.agent(listed.name, { state: listed.state, record: false });
+    assert.deepEqual(w.tick(T(12)).launched, ['er-pr51m'], JSON.stringify(listed));
+    assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+  }
 });
 
 test('a limited merge whose replacement failed to launch gives up its merge lock, on disk too, once that replacement waits for a full slot (#58 AC-1 b)', () => {
@@ -1298,4 +1302,34 @@ test('a merge launch beside its row\'s working review session that fails to laun
   w.launchFails = true;
   assert.deepEqual(w.tick(T(10)).launched, []);
   assert.deepEqual([w.launches().length, existsSync(w.lock)], [1, false]);
+});
+
+test('a merge session that started although its launch reported an error keeps the merge lock while its slot is full, and is adopted (#58 AC-1 b)', () => {
+  for (const limited of [true, false]) { // the replacement of a limited merge, or the row's first merge
+    const w = world({ rows: [row(1, 41, limited ? { status: 'merging', pr: 50, session: 'er-pr50m' } : { status: 'reviewing', pr: 50, session: 'er-pr50' }),
+      row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }), row(3, 44, { status: 'implementing' })], accounts: ['A1', 'A2'] });
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    if (limited) w.logs[w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 })] = "You've hit your session limit · resets 4pm (UTC)\n";
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    const claude = w.claude;
+    w.claude = (cmd, args, opts) => { // #41's merge starts and is listed, but its launch reports an error, so no record knows it
+      const name = args[0] === '--bg' ? args[args.indexOf('--name') + 1] : '';
+      if (!name.startsWith('er-pr50m')) return claude(cmd, args, opts);
+      w.agents[opts.env.CLAUDE_CONFIG_DIR].push({ id: 'c0ffee', sessionId: 'session-c0ffee', name, state: 'working', cwd: '/w', startedAt: '' });
+      return { code: 1, stdout: '', stderr: 'launch reported an error' };
+    };
+    assert.deepEqual(w.tick(T(12)).launched, ['er-i44a'], `limited: ${limited}`); // #44 now holds e2e
+    w.claude = claude;
+    const merge = limited ? 'er-pr50m2' : 'er-pr50m';
+    assert.equal(w.sessions().some((s) => s.name === merge), false);
+    for (const at of [T(12, 5), T(12, 10)]) {
+      assert.deepEqual(w.tick(at).launched, [], `limited: ${limited}`); // #43 does not merge beside #41's running merge
+      assert.deepEqual(rowOf(w, 43).slice(0, 2), ['reviewing', 'waiting for the merge lock']);
+    }
+    assert.deepEqual(w.sessions().filter((s) => s.name === merge).map((s) => [s.state, s.slots]), [['working', ['e2e']]]); // adopted with its slot
+    assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 41);
+  }
 });
