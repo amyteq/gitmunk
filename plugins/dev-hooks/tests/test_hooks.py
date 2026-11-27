@@ -641,6 +641,10 @@ class StructuralAskTest(unittest.TestCase):
             "cat > run.sh <<'EOF'\n# It's ready.\nexample-tool --purge build\nEOF\nbash run.sh",
             "sed 's/x/`cat y`/' notes.md --expression=e", "sed 's/x/`cat y`/' $OPTS notes.md",
             "sed 's/x/`cat y`/' {-e,e} notes.md", "cd $TMPDIR/run && rm -f *",
+            "cd $TMPDIR/run && env -C /srv/x rm -f a", "cd $TMPDIR/run && xargs -a list rm -f a",
+            "awk '{split($1,a,\"-\"); print a[1]}'* list.txt", "echo 'cat $(cat t)' > run.sh; . ./run.sh",
+            "grep 'rm -rf' notes.md | tee >(ssh host)", "LD_PRELOAD=./x.so grep 'rm -rf' notes.md",
+            "./grep 'rm -rf' notes.md",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:

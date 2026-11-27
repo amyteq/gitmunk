@@ -315,12 +315,12 @@ def rm_targets_only_temp(command: str, plain: bool = False) -> bool:
     """True when every `rm` removes only paths strictly inside /tmp or the hook's own $TMPDIR.
 
     Case is kept, and a command that may change TMPDIR for the shell leaves `$TMPDIR` unresolved.
-    With `plain`, a literal relative target after a leading `cd TEMP && ` resolves under TEMP.
+    With `plain`, a literal relative target of a direct `rm` right after `cd TEMP && ` resolves under TEMP.
     """
     roots = temp_roots()
     cd = TEMP_CD.match(command) if plain else None
-    if cd and re.search(r"[;&|\n()`]", command[cd.end():]):
-        cd = None
+    if cd and (not command[cd.end():].startswith("rm ") or re.search(r"[;&|\n()`]", command[cd.end():])):
+        cd = None  # a wrapper (`env -C`, `xargs -a`) may change the directory or add operands
     calls = invocations(command, {"rm"})
     words = [Path(word).name for words in simple_commands(command) for word in words]
     if not calls or words.count("rm") != len(calls):
@@ -1024,14 +1024,18 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
 # At guard levels `med` and `high` (D1), `main` asks again with `plain`: text that is only read or printed is
 # data. The operands of a reader cannot delete or run anything, so a gated word in a file name or a pattern
 # does not count; printed text, a plain `sed` substitution and an `awk` program that runs nothing hold no
-# substitution. Only at the top level of a line that runs no interpreter, whose pipeline and redirections
-# hand that output to no other program, and never a word that expands.
+# substitution. Only in a line whose every command is a direct top-level call of `PLAIN_PROGRAMS` (no wrapper,
+# assignment, path, `.`, `source`, group or substitution), whose pipeline and redirections hand that output to no
+# other program, and only when every word it masks is quoted or plain unquoted text that no shell expands.
 
 PLAIN_READERS = {"cat", "head", "tail", "grep"}  # not `rg --pre`, `less` or `more`, which can run commands
 PLAIN_PRINTERS = {"echo", "printf"}
 PLAIN_SED = re.compile(r"s([^\w\s\\])(?:(?!\1)[^\\\n]|\\.)*\1(?:(?!\1)[^\\\n]|\\.)*\1[gIip0-9]*")  # no `e` or `w`
 AWK_RUNS = re.compile(r"system|getline|\||@|>")  # `>` writes a file, or a socket in gawk
 SCRIPT_OPTIONS = {"sed": re.compile(r"-[nEri]+"), "awk": re.compile(r"-F[^\s-]\S*")}
+PLAIN_PROGRAMS = PLAIN_READERS | PLAIN_PRINTERS | set(SCRIPT_OPTIONS) | {"tee"}
+PLAIN_UNQUOTED = re.compile(r"[\w./:@%+,=-]*")  # no glob, brace, tilde or `$`
+QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.")
 
 
 def plain_script(cmd: Command) -> Word | None:
@@ -1058,12 +1062,13 @@ def plain_text(command: str) -> str:
         reader = ShellReader(text)
     except Exception:  # unreadable: nothing is plain
         return text
-    if mentions_interpreter(text) or any(c.target() in INTERPRETERS or c.named() for c in reader.commands):
+    if mentions_interpreter(text) or any(not c.words or c.depth or c.words[0].text not in PLAIN_PROGRAMS
+                                         for c in reader.commands):
         return text
     edits = []
     for cmd in reader.commands:
         target, others = cmd.target(), {c.target() for c in cmd.pipeline if c is not cmd}
-        if cmd.depth or any(t.expands for t in cmd.targets) or not others <= PLAIN_READERS | PLAIN_PRINTERS | {"tee"}:
+        if any(t.expands for t in cmd.targets) or not others <= PLAIN_READERS | PLAIN_PRINTERS | {"tee"}:
             continue
         operands = [w for w in cmd.words[cmd.entry() + 1:] if not w.expands and "$'" not in text[w.start:w.end]]
         if target in PLAIN_READERS:
@@ -1072,6 +1077,9 @@ def plain_text(command: str) -> str:
             edits += [(word, False) for word in operands]
         elif target in SCRIPT_OPTIONS and (script := plain_script(cmd)) in operands:
             edits.append((script, False))
+    if any(text[word.start:word.end].startswith("=")
+           or not PLAIN_UNQUOTED.fullmatch(QUOTED.sub("", text[word.start:word.end])) for word, _ in edits):
+        return text  # the shell would expand it into other words (`'{…}'*`, zsh `=cmd`)
     for word, blank in sorted(edits, key=lambda edit: edit[0].start, reverse=True):
         value = "_" if blank else re.sub(r"[$`]", "_", text[word.start:word.end])
         text = text[:word.start] + value + text[word.end:]
