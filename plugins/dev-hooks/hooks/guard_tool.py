@@ -1025,10 +1025,11 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
 # data. The operands of a reader cannot delete or run anything, so a gated word in a file name or a pattern
 # does not count; printed text, a plain `sed` substitution and an `awk` program that runs nothing hold no
 # substitution. Only in a line whose every command is a direct top-level call of `PLAIN_PROGRAMS` (no wrapper,
-# assignment, path, `.`, `source`, group or substitution) with no `$`, backtick, `#` or `<<` outside single quotes
-# (a quote in a comment or heredoc body is no shell quote), whose pipeline and redirections hand that output to no
-# other program (no `/dev/` path but `/dev/null`: bash opens `/dev/tcp/…` as a socket), and only when every word it
-# masks is quoted or plain unquoted text that no shell expands.
+# assignment, path, `.`, `source`, group or substitution) with no `$` or backtick outside single quotes and only
+# `PLAIN_LINE` characters outside quotes (no comment or heredoc, whose quotes are no shell quotes, and no glob,
+# brace, `~` or `=` that could expand a redirection target), whose pipeline and redirections hand that output to
+# no other program (no `/dev/` path but `/dev/null`: bash opens `/dev/tcp/…` as a socket), and only when every word
+# it masks is quoted or plain unquoted text that no shell expands.
 
 PLAIN_READERS = {"cat", "head", "tail", "grep"}  # not `rg --pre`, `less` or `more`, which can run commands
 PLAIN_PRINTERS = {"echo", "printf"}
@@ -1037,7 +1038,8 @@ AWK_RUNS = re.compile(r"system|getline|\||@|>")  # `>` writes a file, or a socke
 SCRIPT_OPTIONS = {"sed": re.compile(r"-[nEri]+"), "awk": re.compile(r"-F[^\s-]\S*")}
 PLAIN_PROGRAMS = PLAIN_READERS | PLAIN_PRINTERS | set(SCRIPT_OPTIONS) | {"tee"}
 PLAIN_UNQUOTED = re.compile(r"[\w./:@%+,=-]*")  # no glob, brace, tilde or `$`
-QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.")
+QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.", re.S)  # `re.S`: a backslash-newline is one escape
+PLAIN_LINE = re.compile(r"(?:[\w\s./:@%+,;|&>-]|<(?!<))*")
 
 
 def plain_script(cmd: Command) -> Word | None:
@@ -1065,9 +1067,10 @@ def plain_text(command: str) -> str:
     except Exception:  # unreadable: nothing is plain
         return text
     unquoted = QUOTED.sub(lambda m: m[0] if m[0][0] == '"' else "", text)  # double-quoted text still expands
-    if mentions_interpreter(text) or re.search(r"[$`#]|<<", unquoted) or any(  # `${X@P}`, `$'\x2f…'`, `${OUT:-…}`
-            not c.words or c.depth or c.words[0].text not in PLAIN_PROGRAMS
-            or any(t.text.startswith("/dev/") and t.text != "/dev/null" for t in c.targets) for c in reader.commands):
+    if mentions_interpreter(text) or re.search(r"[$`]", unquoted) or not PLAIN_LINE.fullmatch(QUOTED.sub("", text)) \
+            or any(not c.words or c.depth or c.words[0].text not in PLAIN_PROGRAMS
+                   or any(t.text.startswith("/dev/") and t.text != "/dev/null" for t in c.targets)
+                   for c in reader.commands):
         return text
     edits = []
     for cmd in reader.commands:

