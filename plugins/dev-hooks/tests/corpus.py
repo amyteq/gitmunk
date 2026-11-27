@@ -143,3 +143,23 @@ UNREADABLE_QUOTING = [
      "}\n"
      "cleanup"),
 ]
+
+# #81: the plain-data shapes of candidates 1–9, by candidate number, each with a near miss that must keep asking.
+NOTES_HEREDOC = "cd $TMPDIR/run && cat > notes.txt <<'EOF'\nIt's ready.\nEOF\nnode gen.mjs notes.txt"
+PLAIN_DATA = {
+    1: (["cat notes/avoid-rm-in-sessions.md", "grep -n 'rm -rf' notes.md", 'grep -n "^| RM-2" spec.md'],
+        ["grep -n 'rm -rf' notes.md; rm -rf notes/old"]),
+    2: (["grep -n -e 'git clean -fd' settings.json"], ["git clean -fd"]),
+    3: (["sed -i 's/`old`/`new`/' notes.md", "echo 'Run `cat x` first' >> notes.md",
+         "printf '%s\\n' 'See `cat x`.' >> notes.md"],
+        ['sed -i "s/$(cat old.txt)/new/" notes.md']),
+    4: (["awk '{split($1,a,\"-\"); print a[1]}' list.txt"], ["awk '{print $1}' \"$(cat list-path.txt)\""]),
+    5: ([NOTES_HEREDOC], [NOTES_HEREDOC + "\nrm -rf ~/build"]),
+    6: (["S=$TMPDIR/run; $S/tool.sh $S/w abc1234 $S/out.md; head -5 $S/out.md"],
+        ["S=$(cat dir.txt); $S/tool.sh $S/w abc1234 $S/out.md; head -5 $S/out.md"]),
+    7: (['for f in a.jsonl b.jsonl; do echo "$f $(stat -c %y $f)"; grep -c x $f; done',
+         'CHK="$(date -u)"; cat $S/a.md | sed "s/@@CHECKED@@/$CHK/" > $S/b.md'],
+        ['F="$(cat target.txt)"; cat "$F"']),
+    8: (["cd $TMPDIR/run && rm -f watch.state"], ["cd ~/project && rm -f watch.state"]),
+    9: (["rm $TMPDIR/run/old.sh"], ["rm $HOME/run/old.sh"]),
+}

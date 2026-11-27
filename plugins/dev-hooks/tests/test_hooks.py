@@ -269,11 +269,11 @@ class GuardLevels(unittest.TestCase):
         ceiling.start()
         self.addCleanup(ceiling.stop)
 
-    def decision(self, command, level="med", *, tool=None, **fields):
+    def decision(self, command, level="med", *, tool=None, env=None, **fields):
         payload = {"tool_name": "Bash", "tool_input": {"command": command, **(tool or {})},
                    "cwd": str(self.pad), "scratchpad_dir": str(self.pad), **fields}
         output = io.StringIO()
-        with mock.patch.dict(os.environ, {"GITMUNK_GUARD_LEVEL": level}, clear=True), \
+        with mock.patch.dict(os.environ, {"GITMUNK_GUARD_LEVEL": level, **(env or {})}, clear=True), \
              mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), mock.patch.object(sys, "stdout", output):
             guard_tool.main()
         return json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"] if output.getvalue() else None
@@ -421,6 +421,44 @@ class GuardLevels(unittest.TestCase):
                     self.assertEqual(self.decision("rm -f notes.md", "high"), "ask")
             self.assertIn("using low", diagnostic.getvalue())
         self.assertEqual(self.decision("GITMUNK_GUARD_LEVEL=high rm -f notes.md", "low"), "ask")
+
+    def levels(self, command, env, tool=None):
+        """The decisions at low, med and high, with a ceiling that permits high, on Linux with the read signal off."""
+        self.cap.write_text("high\n")
+        with mock.patch.object(os, "fstat", return_value=mock.Mock(st_mode=0o100644, st_uid=0)), \
+             mock.patch.object(sys, "platform", "linux"), mock.patch.object(guard_tool, "sandbox_signal", return_value=False), \
+             redirect_stderr(io.StringIO()):
+            return [self.decision(command, level, tool=tool, env=env) for level in guard_tool.LEVELS]
+
+    # The command strings below are data for the hook only; no test executes them.
+    def test_81_plain_data_shapes_against_their_near_misses(self):
+        """#81 candidates 1–9 (corpus.PLAIN_DATA) through main(). The hook's cwd and scratchpad_dir are the private
+        session directory, its TMPDIR the test's temp root, unset for candidate 9 as in the measured sessions. A fixed
+        shape returns no decision at med and high and keeps its ask at low (D1); a kept shape, listed with its reason
+        in CHANGELOG.md, asks at every level; every near miss asks at every level."""
+        kept = {corpus.PLAIN_DATA[7][0][1], corpus.PLAIN_DATA[9][0][0]}
+        for number, (shapes, near) in corpus.PLAIN_DATA.items():
+            env = {} if number == 9 else {"TMPDIR": str(self.root)}
+            for command in shapes:
+                with self.subTest(candidate=number, shape=command):
+                    self.assertEqual(self.levels(command, env), ["ask"] * 3 if command in kept else ["ask", None, None])
+            for command in near:
+                with self.subTest(candidate=number, near_miss=command):
+                    self.assertEqual(self.levels(command, env), ["ask"] * 3)
+        # Candidate 8 resolves `cd $TMPDIR/…` with the hook's own TMPDIR only; without one it keeps the ask.
+        self.assertEqual(self.levels(corpus.PLAIN_DATA[8][0][0], {}), ["ask"] * 3)
+        self.cap.unlink()  # the default ceiling, med
+        with redirect_stderr(io.StringIO()) as diagnostic, mock.patch.object(sys, "platform", "linux"), \
+             mock.patch.object(guard_tool, "sandbox_signal", return_value=False):
+            self.assertIsNone(self.decision(corpus.PLAIN_DATA[2][0][0]))
+        self.assertEqual(diagnostic.getvalue(), "dev-hooks: med level leaves plain-data text to Claude's permissions\n")
+
+    def test_81_disabling_the_sandbox_keeps_every_shape_asking(self):
+        """AC-2 (c): with dangerouslyDisableSandbox and no hook TMPDIR, every #81 shape keeps its ask at every level."""
+        for number, (shapes, _) in corpus.PLAIN_DATA.items():
+            for command in shapes:
+                with self.subTest(candidate=number, shape=command):
+                    self.assertEqual(self.levels(command, {}, tool={"dangerouslyDisableSandbox": True}), ["ask"] * 3)
 
 
 def decide(command: str, sandboxed: bool) -> str:
@@ -591,6 +629,20 @@ class StructuralAskTest(unittest.TestCase):
 
     def test_i5_text_the_reader_cannot_parse_keeps_the_whole_command_rule(self):
         self.assertDecisions(("ask", "ask"), ["case x in a) cat $(echo a);; esac", "cat $(echo 'a)"])
+
+    def test_81_the_plain_reading_keeps_what_another_program_may_run_or_delete(self):
+        """The `med`/`high` reading of #81 still asks where the text may run, or `cd` may not hold."""
+        for command in [
+            "echo 'cat `x`' | sed e", "sed -e 's/x/`cat y`/' -e e notes.md", "sed 's/x/`cat y`/e' notes.md",
+            "sed 's/x/`cat y`/w out' notes.md", "awk -F ',' '{system($1)}' f", "echo 'cat `x`' > >(ssh host)",
+            "ssh host \"$(echo 'cat `x`')\"", "grep 'rm -rf' notes.md | ssh host", "rg --pre 'rm -f' x .",
+            "xargs echo 'cat `x`' < list", "printf -v D '%s' 'cat `x`'", "echo 'rm `x`' >> notes.md",
+            "cat > run.sh <<'EOF'\nIt's\nrm -rf build\nEOF\nbash run.sh", "cd $TMPDIR/run && rm -f a; rm -f b",
+            "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
+            "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
+        ]:
+            with self.subTest(command=command):
+                self.assertEqual(guard_tool.bash_decision(command, plain=True)[0], "ask")
 
 
 class SandboxSignalTest(unittest.TestCase):

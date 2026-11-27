@@ -138,14 +138,22 @@ EXPANDABLE = re.compile(r"[$`\\]")
 PLAIN_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=[\w./:-]*")
 
 
-def strip_heredoc_bodies(command: str) -> str:
+def gated(text: str) -> bool:
+    """Does the text hold a word or construct that a deny, ask or substitution rule reads?"""
+    patterns = [STRUCTURAL_WORDS.pattern, RUNNABLE.pattern] + [pattern for pattern, _ in DENY_PATTERNS + ASK_PATTERNS]
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def strip_heredoc_bodies(command: str, plain: bool = False) -> str:
     """Drop heredoc payloads that are verified literal data written by a data sink.
 
     A body stays in scope when anything in the command line could execute it, when
     its consumer is not a data sink, or when an unquoted delimiter lets the shell
-    expand `$(...)`, backticks or variables inside it.
+    expand `$(...)`, backticks or variables inside it. With `plain` (#81), an
+    interpreter elsewhere in the line keeps only a body that holds a gated word.
     """
-    if "<<" not in command or mentions_interpreter(command):
+    runner = mentions_interpreter(command)
+    if "<<" not in command or runner and not plain:
         return command
 
     lines = command.split("\n")
@@ -171,7 +179,7 @@ def strip_heredoc_bodies(command: str) -> str:
         sink = all(next((word for word in words if not PLAIN_ASSIGNMENT.fullmatch(word)), "") in DATA_SINKS
                    for words in stages) and not line.rstrip().endswith(("|", "\\"))
         literal = bool(opener.group("quote")) or not EXPANDABLE.search("\n".join(body))
-        if not (sink and literal):
+        if not (sink and literal) or runner and gated("\n".join(body)):
             kept.extend(body)
         index = end
         if index < len(lines):
@@ -304,14 +312,21 @@ def temp_roots() -> list[str]:
 
 
 TMPDIR_PREFIX = re.compile(r"^\$(?:TMPDIR|\{TMPDIR\})/")
+# #81: `cd` below $TMPDIR, then one simple command that runs only once `cd` succeeded. A literal `cd /abs &&`
+# stays with the scratchpad case of `scoped_operation`.
+TEMP_CD = re.compile(r"cd ((?:\$TMPDIR|\$\{TMPDIR\})/[\w./-]+) && ")
 
 
-def rm_targets_only_temp(command: str) -> bool:
+def rm_targets_only_temp(command: str, plain: bool = False) -> bool:
     """True when every `rm` removes only paths strictly inside /tmp or the hook's own $TMPDIR.
 
     Case is kept, and a command that may change TMPDIR for the shell leaves `$TMPDIR` unresolved.
+    With `plain`, a relative target after a leading `cd TEMP && ` resolves under TEMP.
     """
     roots = temp_roots()
+    cd = TEMP_CD.match(command) if plain else None
+    if cd and re.search(r"[;&|\n()`]", command[cd.end():]):
+        cd = None
     calls = invocations(command, {"rm"})
     words = [Path(word).name for words in simple_commands(command) for word in words]
     if not calls or words.count("rm") != len(calls):
@@ -322,6 +337,8 @@ def rm_targets_only_temp(command: str) -> bool:
         if not targets:
             return False
         for target in targets:
+            if cd and not target.startswith(("/", "$", "~")):
+                target = cd[1] + "/" + target
             prefix = TMPDIR_PREFIX.match(target)
             # An unquoted $TMPDIR holding whitespace or a glob character splits or expands into other paths.
             if prefix and (len(roots) < 2 or redefined or re.search(r"[\s*?\[]", roots[-1])):
@@ -497,6 +514,7 @@ class Command:
         self.runnable: list[str] = []  # text it may run that this reading cannot see into
         self.written: list[str] = []  # heredoc bodies a data sink writes
         self.source = ""
+        self.depth = 0  # 0 at the top level; inside a substitution, subshell or payload it is more
 
     def program(self) -> Word | None:
         return next((w for w in self.words if w.text not in KEYWORDS and not ASSIGNMENT.match(w.text)), None)
@@ -542,12 +560,13 @@ class Command:
 class ShellReader:
     """The simple commands of a shell text, and the variables it assigns, names and uses."""
 
-    def __init__(self, text: str, depth: int = 0):
-        self.s = text
+    def __init__(self, text: str, depth: int = 0, plain: bool = False):
+        self.s, self.plain = text, plain  # plain: the #81 reading of guard levels `med` and `high`
         self.commands: list[Command] = []
         self.uses: list[tuple[int, int, str]] = []  # (start, stop, name) of `$NAME` and `${NAME}`
         self.assigned: dict[str, list[tuple[str, int, bool]]] = {}  # name -> (raw value, end, eligible)
         self.mentions: dict[str, int] = {}  # bare names outside quotes, lowercased (zsh ties `path` to PATH)
+        self.loops: dict[str, int] = {}  # the mentions that are `for NAME in` over words with no expansion
         self.dynamic = False  # something may set a variable without naming it
         self.compound = self.quiet = 0
         self.pending: list[tuple[str, bool, bool, Command]] = []  # heredocs waiting for a newline
@@ -625,11 +644,14 @@ class ShellReader:
         """Record a finished simple command: its assignment, nesting and any payload it runs."""
         if cmd is None:
             return
-        cmd.source = self.s[cmd.start:i]
+        cmd.source, cmd.depth = self.s[cmd.start:i], depth
         cmd.pipeline.append(cmd)
         self.commands.append(cmd)
         texts = [word.text for word in cmd.words]
         lead = next((n for n, text in enumerate(texts) if text not in KEYWORDS), len(texts))
+        if 0 < lead < len(texts) - 1 and texts[lead - 1] == "for" and texts[lead + 1] == "in" \
+                and NAME.fullmatch(texts[lead]) and not any(word.expands for word in cmd.words[lead + 2:]):
+            self.loops[texts[lead].lower()] = self.loops.get(texts[lead].lower(), 0) + 1
         self.compound += sum(text in COMPOUND_OPEN for text in texts[:lead]) + texts[lead:].count("{") \
             - sum(text in COMPOUND_CLOSE for text in texts[:lead])
         if len(cmd.words) == 1 and not cmd.targets:
@@ -647,8 +669,10 @@ class ShellReader:
             raise Unreadable("case")
         start, runs, entry = cmd.words.index(program), cmd.runs(), cmd.entry()
         operands = cmd.words[start + 1:]
-        # A program named by an expansion (`"$S" -t "$N"`, `command -- "$S"`) may be a setter.
-        named = program.expands or entry < len(cmd.words) and cmd.words[entry].expands
+        # A program named by an expansion (`"$S" -t "$N"`, `command -- "$S"`) may be a setter; with `plain`, not one
+        # spelt with a literal `/` (`$S/tool.sh`), which is never a builtin.
+        named = any(word.expands and not (self.plain and "/" in "".join(word.code + word.quoted))
+                    for word in [program] + cmd.words[entry:entry + 1])
         if named or set(runs) & NAME_SETTERS or {"printf", "print"} & set(runs) and any(re.match(r"-\w*v", t) for t in texts):
             for word in operands:  # a name joined to option letters counts (`read -aD`); a quoted one already does
                 for k in range(1, len(word.text)) if word.text.startswith("-") else ():
@@ -923,7 +947,7 @@ class ShellReader:
         return "".join(out) + self.s[last:]
 
 
-def read_shell(text: str, raw: str | None = None) -> tuple[ShellReader | None, str, str]:
+def read_shell(text: str, raw: str | None = None, plain: bool = False) -> tuple[ShellReader | None, str, str]:
     """The per-command reading of `text` after strict resolution, and the strict and loose resolved texts.
 
     The reader is None when the text cannot be read; both texts are then `text` (I5). `raw` is the text before
@@ -931,17 +955,17 @@ def read_shell(text: str, raw: str | None = None) -> tuple[ShellReader | None, s
     names, or sets unseen, blocks resolution too (I2).
     """
     try:
-        first = ShellReader(text)
+        first = ShellReader(text, plain=plain)
         if raw is not None and raw != text:
             try:
-                other = ShellReader(raw)
+                other = ShellReader(raw, plain=plain)
             except Exception:  # unreadable with its messages: resolve nothing
                 other, first.dynamic = first, True
             first.dynamic |= other.dynamic
             for name, count in other.mentions.items():
                 first.mentions[name] = max(count, first.mentions.get(name, 0))
         strict, loose = first.resolved(), first.resolved(strict=False)
-        second = first if strict == text else ShellReader(strict)
+        second = first if strict == text else ShellReader(strict, plain=plain)
         # A resolved program may turn out to be a setter (`S=declare; "$S" -t "$N"`), and one still named by an
         # expansion may be `source` or `eval`: then nothing resolves (I2).
         unsafe = second.dynamic or any(cmd.named(paths=False) for cmd in second.commands)
@@ -950,15 +974,16 @@ def read_shell(text: str, raw: str | None = None) -> tuple[ShellReader | None, s
         return None, text, text
 
 
-def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
+def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) -> bool:
     """I3 and I4: one simple command at a time, does a substitution decide what a gated command runs or reads?"""
     words = [word for cmd in reader.commands for word in cmd.words + cmd.targets]
     if any(word.subst for word in words) or any(cmd.body_subst for cmd in reader.commands):
         # A variable the text sets, while a substitution runs somewhere in it, may carry that
-        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one.
+        # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one. With `plain`,
+        # not a variable that only `for NAME in` sets, over words with no expansion.
         for word in words:
-            word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower())
-                              for name in word.names)
+            word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower(), 0)
+                              > (reader.loops.get(name.lower(), 0) if plain else 0) for name in word.names)
     # An interpreter in command position, as written or as read (`"$S"/sh`), may run what a data sink wrote.
     runner = mentions_interpreter(reader.s) or any(c.target() in INTERPRETERS or c.named() for c in reader.commands)
     for cmd in reader.commands:
@@ -999,11 +1024,71 @@ def structural_ask(reader: ShellReader, sandboxed: bool) -> bool:
     return False
 
 
-def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, str | None]:
+# --- plain data (#81) -----------------------------------------------------------
+#
+# At guard levels `med` and `high` (D1), `main` asks again with `plain`: text that is only read or printed is
+# data. The operands of a reader cannot delete or run anything, so a gated word in a file name or a pattern
+# does not count; printed text, a plain `sed` substitution and an `awk` program that runs nothing hold no
+# substitution. Only at the top level of a line that runs no interpreter, whose pipeline and redirections
+# hand that output to no other program, and never a word that expands.
+
+PLAIN_READERS = {"cat", "head", "tail", "grep"}  # not `rg --pre`, `less` or `more`, which can run commands
+PLAIN_PRINTERS = {"echo", "printf"}
+PLAIN_SED = re.compile(r"s([^\w\s\\])(?:(?!\1)[^\\\n]|\\.)*\1(?:(?!\1)[^\\\n]|\\.)*\1[gIip0-9]*")  # no `e` or `w`
+AWK_RUNS = re.compile(r"system|getline|\||@")
+SCRIPT_OPTIONS = {"sed": re.compile(r"-[nEri]+"), "awk": re.compile(r"-F[^\s-]\S*")}
+
+
+def plain_script(cmd: Command) -> Word | None:
+    """The `sed` or `awk` script of `cmd` when it can run nothing: its first word after the options that
+    `SCRIPT_OPTIONS` allows. Any other option (`-e`, `-f`, `-v`) leaves it unknown."""
+    words = cmd.words[cmd.entry() + 1:]
+    index = 0
+    while index < len(words) and SCRIPT_OPTIONS[cmd.target()].fullmatch(words[index].text):
+        index += 1
+    word = words[index] if index < len(words) else None
+    if word is None or word.expands or word.text.startswith("-"):
+        return None
+    runs_nothing = PLAIN_SED.fullmatch(word.text) if cmd.target() == "sed" else not AWK_RUNS.search(word.text)
+    return word if runs_nothing else None
+
+
+def plain_text(command: str) -> str:
+    """The command with its plain data blanked: a reader's operands become `_`, and `$` and backticks in
+    printed text and plain scripts become `_`. Unreadable text, or a line that runs an interpreter, stays."""
+    text = strip_heredoc_bodies(command, plain=True)
+    try:
+        reader = ShellReader(text)
+    except Exception:  # unreadable: nothing is plain
+        return text
+    if mentions_interpreter(text) or any(c.target() in INTERPRETERS or c.named() for c in reader.commands):
+        return text
+    edits = []
+    for cmd in reader.commands:
+        target, others = cmd.target(), {c.target() for c in cmd.pipeline if c is not cmd}
+        if cmd.depth or any(t.expands for t in cmd.targets) or not others <= PLAIN_READERS | PLAIN_PRINTERS | {"tee"}:
+            continue
+        operands = [w for w in cmd.words[cmd.entry() + 1:] if not w.expands and "$'" not in text[w.start:w.end]]
+        if target in PLAIN_READERS:
+            edits += [(word, True) for word in operands]
+        elif target in PLAIN_PRINTERS and not any(re.match(r"-\w*v", word.text) for word in operands):  # `printf -v`
+            edits += [(word, False) for word in operands]
+        elif target in SCRIPT_OPTIONS and (script := plain_script(cmd)) in operands:
+            edits.append((script, False))
+    for word, blank in sorted(edits, key=lambda edit: edit[0].start, reverse=True):
+        value = "_" if blank else re.sub(r"[$`]", "_", text[word.start:word.end])
+        text = text[:word.start] + value + text[word.end:]
+    return text
+
+
+def bash_decision(command: str, sandboxed: bool = False, plain: bool = False) -> tuple[str | None, str | None]:
     """The verdict for one Bash command. `sandboxed` is the settings-evidence signal (I6): the call runs
-    sandboxed with reads of the protected paths blocked, so read programs skip the substitution ask."""
+    sandboxed with reads of the protected paths blocked, so read programs skip the substitution ask.
+    `plain` is the #81 reading of plain data, for guard levels `med` and `high` only."""
+    if plain:
+        command = plain_text(command)
     text = normalize_command(command, keep_lines=True)
-    reader, resolved, loose = read_shell(text, strip_heredoc_bodies(command))
+    reader, resolved, loose = read_shell(text, strip_heredoc_bodies(command), plain)
     texts = [text] if resolved == text else [text, resolved]
     lowered = [compact(t).lower() for t in texts]
 
@@ -1029,7 +1114,7 @@ def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, st
             return "deny", "Refusing shell read of protected secrets."
         if any(protected_operand(t, TRANSFER_PROGRAMS) for t in texts):
             return "deny", "Refusing shell exfiltration/metadata access pattern."
-        removes_outside_temp = "rm" in structural and not rm_targets_only_temp(resolved)
+        removes_outside_temp = "rm" in structural and not rm_targets_only_temp(resolved, plain)
     except ValueError:
         if structural and not reads_only:
             return "ask", "This command's quoting cannot be read safely; split or simplify it."
@@ -1037,7 +1122,7 @@ def bash_decision(command: str, sandboxed: bool = False) -> tuple[str | None, st
     if reader is None:  # the per-command reader cannot parse it: the whole-command rule (I5)
         if structural and UNRESOLVED.search(LITERAL_SUBSTITUTION.sub(" ", text)):
             return "ask", SUBSTITUTION_REASON
-    elif structural_ask(reader, sandboxed):
+    elif structural_ask(reader, sandboxed, plain):
         return "ask", SUBSTITUTION_REASON
     if removes_outside_temp:
         return "ask", DELETE_ASK
@@ -1329,12 +1414,16 @@ def main() -> int:
         command = tool_input.get("command") or ""
         decision, reason = bash_decision(command)
         # The signal only ever relaxes an ask, so the settings files are read only for one.
-        if decision == "ask" and sandbox_signal(tool_input, os.environ, sys.platform):
+        sandboxed = decision == "ask" and sandbox_signal(tool_input, os.environ, sys.platform)
+        if sandboxed:
             decision, reason = bash_decision(command, sandboxed=True)
-        if (decision == "ask" and reason in (DATABASE_ASK, DELETE_ASK, SUBSTITUTION_REASON)
-                and sys.platform in MANAGED_DIRS and not tool_input.get("dangerouslyDisableSandbox")):
+        if decision == "ask" and sys.platform in MANAGED_DIRS and not tool_input.get("dangerouslyDisableSandbox"):
             level = guard_level()
-            if case := scoped_operation(command, reason, payload, level):
+            case = scoped_operation(command, reason, payload, level) \
+                if reason in (DATABASE_ASK, DELETE_ASK, SUBSTITUTION_REASON) else None
+            if not case and level != "low" and bash_decision(command, sandboxed=sandboxed, plain=True)[0] is None:
+                case = "plain-data text"  # #81: only plain data drew the ask
+            if case:
                 # Record why the hook abstains without copying the command into a log.
                 print(f"dev-hooks: {level} level leaves {case} to Claude's permissions", file=sys.stderr)
                 return 0
