@@ -1,6 +1,6 @@
 {
   "name": "dev-skills",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "🐿️ Agent skills for GitHub work: bounded PR review/fix rounds with independent sessions, issue refinement into work orders, decision explanations, thread compaction, squash merge with closeout, discussion trackers, multi-issue batches (dev-batch), replies to mentions (dev-reply), and feature/story planning (FT_/STY_ docs).",
   "author": { "name": "amyteq", "url": "https://github.com/amyteq" },
   "homepage": "https://github.com/amyteq/gitmunk",

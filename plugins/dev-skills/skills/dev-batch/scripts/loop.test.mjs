@@ -943,3 +943,393 @@ test('run refuses while the lease holder is alive', async () => {
   assert.equal(r.held.pid, process.pid);
   assert.equal(w.reads, 0);
 });
+
+// ---- #58: named slots and the cost alert ----
+
+// Settings changed as `config` changes them; `forget` drops both, as in a settings.json written before they existed.
+function configure(w, args) {
+  const path = join(w.dir, 'settings.json');
+  const { values } = resolveSettings(args, {});
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), ...Object.fromEntries(Object.keys(args).map((k) => [k, values[k]])) }));
+}
+function forget(w) {
+  const path = join(w.dir, 'settings.json');
+  const { slots, cost_alert: costAlert, ...rest } = JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual([slots, costAlert], ['none', 'off']);
+  writeFileSync(path, JSON.stringify(rest));
+}
+// A listed session recorded as holding `e2e`, as a launch that needed it records it.
+function holder(w, name, opts) {
+  const id = w.agent(name, { state: 'working', ...opts });
+  w.records.at(-1).slots = ['e2e'];
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  return id;
+}
+const slotsOf = (w, name) => w.sessions().find((s) => s.name === name).slots;
+const rowOf = (w, issue) => { const r = w.ledger().rows.find((x) => x.issue === issue); return [r.status, r.next, r.session]; };
+const A_HOLDS = (over = {}) => row(1, 41, { status: 'implementing', session: 'er-i41a', ...over });
+
+test('a stage whose slot is full waits as at the cap, and a later row that needs no slot launches (#58 AC-1 a, b)', () => {
+  const setup = (w) => {
+    w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+    w.issues[43] = { labels: ['slot:e2e'] };
+    holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  };
+  const w = world({ rows: [A_HOLDS(), row(2, 43), row(3, 44)] });
+  configure(w, { slots: 'e2e=1' });
+  setup(w);
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i44r']);
+  assert.deepEqual(w.status(), { 41: 'implementing', 43: 'queued', 44: 'refining' });
+  const atCap = world({ rows: [A_HOLDS(), row(2, 43)], cap: 1 }); // the same row held back by a full cap instead
+  setup(atCap);
+  assert.deepEqual(atCap.tick(T(10)).launched, []);
+  assert.deepEqual(rowOf(w, 43), rowOf(atCap, 43));
+});
+
+test('the waiting row launches and holds the slot once its holder leaves the four states; an adopted session holds it too (#58 AC-1 c)', () => {
+  const w = world({ rows: [row(1, 43), A_HOLDS({ n: 2 })] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  w.set('er-i41a', 'done');
+  assert.ok(w.tick(T(10, 5)).launched.includes('er-i43r'));
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['e2e']);
+
+  const a = world({ rows: [row(1, 41), row(2, 43)] });
+  configure(a, { slots: 'e2e=1' });
+  a.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  a.issues[43] = { labels: ['slot:e2e'] };
+  a.agent('er-i41a', { state: 'working', record: false }); // launched before a restart lost the record
+  assert.deepEqual(a.tick(T(10)).launched, []);
+  assert.deepEqual(a.sessions().map((s) => [s.name, s.slots]), [['er-i41a', ['e2e']]]);
+  assert.deepEqual(a.status(), { 41: 'implementing', 43: 'queued' });
+});
+
+test('a slot with room still waits for a full cap (#58 AC-1 d)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 44, { status: 'implementing', session: 'er-i44a' }), row(3, 43)], cap: 2 });
+  configure(w, { slots: 'e2e=2' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[44] = { refined: true };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  w.agent('er-i44a', { state: 'working', stage: 'implement', issue: 44 });
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.equal(w.status()[43], 'queued');
+  configure(w, { cap: '3' }); // e2e had room: the cap alone held it back
+  assert.deepEqual(w.tick(T(10, 5)).launched, ['er-i43r']);
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['e2e']);
+});
+
+test('a stage outside the slot\'s stage list needs no slot (#58 AC-1 e)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43)] });
+  configure(w, { slots: 'e2e=1:implement' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i43r']);
+  assert.equal(slotsOf(w, 'er-i43r'), undefined);
+});
+
+test('a row\'s own limited session frees its slot for the replacement, which holds it (#58 AC-1 f)', () => {
+  const w = world({ rows: [row(1, 43), A_HOLDS({ n: 2 })], accounts: ['A1', 'A2'] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:e2e'] };
+  const id = holder(w, 'er-i41a', { alias: 'A1', state: 'blocked', stage: 'implement', issue: 41 });
+  w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+  const r = w.tick(T(12)); // #43 comes first, but the slot is #41's: only its replacement takes it
+  assert.deepEqual([r.stopped, r.launched], [['er-i41a'], ['er-i41a2']]);
+  assert.deepEqual(w.sessions().map((s) => [s.name, s.state, s.slots]), [['er-i41a', 'stopped', ['e2e']], ['er-i41a2', 'working', ['e2e']]]);
+  assert.deepEqual(w.status(), { 43: 'queued', 41: 'implementing' });
+});
+
+test('a label naming a slot that is not configured needs no slot; the cap alone applies (#58 AC-1 g)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43), row(3, 44)], cap: 2 });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:gpu'] };
+  w.issues[44] = { labels: ['slot:gpu'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-i43r']); // #44 waits for the cap only
+  assert.equal(slotsOf(w, 'er-i43r'), undefined);
+  assert.equal(w.status()[44], 'queued');
+});
+
+test('a session keeps its slot after its label is removed, until it leaves the four states (#58 AC-1 h)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43)] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['Slot:E2E'] }; // compared without regard to case
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 });
+  w.issues[41].labels = ['enhancement'];
+  for (const m of [0, 5]) assert.deepEqual(w.tick(T(10, m)).launched, []);
+  w.set('er-i41a', 'blocked');
+  assert.deepEqual(w.tick(T(10, 10)).launched, []);
+  w.set('er-i41a', 'done');
+  assert.ok(w.tick(T(10, 15)).launched.includes('er-i43r'));
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['e2e']);
+});
+
+// metrics.jsonl lines as step 6 appends them; only `task` and `costUsd` count for the alert.
+const writeCosts = (w, costs) => writeFileSync(join(w.dir, 'metrics.jsonl'),
+  costs.map(([task, costUsd]) => `${JSON.stringify({ name: `s${task}`, stage: 'refine', task, costUsd })}\n`).join(''), { flag: 'a' });
+const FOUR = () => [row(1, 41), row(2, 43), row(3, 44), row(4, 45)];
+const alerts = (w) => w.events().filter((e) => e.type === 'cost-alert');
+
+test('cost alert: one judgment for the row above 3× the median, never a second; the row goes on as without it (#58 AC-2 a, c, e)', () => {
+  const COSTS = [[41, 10], [43, 10], [44, 10], [45, 20], [45, 11]];
+  const w = world({ rows: FOUR() });
+  configure(w, { cost_alert: '3' });
+  writeCosts(w, COSTS);
+  const plain = world({ rows: FOUR() });
+  writeCosts(plain, COSTS);
+  const r = w.tick(T(10));
+  const detail = '#45: recorded cost $31.00 is above 3× the batch median $10.00';
+  assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => [e.task, e.detail]), [[45, detail]]);
+  assert.deepEqual(alerts(w).map((e) => [e.task, e.detail]), [[45, detail]]);
+  // AC-2 (e): the same launches, statuses and Next as without the alert.
+  assert.deepEqual(r.launched, plain.tick(T(10)).launched);
+  assert.ok(r.launched.includes('er-i45r'));
+  for (const issue of [41, 43, 44, 45]) assert.deepEqual(rowOf(w, issue), rowOf(plain, issue));
+  assert.deepEqual(alerts(plain), []);
+  // AC-2 (c): later ticks, with the cost unchanged and then higher, raise no second one.
+  w.tick(T(10, 5));
+  writeCosts(w, [[45, 50]]);
+  w.tick(T(10, 10));
+  assert.deepEqual(alerts(w).map((e) => e.task), [45]);
+});
+
+test('with the default slots, rows labelled slot:e2e launch as without the label (#58 AC-3 c)', () => {
+  for (const old of [false, true]) { // the defaults, and a settings.json written before the setting existed
+    const rows = [A_HOLDS(), row(2, 43), row(3, 44)];
+    const labelled = world({ rows });
+    const plain = world({ rows });
+    if (old) forget(labelled);
+    labelled.issues[41] = { refined: true, labels: ['slot:e2e'] };
+    for (const issue of [43, 44]) labelled.issues[issue] = { labels: ['slot:e2e'] };
+    plain.issues[41] = { refined: true };
+    holder(labelled, 'er-i41a', { stage: 'implement', issue: 41 });
+    plain.agent('er-i41a', { state: 'working', stage: 'implement', issue: 41 });
+    const r = labelled.tick(T(10));
+    assert.deepEqual(r.launched, ['er-i43r', 'er-i44r']);
+    assert.deepEqual(r.launched, plain.tick(T(10)).launched);
+    assert.deepEqual(labelled.status(), plain.status());
+  }
+});
+
+test('with the default cost_alert, a row far above the median raises no cost alert (#58 AC-3 c)', () => {
+  for (const old of [false, true]) {
+    const w = world({ rows: FOUR() });
+    if (old) forget(w);
+    writeCosts(w, [[41, 10], [43, 10], [44, 10], [45, 1000]]);
+    w.tick(T(10));
+    w.tick(T(10, 5));
+    assert.deepEqual(alerts(w), []);
+  }
+});
+
+test('a stage that needs two slots waits while either is full (#58 AC-1 a)', () => {
+  const w = world({ rows: [row(1, 43), A_HOLDS({ n: 2 })] });
+  configure(w, { slots: 'heavy=2,e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'] };
+  w.issues[43] = { labels: ['slot:heavy', 'slot:e2e'] };
+  holder(w, 'er-i41a', { stage: 'implement', issue: 41 }); // e2e is full, heavy has room
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  w.set('er-i41a', 'done');
+  assert.ok(w.tick(T(10, 5)).launched.includes('er-i43r'));
+  assert.deepEqual(slotsOf(w, 'er-i43r'), ['heavy', 'e2e']);
+});
+
+test('a merge that waits for a full slot leaves the merge lock to a later row that needs none (#58 AC-1 b)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+    row(3, 44, { status: 'implementing', session: 'er-i44a' })] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+  w.agent('er-pr50', { stage: 'review', issue: 41, pr: 50 });
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+  assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m']);
+  assert.deepEqual(w.ledger().rows.map((r) => [r.status, r.next]), [['reviewing', ''], ['merging', ''], ['implementing', '']]);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+});
+
+test('takeover: a session reconcile adopts holds the slots its stage needs from the first tick (#58 AC-1 c)', () => {
+  const w = world({ rows: [A_HOLDS(), row(2, 43), row(3, 44)] });
+  rmSync(join(w.dir, 'ledger.last.md')); // another machine: nothing local
+  configure(w, { slots: 'e2e=1,gpu=1:refine' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e', 'slot:gpu'] }; // its implement stage needs e2e, not gpu
+  w.issues[43] = { labels: ['slot:e2e'] };
+  w.agent('er-i41a', { state: 'working', record: false });
+  const r = reconcile(w.ctx(T(11)));
+  assert.deepEqual([r.adopted, r.launched], [['er-i41a'], ['er-i44r']]);
+  assert.deepEqual(w.sessions().map((s) => [s.name, s.slots]), [['er-i41a', ['e2e']], ['er-i44r', undefined]]);
+  assert.equal(w.status()[43], 'queued');
+});
+
+test('takeover: an adopted session whose row is no longer active holds every slot while it runs (#58 AC-1 c)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'removed', session: 'er-i41a' }), row(2, 43)] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[43] = { labels: ['slot:e2e'] };
+  w.agent('er-i41a', { state: 'working', stage: 'implement', issue: 41 });
+  w.records.at(-1).slots = null; // adopted at takeover; the owner removed the row before a tick read its labels
+  writeFileSync(join(w.dir, 'sessions.json'), JSON.stringify(w.records));
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.deepEqual([slotsOf(w, 'er-i41a'), w.status()[43]], [null, 'queued']);
+});
+
+test('cost alert: a tick cut short after writing its events raises no second alert (#58 AC-2 c)', () => {
+  const w = world({ rows: FOUR() });
+  configure(w, { cost_alert: '3' });
+  w.tick(T(10)); // every row has launch events before it has a cost
+  writeCosts(w, [[41, 10], [43, 10], [44, 10], [45, 31]]);
+  const reads = w.reads;
+  w.onRead = (n) => { if (n === reads + 2) throw new Error('killed'); }; // the ledger write's fresh read, after step 8 wrote the events
+  assert.throws(() => w.tick(T(10, 5)), /killed/);
+  assert.deepEqual(alerts(w).map((e) => e.task), [45]);
+  w.onRead = null;
+  w.tick(T(10, 10));
+  assert.deepEqual(alerts(w).map((e) => e.task), [45]);
+  assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => e.task), [45]);
+});
+
+test('cost alert: an alert whose loop died before its judgment file was written is raised again; a delivered one never is (#58 AC-2 c)', () => {
+  const w = world({ rows: FOUR() });
+  configure(w, { cost_alert: '3' });
+  w.tick(T(10));
+  mkdirSync(join(w.dir, 'delivered')); // an earlier judgment of #45 of another type is no record of its alert
+  writeFileSync(join(w.dir, 'delivered', '0000000000000-00000000.json'), JSON.stringify({ type: 'session-blocked', task: 45 }));
+  writeCosts(w, [[41, 10], [43, 10], [44, 10], [45, 31]]);
+  // The loop died between the alert's line in events.jsonl and its file in pending/.
+  const log = join(w.dir, 'events.jsonl');
+  writeFileSync(log, `${readFileSync(log, 'utf8')}${JSON.stringify({ at: new Date(T(10, 5)).toISOString(), type: 'cost-alert', task: 45, detail: '#45' })}\n`);
+  w.tick(T(10, 10));
+  w.tick(T(10, 15));
+  assert.deepEqual(w.pending().filter((e) => e.type === 'cost-alert').map((e) => e.task), [45]);
+  // `wait` hands it over by moving its file to delivered/, which records it from then on.
+  const pending = join(w.dir, 'pending');
+  for (const n of readdirSync(pending)) { writeFileSync(join(w.dir, 'delivered', n), readFileSync(join(pending, n))); rmSync(join(pending, n)); }
+  w.tick(T(10, 20));
+  assert.deepEqual([w.pending(), alerts(w).map((e) => e.task)], [[], [45, 45]]);
+});
+
+test('a limited merge whose replacement waits for a full slot keeps the merge lock, on disk too, from a later merge of this or another batch (#58 AC-1 b)', async () => {
+  const { claimLock } = await import('./loop.mjs');
+  for (const onDisk of [false, true]) { // no lock on disk (a takeover whose facts query failed), or the lock its merge session claimed
+    const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+      row(3, 44, { status: 'implementing', session: 'er-i44a' })], accounts: ['A1', 'A2'] });
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    const id = w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 });
+    w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    holder(w, 'er-i44a', { stage: 'implement', issue: 44 }); // e2e is full
+    if (onDisk) writeFileSync(w.lock, JSON.stringify({ key: 'i40', issue: 41, at: new Date(T(10)).toISOString(), id: 'claimed-at-launch' }));
+    assert.deepEqual(w.tick(T(12)).launched, [], `on disk: ${onDisk}`); // #41's limited merge can still resume, so #43 waits for the lock
+    assert.deepEqual(w.sessions().filter((s) => s.stage === 'merge').map((s) => [s.name, s.state]), [['er-pr50m', 'limited']]);
+    assert.deepEqual(rowOf(w, 43).slice(0, 2), ['reviewing', 'waiting for the merge lock']);
+    // The lock is on disk for #41, so another batch of the repository cannot claim it for a merge of its own.
+    assert.deepEqual(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 41);
+    assert.equal(claimLock(join(dirname(w.dir), 'i99'), 7, T(12)), null);
+  }
+});
+
+test('a merge that waits for a full slot leaves the merge lock to a later merge while its row\'s blocked or limited review session is stopped (#58 AC-1 b)', () => {
+  for (const limit of [false, true]) {
+    const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+      row(3, 44, { status: 'implementing', session: 'er-i44a' })], accounts: ['A1', 'A2'] }); // A1 cools after a usage limit
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    const id = w.agent('er-pr50', { alias: 'A1', state: 'blocked', stage: 'review', issue: 41, pr: 50 });
+    if (limit) w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+    assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m'], `limited: ${limit}`);
+    assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+  }
+});
+
+test('a merge whose earlier merge session was stopped at a usage limit leaves the lock to a later merge while its replacement waits for a full slot (#58 AC-1 b)', () => {
+  // Also with a listed session no record knows that cannot merge for #41: one that has ended, or a merge of another PR.
+  for (const listed of [null, { name: 'er-pr50m2', state: 'done' }, { name: 'er-pr60m', state: 'working' }]) {
+    const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+      row(3, 44, { status: 'implementing', session: 'er-i44a' })] });
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    w.agent('er-pr50m', { state: 'stopped', stage: 'merge', issue: 41, pr: 50 });
+    Object.assign(w.records.at(-1), { limited: true, endedAt: new Date(T(11)).toISOString() }); // stopped for a replacement that never launched: it cannot merge
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+    if (listed) w.agent(listed.name, { state: listed.state, record: false });
+    assert.deepEqual(w.tick(T(12)).launched, ['er-pr51m'], JSON.stringify(listed));
+    assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+  }
+});
+
+test('a limited merge whose replacement failed to launch gives up its merge lock, on disk too, once that replacement waits for a full slot (#58 AC-1 b)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+    row(3, 44, { status: 'implementing' })], accounts: ['A1', 'A2'] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+  const id = w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 });
+  w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  // No lock is on disk: step 6 writes it for the limited merge, which is then stopped, and its replacement fails to launch.
+  w.onLaunch = (name) => { w.launchFails = name.startsWith('er-pr50m'); };
+  assert.deepEqual(w.tick(T(12)).launched, ['er-i44a']); // #44 now holds e2e
+  assert.deepEqual([w.sessions().find((s) => s.name === 'er-pr50m').state, JSON.parse(readFileSync(w.lock, 'utf8')).issue], ['stopped', 41]);
+  w.onLaunch = null;
+  w.launchFails = false;
+  assert.deepEqual(w.tick(T(12, 5)).launched, ['er-pr51m']);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+});
+
+test('a merge launch beside its row\'s working review session that fails to launch leaves no merge lock (#58 AC-1 b)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'owner', next: 'waiting for merge authorization', pr: 50, session: 'er-pr50' })] });
+  w.issues[41] = { refined: true, pr: { number: 50, approved: true } };
+  w.agent('er-pr50', { state: 'working', stage: 'review', issue: 41, pr: 50 }); // the owner released the merge while the review session still runs
+  w.launchFails = true;
+  assert.deepEqual(w.tick(T(10)).launched, []);
+  assert.deepEqual([w.launches().length, existsSync(w.lock)], [1, false]);
+});
+
+test('a merge session that started although its launch reported an error keeps the merge lock while its slot is full, and is adopted (#58 AC-1 b)', () => {
+  for (const limited of [true, false]) { // the replacement of a limited merge, or the row's first merge
+    const w = world({ rows: [row(1, 41, limited ? { status: 'merging', pr: 50, session: 'er-pr50m' } : { status: 'reviewing', pr: 50, session: 'er-pr50' }),
+      row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }), row(3, 44, { status: 'implementing' })], accounts: ['A1', 'A2'] });
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    if (limited) w.logs[w.agent('er-pr50m', { alias: 'A1', state: 'blocked', stage: 'merge', issue: 41, pr: 50 })] = "You've hit your session limit · resets 4pm (UTC)\n";
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    const claude = w.claude;
+    w.claude = (cmd, args, opts) => { // #41's merge starts and is listed, but its launch reports an error, so no record knows it
+      const name = args[0] === '--bg' ? args[args.indexOf('--name') + 1] : '';
+      if (!name.startsWith('er-pr50m')) return claude(cmd, args, opts);
+      w.agents[opts.env.CLAUDE_CONFIG_DIR].push({ id: 'c0ffee', sessionId: 'session-c0ffee', name, state: 'working', cwd: '/w', startedAt: '' });
+      return { code: 1, stdout: '', stderr: 'launch reported an error' };
+    };
+    assert.deepEqual(w.tick(T(12)).launched, ['er-i44a'], `limited: ${limited}`); // #44 now holds e2e
+    w.claude = claude;
+    const merge = limited ? 'er-pr50m2' : 'er-pr50m';
+    assert.equal(w.sessions().some((s) => s.name === merge), false);
+    for (const at of [T(12, 5), T(12, 10)]) {
+      assert.deepEqual(w.tick(at).launched, [], `limited: ${limited}`); // #43 does not merge beside #41's running merge
+      assert.deepEqual(rowOf(w, 43).slice(0, 2), ['reviewing', 'waiting for the merge lock']);
+    }
+    assert.deepEqual(w.sessions().filter((s) => s.name === merge).map((s) => [s.state, s.slots]), [['working', ['e2e']]]); // adopted with its slot
+    assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 41);
+  }
+});

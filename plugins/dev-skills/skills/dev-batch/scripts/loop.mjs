@@ -10,7 +10,7 @@ import { deriveAbbr } from './config.mjs';
 import { appendEvent, pendingCount, pidAlive, queueJudgment, releaseLease, takeLease } from './events.mjs';
 import { GithubUnavailable, fetchFacts, issueFacts, readSource, sourceUrl, writeSource } from './facts.mjs';
 import { findRegion, ownerEdits, parseLedger, renderLedger, spliceLedger } from './ledger.mjs';
-import { batchSummary, sessionRecord, summarizeTranscript } from './metrics.mjs';
+import { batchSummary, costAlerts, sessionRecord, summarizeTranscript } from './metrics.mjs';
 import { appendedScope, grantsMerge, nextFreeName, sessionName, stagePrompt } from './prompts.mjs';
 import * as sessions from './sessions.mjs';
 
@@ -24,6 +24,19 @@ const PIPELINE = ['refining', 'implementing', 'reviewing', 'merging', 'merged'];
 // Holds a cap slot. A limited session resumes by itself after the reset, so it holds its slot until it is stopped (§12).
 export const RUNNING = new Set(['working', 'blocked', 'unknown', 'limited']);
 const LIVE = RUNNING; // may still merge
+// #58: the named slots a row's stage needs: configured, labelled `slot:<name>` on its issue, and its stage in the list.
+export const slotsNeeded = (settings, labels, stage) => (Array.isArray(settings.slots) ? settings.slots : [])
+  .filter((x) => x.stages.includes(stage) && labels.some((l) => l.toLowerCase() === `slot:${x.name}`)).map((x) => x.name);
+// A session holds the slots recorded at its launch or adoption while it holds a cap slot, whatever its labels say since;
+// `slots: null` (adopted at takeover, labels not yet read) holds them all. `except`: records the launch replaces. → { name, count, holders } of the first full one, or null.
+export function fullSlot(settings, records, need, except = []) {
+  for (const name of need) {
+    const { count } = settings.slots.find((x) => x.name === name);
+    const holders = records.filter((r) => RUNNING.has(r.state) && (r.slots === null || r.slots?.includes(name)) && !except.includes(r)).map((r) => r.name);
+    if (holders.length >= count) return { name, count, holders };
+  }
+  return null;
+}
 const ENDED = new Set(['stopped', 'failed']);
 const IDLE = new Set(['done', 'blocked', 'limited']); // stoppable; never working or unknown
 const FINISHED = new Set(['merged', 'removed']);
@@ -261,7 +274,10 @@ export function tick(ctx) {
   const byIssue = new Map(rows.map((r) => [r.issue, r]));
   const facts = new Map(active.map((r) => [r.issue, issueFacts(fetched.value, r.issue, { repo: s.repo, login: s.login, pr: r.pr,
     sessions: records.filter((x) => x.issue === r.issue) })]));
+  // #58: a session adopted at takeover gets the slots its stage needs once its issue's labels are read.
+  for (const x of records) if (x.slots === null && facts.has(x.issue)) x.slots = slotsNeeded(s, facts.get(x.issue).labels, x.stage);
   const merged = new Set(rows.filter((r) => r.status === 'merged' || facts.get(r.issue)?.pr?.merged).map((r) => r.issue));
+  const listedMerge = (pr) => Object.values(agents).some((l) => l?.some((x) => (x.state === 'working' || x.state === 'blocked') && ours(x) && new RegExp(`-pr${pr}m\\d*$`).test(x.name) && !records.some((y) => y.name === x.name)));
   const decideRow = (row) => {
     const f = facts.get(row.issue);
     if (!f) return { row, batch: row.batch, priority: row.priority, actions: [], next: row };
@@ -272,7 +288,11 @@ export function tick(ctx) {
       && r.actions.some((a) => a.type === 'launch' || a.kind === 'authorization-missing')) {
       r = { ...r, status: 'waiting', next: '', actions: r.actions.filter((a) => a.type === 'stop') };
     }
-    if (!holder && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
+    // #58: a merge that waits for a full slot leaves the lock, free or its own, to a later row, unless a merge session of its row may still merge (live, or listed for step 7 to adopt).
+    const launch = r.actions.find((a) => a.type === 'launch');
+    const slotWait = launch && !records.some((x) => x.issue === row.issue && x.stage === 'merge' && LIVE.has(x.state)) && !listedMerge(r.pr) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
+    if (mergeLock === 'mine' && slotWait) r.actions.push({ type: 'unlock' }); // released below, and on disk in step 6
+    if (!holder && !slotWait && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
     return { row, batch: row.batch, priority: f.priority, facts: f, actions: r.actions,
       next: { ...row, status: r.status, pr: r.pr, head: r.head, next: r.next, priority: f.priority } };
@@ -313,7 +333,14 @@ export function tick(ctx) {
     const h = d.actions.some((a) => a.type === 'unlock') && readLock(dir);
     if (h?.key === key && h.issue === d.row.issue) dropLock(dir, h);
   }
-  for (const d of decided) if (d.actions.some((a) => a.type === 'lock') && !d.actions.some((a) => a.type === 'launch')) acquireLock(dir, d.row.issue, now);
+  for (const d of decided) if (d.actions.some((a) => a.type === 'lock') && records.some((x) => x.issue === d.row.issue && x.stage === 'merge' && LIVE.has(x.state))) acquireLock(dir, d.row.issue, now);
+  // #58: one cost-alert per row and batch, recorded by its judgment file in pending/ or delivered/ (none yet: raised again); it changes no row.
+  const alerted = ['pending', 'delivered'].flatMap((d) => (existsSync(at(d)) ? readdirSync(at(d)) : []).filter((n) => n.endsWith('.json'))
+    .map((n) => readJson(join(at(d), n)))).filter((e) => e?.type === 'cost-alert').map((e) => e.task);
+  for (const x of costAlerts(readLines(at('metrics.jsonl')), s.cost_alert, alerted)) {
+    ev({ type: 'cost-alert', task: x.task, judgment: true,
+      detail: `#${x.task}: recorded cost $${x.cost.toFixed(2)} is above ${s.cost_alert}× the batch median $${x.median.toFixed(2)}` });
+  }
 
   // 7. Launch in dispatch order while a slot is free: adopt a live session already listed under the name (Review
   //    Focus 4), else build the prompt, choose the account (§12), take the lock for a merge (R9), and launch.
@@ -342,6 +369,7 @@ export function tick(ctx) {
     const limited = records.filter((x) => x.issue === issue && x.state === 'limited'); // stopped below; the launch takes its slot
     if (paused || free + limited.length <= 0 || noAccount) { keep(); continue; }
     const { stage, attempt } = a;
+    const slots = slotsNeeded(s, d.facts.labels, stage); // #58: checked after the cap and adoption; the row's limited sessions free theirs
     const pr = d.next.pr;
     const first = sessionName({ abbr, stage, issue, pr, attempt });
     let orphan = null;
@@ -350,11 +378,13 @@ export function tick(ctx) {
       const { alias, agent } = orphan;
       adoptable.delete(agent.name);
       records.push({ name: agent.name, stage, issue, pr, attempt, account: alias, id: agent.id, sessionId: agent.sessionId, startedAt: iso(now), endedAt: null, state: agent.state });
+      if (slots.length) records.at(-1).slots = slots;
       d.next.session = agent.name;
       free--;
       ev({ type: 'adopt', task: issue, stage, session: agent.name, account: alias, detail: `${agent.name} is already ${agent.state}: adopted, not relaunched` });
       continue;
     }
+    if (fullSlot(s, records, slots, limited)) { keep(); continue; }
     let prompt;
     try {
       prompt = stagePrompt({ stage, issue, pr, goal: d.facts.goal, settings: s, authorization: s.authorization, ledgerUrl: sourceUrl(s.repo, s.src) });
@@ -388,7 +418,7 @@ export function tick(ctx) {
     const opts = { name, model: s.model, effort: s.effort, autocompact: stage === 'merge' ? null : s.autocompact, mcp: s.mcp ?? 'none', // missing fails closed
       scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt };
     const rec = { name, stage, issue, pr, attempt, account: choice.alias, id: null, sessionId: null, startedAt: iso(now), endedAt: null, state: 'working',
-      effort: opts.effort, autocompact: opts.autocompact }; // §16: its metrics report the settings it launched with
+      effort: opts.effort, autocompact: opts.autocompact, ...(slots.length && { slots }) }; // §16: its metrics report the settings it launched with
     records.push(rec);
     writeJson(at('sessions.json'), records); // R9: recorded before it launches, so a crash never leaves a merge session unrecorded
     let launched;
@@ -562,7 +592,7 @@ export function reconcile(ctx) {
       const firstName = sessionName({ abbr, stage, issue: row.issue, pr: row.pr, attempt: 1 });
       const retry = row.session.startsWith(firstName) ? row.session.slice(firstName.length) : '';
       records.push({ name: row.session, stage, issue: row.issue, pr: row.pr, attempt: /^\d+$/.test(retry) ? Number(retry) : 1, account: alias,
-        id: agent?.id ?? null, sessionId: agent?.sessionId ?? null, startedAt: iso(now), endedAt: null, state: agent?.state ?? 'unknown' });
+        id: agent?.id ?? null, sessionId: agent?.sessionId ?? null, startedAt: iso(now), endedAt: null, state: agent?.state ?? 'unknown', slots: null }); // #58: slots once a tick reads its labels
       (agent ? adopted : unknown).push(row.session);
       const detail = `#${row.issue}: ${row.session} is not listed by any configured account; its stage is not relaunched until the coordinator decides`;
       if (!agent) queueJudgment(dir, { type: 'session-unknown', task: row.issue, stage, session: row.session, detail }, now);

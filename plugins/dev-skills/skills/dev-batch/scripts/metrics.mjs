@@ -65,6 +65,16 @@ export function sessionRecord({ session, row = {}, settings = {}, summary, outco
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const median = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const h = s.length >> 1; return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2; };
 const stat = (xs) => ({ mean: mean(xs), median: median(xs) });
+
+// #58: the rows not in `alerted` whose recorded cost (the sum of their records' costUsd) is greater than `multiple` times
+// the median recorded cost of every row with one. A row without a cost, a median of 0 or a multiple of `off` alerts nothing.
+export function costAlerts(records, multiple, alerted = []) {
+  if (typeof multiple !== 'number') return [];
+  const costs = new Map();
+  for (const r of records) if (typeof r.costUsd === 'number') costs.set(r.task, (costs.get(r.task) ?? 0) + r.costUsd);
+  const m = median([...costs.values()]);
+  return m > 0 ? [...costs].filter(([task, cost]) => cost > multiple * m && !alerted.includes(task)).map(([task, cost]) => ({ task, cost, median: m })) : [];
+}
 const by = (xs, f) => xs.reduce((m, x) => ((m[f(x)] ??= []).push(x), m), {});
 
 // Durations are in seconds. Events: { at, type: 'launch'|'stage-done', task, stage }.

@@ -31,6 +31,24 @@ function parseAccounts(value) {
   return accounts;
 }
 
+// `none`, or `<name>=<count>[:<stage>+<stage>…]`, comma-separated → [{ name, count, stages }]; no stage list is every stage.
+const STAGES = ['refine', 'implement', 'review', 'merge'];
+function parseSlots(value) {
+  if (value === 'none') return value;
+  const slots = value.split(',').map((item) => {
+    const m = /^([^=:]*)=([^:]*)(?::(.*))?$/.exec(item.trim()) ?? fail(`slots entry must be <name>=<count>[:<stage>+<stage>…]: ${item}`);
+    const [, name, count, stages] = m;
+    if (!/^[a-z0-9-]{1,32}$/.test(name)) fail(`slots name must be 1-32 lower-case letters, digits or -: ${name}`);
+    if (!/^\d+$/.test(count) || Number(count) < 1) fail(`slots count of ${name} must be an integer of at least 1: ${count}`);
+    const list = stages === undefined ? STAGES : stages.split('+');
+    for (const stage of list) if (!STAGES.includes(stage)) fail(`slots stage of ${name} must be ${STAGES.join(', ')}: ${stage}`);
+    return { name, count: Number(count), stages: list };
+  });
+  if (new Set(slots.map((x) => x.name)).size !== slots.length) fail(`slots has a duplicate name: ${value}`);
+  return slots;
+}
+const costAlert = (v) => (v === 'off' ? v : /^\d+(\.\d+)?$/.test(v) && Number(v) > 1 ? Number(v) : fail(`cost_alert must be off or a number greater than 1: ${v}`));
+
 const home = (env) => env.HOME || homedir();
 
 /** Every §8 key. `default` may be a function of the environment. */
@@ -51,6 +69,8 @@ export const SETTINGS = [
   { key: 'abbr', env: 'DEV_BATCH_ABBR', default: null, parse: (v) => /^[a-z0-9]{1,8}$/i.test(v) ? v : fail(`abbr must be 1-8 letters or digits: ${v}`) },
   { key: 'mcp', env: 'DEV_BATCH_MCP', default: 'none',
     parse: (v) => v === 'none' || v === 'inherit' || /\.json$/.test(v) && !v.split('/').includes('..') ? v : fail(`mcp must be none, inherit or a path to a .json file: ${v}`) },
+  { key: 'slots', env: 'DEV_BATCH_SLOTS', default: 'none', parse: parseSlots },
+  { key: 'cost_alert', env: 'DEV_BATCH_COST_ALERT', default: 'off', parse: costAlert },
 ];
 
 const SUBS = ['status', 'init', 'add', 'rm', 'pause', 'resume', 'config', 'clear', 'handover', 'takeover', 'setup'];

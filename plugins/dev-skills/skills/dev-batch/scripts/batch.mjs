@@ -389,11 +389,21 @@ function rm(dir, flags) {
   });
 }
 
+// #58: refuses slot-full, counted as the cap is: the records the launch retires and the row's limited sessions free theirs.
+function slotCheck(s, records, issue, stage, labels) {
+  const full = loop.fullSlot(s, records, loop.slotsNeeded(s, labels, stage), records.filter((r) => r.issue === issue && (r.stage === stage || r.state === 'limited')));
+  if (full) refuse('slot-full', { slot: full.name, holders: full.holders, detail: `slot ${full.name} (${full.count}): ${full.holders.join(', ')} hold it` });
+}
+
 // A coordinator's judgment-driven relaunch. It retires every earlier record of the row's stage, including one stuck as
 // `unknown`, so the loop follows the new session; the retired names stay taken (§9: a name is never reused).
 function launchStage(dir, flags) {
   const issue = taskFlag(flags.task);
   const stage = Object.hasOwn(STAGES, flags.stage ?? '') ? flags.stage : bad('--stage must be refine, implement, review or merge');
+  const pre = settingsOf(dir); // #58: with a loop running, a full slot refuses before the lease as well as under it, so it stops no loop
+  if (Array.isArray(pre.slots) && loopHere(leaseOf(dir), dir) && ledgerOf(dir).rows.some((r) => r.issue === issue)) {
+    slotCheck(pre, readJson(join(dir, 'sessions.json'), []), issue, stage, issueFacts(fetchFacts({ repo: pre.repo, issues: [issue], gh }), issue, pre).labels);
+  }
   return underLease(dir, () => {
     const s = settingsOf(dir);
     const base = ledgerOf(dir);
@@ -415,6 +425,8 @@ function launchStage(dir, flags) {
     }
     const facts = issueFacts(fetchFacts({ repo: s.repo, issues: [issue], gh }), issue, { repo: s.repo, login: s.login, pr: row.pr, sessions: records.filter((r) => r.issue === issue) });
     if (facts.closedAs) refuse('issue-closed', { detail: `#${issue} is closed (${facts.closedAs}): nothing to launch` });
+    const slots = loop.slotsNeeded(s, facts.labels, stage);
+    slotCheck(s, records, issue, stage, facts.labels);
     const pr = facts.pr?.number ?? row.pr;
     if (!pr && (stage === 'review' || stage === 'merge')) refuse('no-pr', { detail: `#${issue} has no pull request to ${stage}` });
     let prompt;
@@ -448,6 +460,7 @@ function launchStage(dir, flags) {
     }
     const autocompact = stage === 'merge' ? null : s.autocompact;
     const rec = { name, stage, issue, pr, attempt: 1, account: account.alias, id: null, sessionId: null, startedAt, endedAt: null, state: 'working', effort: s.effort, autocompact };
+    if (slots.length) rec.slots = slots;
     writeJson(join(dir, 'sessions.json'), [...records, rec]); // R9: recorded before it launches, as the loop does
     const launched = sessions.launch(cli(account), { name, model: s.model, effort: s.effort, autocompact,
       mcp: s.mcp ?? 'none', scope: appendedScope({ stage, issue, settings: s, authorization: s.authorization, extra: s.extra }), prompt });
