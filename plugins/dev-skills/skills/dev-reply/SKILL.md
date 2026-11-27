@@ -27,7 +27,7 @@ Usage: `/dev-reply [target] [cc=<v>] [since=<v>] [dry-run] [notes…]` in Claude
 | `dry-run` | Find and print the topics, their senders, reply routes and copies. No popups, no writes | off |
 | `notes…` | Extra instructions, such as "only the release question" | Everything from the first token that is not a target or option, verbatim |
 
-A **mention** is `@login` of the signed-in user in prose: not in code, a quote, a link text, an email, a path or a team mention. It is **unanswered** when no later text of that user exists in the same reply thread: the conversation of an issue or PR, one PR review thread, or one discussion comment with its replies (a mention in a discussion's body is answered by any later top-level comment). Texts written by the signed-in user never count. The [helper](scripts/check-reply.mjs) holds these rules; do not re-implement them.
+A **mention** is `@login` of the signed-in user in prose: not in code, a quote, a link text or bare URL, an email, a path or a team mention. It is **unanswered** when no later text of that user exists in the same reply thread: the conversation of an issue or PR, one PR review thread, or one discussion comment with its replies (a mention in a discussion's body is answered by any later top-level comment). Texts written by the signed-in user never count. The [helper](scripts/check-reply.mjs) holds these rules; do not re-implement them.
 
 ## Procedure
 

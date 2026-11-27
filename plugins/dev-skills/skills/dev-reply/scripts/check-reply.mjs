@@ -86,6 +86,8 @@ const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkR
 const TAG = /<(\/?)([a-z][^\s/>]*)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/gi;
 const HIDING = new Set(['a', 'code']);
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+// GitHub also links a bare URL (a GFM autolink literal) that CommonMark leaves as text; it runs to whitespace or `<`.
+const BARE_URL = /(?:https?:\/\/|www\.)[^\s<]*/gi;
 function plain(node, state = { open: 0 }, quiet = false) {
   if (node.type === 'html') {
     for (const [, close, name, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(TAG)) {
@@ -93,7 +95,7 @@ function plain(node, state = { open: 0 }, quiet = false) {
     }
   }
   const skip = quiet || SKIP.has(node.type);
-  if (node.type === 'text') return skip || state.open ? ' ' : node.value;
+  if (node.type === 'text') return skip || state.open ? ' ' : node.value.replace(BARE_URL, ' ');
   return (node.children ?? []).map((child) => plain(child, state, skip)).join(' ');
 }
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -121,8 +123,8 @@ function itemsOf(thread) {
     for (const c of d.comments?.nodes ?? []) {
       const t = `c${c.id}`;
       const route = { kind: 'discussion-reply', discussionId: d.id, replyToId: c.id };
-      items.push({ place: 'discussion-comment', id: c.databaseId, nodeId: c.id, url: c.url, createdAt: c.createdAt, body: c.body, ...who(c.author), key: t, in: ['main', t], route });
-      for (const r of c.replies?.nodes ?? []) items.push({ place: 'discussion-reply', id: r.databaseId, nodeId: r.id, url: r.url, createdAt: r.createdAt, body: r.body, ...who(r.author), key: t, in: [t], route });
+      items.push({ place: 'discussion-comment', id: c.databaseId, url: c.url, createdAt: c.createdAt, body: c.body, ...who(c.author), key: t, in: ['main', t], route });
+      for (const r of c.replies?.nodes ?? []) items.push({ place: 'discussion-reply', id: r.databaseId, url: r.url, createdAt: r.createdAt, body: r.body, ...who(r.author), key: t, in: [t], route });
     }
     return { number: d.number, kind: 'discussion', title: d.title, url: d.url, items };
   }
