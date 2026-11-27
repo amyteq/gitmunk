@@ -1024,12 +1024,13 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
 # At guard levels `med` and `high` (D1), `main` asks again with `plain`: text that is only read or printed is
 # data. The operands of a reader cannot delete or run anything, so a gated word in a file name or a pattern
 # does not count; text that `echo` or a `%s`-only `printf` prints, a plain `sed` substitution and an `awk`
-# program that runs nothing hold no substitution. Only in a line whose every command is a direct top-level call of `PLAIN_PROGRAMS` (no wrapper,
-# assignment, path, `.`, `source`, group or substitution) with no `$` or backtick outside single quotes and only
-# `PLAIN_LINE` characters outside quotes (no comment or heredoc, whose quotes are no shell quotes, and no glob,
-# brace, `~` or `=` that could expand a redirection target), whose pipeline and redirections hand that output to
-# no other program (no `/dev/` path but `/dev/null`: bash opens `/dev/tcp/…` as a socket), and only when every word
-# it masks is quoted or plain unquoted text that no shell expands.
+# program that runs nothing hold no substitution. Only in a line whose every command is a direct top-level call
+# of `PLAIN_PROGRAMS` (no wrapper, assignment, path, `.`, `source`, group or substitution), every `printf`, `sed`
+# and `awk` among them in that plain form, with no `$` or backtick outside single quotes and only `PLAIN_LINE`
+# characters outside quotes (no comment or heredoc, whose quotes are no shell quotes, and no glob, brace, `~` or
+# `=` that could expand a redirection target), whose pipeline and redirections hand that output to no other
+# program (no `/dev/` path but `/dev/null`: bash opens `/dev/tcp/…` as a socket), and only when every word it
+# masks is quoted or plain unquoted text that no shell expands.
 
 PLAIN_READERS = {"cat", "head", "tail", "grep"}  # not `rg --pre`, `less` or `more`, which can run commands
 PLAIN_PRINTERS = {"echo", "printf"}
@@ -1076,15 +1077,19 @@ def plain_text(command: str) -> str:
     edits = []
     for cmd in reader.commands:
         target, others = cmd.target(), {c.target() for c in cmd.pipeline if c is not cmd}
+        operands = [w for w in cmd.words[cmd.entry() + 1:] if not w.expands and "$'" not in text[w.start:w.end]]
+        script = plain_script(cmd) if target in SCRIPT_OPTIONS else None
+        if target == "printf" and not (operands and operands[0] is cmd.words[cmd.entry() + 1]
+                                       and PLAIN_FORMAT.fullmatch(operands[0].text)) \
+                or target in SCRIPT_OPTIONS and script not in operands:
+            return text  # it may run its text, which another command's gated word must still ask about
         if any(t.expands for t in cmd.targets) or not others <= PLAIN_READERS | PLAIN_PRINTERS | {"tee"}:
             continue
-        operands = [w for w in cmd.words[cmd.entry() + 1:] if not w.expands and "$'" not in text[w.start:w.end]]
         if target in PLAIN_READERS:
             edits += [(word, True) for word in operands]
-        elif target == "echo" or target == "printf" and operands and operands[0] is cmd.words[cmd.entry() + 1] \
-                and PLAIN_FORMAT.fullmatch(operands[0].text):
+        elif target in PLAIN_PRINTERS:
             edits += [(word, False) for word in operands]
-        elif target in SCRIPT_OPTIONS and (script := plain_script(cmd)) in operands:
+        elif script:
             edits.append((script, False))
     if any(text[word.start:word.end].startswith("=")
            or not PLAIN_UNQUOTED.fullmatch(QUOTED.sub("", text[word.start:word.end])) for word, _ in edits):
