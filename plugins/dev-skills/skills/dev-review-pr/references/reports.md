@@ -16,7 +16,7 @@ That rule does not enforce itself, so check it. Both skills share one checker at
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/scripts/check-publication.mjs" --body-file "/absolute/path/to/body.md"
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-publication.mjs" --review-json "$REVIEW_JSON_FILE"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/check-publication.mjs" --review-json "/absolute/path/to/review.json"
 ```
 
 `CLAUDE_PLUGIN_ROOT` is the plugin root named in [SKILL.md](../SKILL.md). Run it with Node.js 20+ after installing the plugin's locked dependencies with `npm ci --prefix "${CLAUDE_PLUGIN_ROOT}"`. The checker takes exactly one payload: `--body-file` for the Markdown bound to `gh --body-file`, and `--review-json` for the reviews-API JSON input whose `body` field carries the signed report. A bare path is still accepted as `--body-file`. It prints one `file:line` per offending separator — `file#body:line` for the JSON form — and exits `1`; on a clean payload it prints nothing and exits `0`. Usage, read and parse errors exit `2` and must block publication exactly as a finding does, because a check that did not run is not a check that passed. It preserves original line numbers for LF, CRLF and CR inputs and never modifies the payload.

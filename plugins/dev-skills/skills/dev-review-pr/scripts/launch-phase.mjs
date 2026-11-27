@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { accessSync, closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, realpathSync,
-  rmSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync,
+  realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 // Launches one dev-review-pr phase on an explicitly selected route and writes its phase record.
 // Exit 0: the phase completed and its observed profile matches the request. Exit 1: refused,
 // blocked, timed out or failed, and the record says which. Exit 2: the helper did not run.
+// `run-dir` prints the run's scratch directory (exit 0), refuses with one stderr line (2), or is switched off (3).
 
 const PROBE_SECONDS = 60;
 // A role session is a fresh host process, not part of the coordinator's Claude Code or Codex session, so it receives no
@@ -542,6 +543,37 @@ async function attribute({ record: path, operation, sha }) {
   return [true, [`${path}: coordinator ${operation} ${sha}`]];
 }
 
+// ---- The run's scratch directory, created once so later calls can spell its path literally. ----
+
+const RUN_ID = /^[A-Za-z0-9._-]{1,64}$/;
+const RUN_DIR_TOGGLE = 'DEV_REVIEW_PR_RUN_DIR_HELPER';
+// When Git cannot run or cannot read the checkout, a `.git` entry here or above still marks one, so the check fails closed.
+const dotGitAbove = (dir) => existsSync(join(dir, '.git')) ? dir : dirname(dir) === dir ? null : dotGitAbove(dirname(dir));
+
+// Returns [exit code, the line to print]. Nothing is created before every check that can refuse has passed, except that a
+// shared temporary folder may already hold a parent or run directory someone else made: only a real directory this user
+// owns is accepted there, so another account cannot plant or redirect the run's files.
+async function runDir(args) {
+  const toggle = process.env[RUN_DIR_TOGGLE] ?? '';
+  if (toggle === '0') return [3, `${RUN_DIR_TOGGLE}=0 turns run-dir off; choose the run's scratch directory as SKILL.md step 4 says`];
+  if (!['', '1'].includes(toggle)) console.error(`launch-phase: ${RUN_DIR_TOGGLE}=${JSON.stringify(toggle)} is not unset, empty, 1 or 0; using the default (on)`);
+  if (args.length !== 2 || args[0] !== '--run-id') return [2, 'usage: node launch-phase.mjs run-dir --run-id RUN_ID'];
+  const id = args[1];
+  if (!RUN_ID.test(id) || id === '.' || id === '..') return [2, '--run-id must be 1-64 letters, digits, dots, dashes or underscores, and not . or ..'];
+  const tmp = real(tmpdir());
+  if (!tmp) return [2, `the temporary folder ${tmpdir()} does not exist`];
+  const parent = join(tmp, 'dev-review-pr');
+  const dir = join(parent, id);
+  const top = await git(process.cwd(), ['rev-parse', '--show-toplevel'], PROBE_SECONDS) ?? dotGitAbove(process.cwd());
+  if (top && covers(real(top) ?? top, parent)) return [2, `${parent} lies inside the Git checkout ${top}; set TMPDIR outside it`];
+  for (const path of [parent, dir]) {
+    try { mkdirSync(path, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') return [2, `cannot create ${path} (${error.code})`]; }
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.uid !== process.getuid()) return [2, `${path} exists and is not a directory this user owns`];
+  }
+  return [0, dir];
+}
+
 // ---- One input boundary: every flag is checked here and nothing downstream re-checks. ----
 
 class InputError extends Error {}
@@ -580,7 +612,7 @@ function readInput(argv) {
   if (!Object.hasOwn(ROUTES, given.provider)) fail(`unknown provider "${given.provider}": use codex or claude`);
   if (!Object.hasOwn(PHASES, given.role)) fail('--role must be reviewer or writer');
   if (!PHASES[given.role].includes(given.phase)) fail(`--phase for a ${given.role} must be ${PHASES[given.role].join(', ')}`);
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(given['run-id'])) fail('--run-id must be 1-64 letters, digits, dots, dashes or underscores');
+  if (!RUN_ID.test(given['run-id'])) fail('--run-id must be 1-64 letters, digits, dots, dashes or underscores');
   if (!/^[0-9a-f]{40}$/.test(given['expected-head'])) fail('--expected-head must be a full 40-character commit SHA');
   if (!existsSync(absolute(given.worktree, 'worktree')) || !statSync(given.worktree).isDirectory()) fail('--worktree must be an existing directory');
   if (!existsSync(absolute(given.prompt, 'prompt')) || !statSync(given.prompt).isFile()) fail('--prompt must be an existing file');
@@ -599,6 +631,11 @@ function readInput(argv) {
 const redact = (text, secrets) => secrets.reduce((value, secret) => value.split(secret).join('<redacted>'), text);
 
 async function main(argv) {
+  if (argv[0] === 'run-dir') {
+    const [code, line] = await runDir(argv.slice(1));
+    if (code === 0) console.log(line); else console.error(`launch-phase: ${line}`);
+    return code;
+  }
   let request;
   try {
     request = readInput(argv);

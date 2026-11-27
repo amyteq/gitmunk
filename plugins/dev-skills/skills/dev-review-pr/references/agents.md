@@ -24,13 +24,14 @@ Writer packet: current reviewer report plus ledger, per-finding evidence, permit
 
 ## Launching a phase
 
-Write the prompt as a literal file in the run's private scratch directory with the host's file tool (Claude Code `Write` or `Edit`, Codex `apply_patch`), never through a shell heredoc or `echo`; a host without a file tool writes that literal file as before. A script the coordinator will execute is not such a draft and keeps the shell route and its normal checks. Never interpolate PR/comment text or user arguments into shell commands. Then run the launcher as its own Bash call, with `--prompt` naming the prompt's literal path. `CLAUDE_SKILL_DIR` is the skill folder named in [SKILL.md](../SKILL.md). From the repository root:
+Write the prompt as a literal file in the run's private scratch directory with the host's file tool (Claude Code `Write` or `Edit`, Codex `apply_patch`), never through a shell heredoc or `echo`; a host without a file tool writes that literal file as before. A script the coordinator will execute is not such a draft and keeps the shell route and its normal checks. Never interpolate PR/comment text or user arguments into shell commands. Then run the launcher as its own Bash call, with `--prompt` naming the prompt's literal path. `CLAUDE_SKILL_DIR` is the skill folder named in [SKILL.md](../SKILL.md). The run directory below, `/tmp/dev-review-pr/pr7-r1`, stands for the path `run-dir` printed (SKILL.md step 4), spelled literally. From the repository root:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/launch-phase.mjs" run --provider codex --role reviewer \
-  --phase review --run-id "$run_id" --round 1 --attempt 1 --worktree "$review_worktree" \
-  --expected-head "$head_sha" --prompt "/absolute/path/to/review-prompt.md" --output "$phase_output" \
-  --meta "$phase_meta" --record "$phase_record" --report "$phase_report" --timeout 3600
+  --phase review --run-id pr7-r1 --round 1 --attempt 1 --worktree "$review_worktree" \
+  --expected-head "$head_sha" --prompt /tmp/dev-review-pr/pr7-r1/review-prompt.md --output /tmp/dev-review-pr/pr7-r1/r1.out \
+  --meta /tmp/dev-review-pr/pr7-r1/r1.meta.json --record /tmp/dev-review-pr/pr7-r1/r1.record.json \
+  --report /tmp/dev-review-pr/pr7-r1/r1.report.md --timeout 3600
 ```
 
 Add the optional model, effort or Codex profile flags only when selected for this run. A reviewer’s phase is `review`, `closing-review` or `final-review`; a writer’s is `writer` or `closing-writer`. `--report` names the Markdown the coordinator publishes ([phase record](#phase-record)); every phase requires it.
@@ -63,7 +64,7 @@ A writer record includes new commits and author/committer, dirty state, and Clau
 Attribute an already-authorized coordinator commit or push to the phase:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/scripts/launch-phase.mjs" attribute --record "$phase_record" --operation commit --sha "$sha"
+node "${CLAUDE_SKILL_DIR}/scripts/launch-phase.mjs" attribute --record /tmp/dev-review-pr/pr7-r1/w1.record.json --operation commit --sha "$sha"
 ```
 
 The attribute command checks ancestry and records the coordinator’s assertion; verify the actual remote head separately for push attribution. Publish the `--report` file, never `--output` or the raw event stream; for a Codex phase `--output` holds the JSONL events. For a Codex phase the report is the `-o` file's bytes followed by one `\n`, the bytes human-mode stdout carried for the same message; the file is read only when it is a regular file, and an empty or missing one writes no report and blocks the phase (`report:`). For a Claude phase it is the `.result` field of the JSON result with exactly one outer fence removed, when the first non-blank line opens a ```` ``` ```` or `~~~` fence whose info string is empty, `markdown` or `md` and the last non-blank line is its bare closer. Everything between stays byte for byte, inner fences included. A second wrapper, any other fence, or a missing or non-string result blocks the phase and writes no report.
