@@ -138,22 +138,14 @@ EXPANDABLE = re.compile(r"[$`\\]")
 PLAIN_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=[\w./:-]*")
 
 
-def gated(text: str) -> bool:
-    """Does the text hold a word or construct that a deny, ask or substitution rule reads?"""
-    patterns = [STRUCTURAL_WORDS.pattern, RUNNABLE.pattern] + [pattern for pattern, _ in DENY_PATTERNS + ASK_PATTERNS]
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
-
-
-def strip_heredoc_bodies(command: str, plain: bool = False) -> str:
+def strip_heredoc_bodies(command: str) -> str:
     """Drop heredoc payloads that are verified literal data written by a data sink.
 
     A body stays in scope when anything in the command line could execute it, when
     its consumer is not a data sink, or when an unquoted delimiter lets the shell
-    expand `$(...)`, backticks or variables inside it. With `plain` (#81), an
-    interpreter elsewhere in the line keeps only a body that holds a gated word.
+    expand `$(...)`, backticks or variables inside it.
     """
-    runner = mentions_interpreter(command)
-    if "<<" not in command or runner and not plain:
+    if "<<" not in command or mentions_interpreter(command):
         return command
 
     lines = command.split("\n")
@@ -179,7 +171,7 @@ def strip_heredoc_bodies(command: str, plain: bool = False) -> str:
         sink = all(next((word for word in words if not PLAIN_ASSIGNMENT.fullmatch(word)), "") in DATA_SINKS
                    for words in stages) and not line.rstrip().endswith(("|", "\\"))
         literal = bool(opener.group("quote")) or not EXPANDABLE.search("\n".join(body))
-        if not (sink and literal) or runner and gated("\n".join(body)):
+        if not (sink and literal):
             kept.extend(body)
         index = end
         if index < len(lines):
@@ -315,13 +307,15 @@ TMPDIR_PREFIX = re.compile(r"^\$(?:TMPDIR|\{TMPDIR\})/")
 # #81: `cd` below $TMPDIR, then one simple command that runs only once `cd` succeeded. A literal `cd /abs &&`
 # stays with the scratchpad case of `scoped_operation`.
 TEMP_CD = re.compile(r"cd ((?:\$TMPDIR|\$\{TMPDIR\})/[\w./-]+) && ")
+# A path word no shell expands: no glob, brace, tilde, `=`, `$` or leading `-`.
+LITERAL_PATH = re.compile(r"[\w.][\w./-]*")
 
 
 def rm_targets_only_temp(command: str, plain: bool = False) -> bool:
     """True when every `rm` removes only paths strictly inside /tmp or the hook's own $TMPDIR.
 
     Case is kept, and a command that may change TMPDIR for the shell leaves `$TMPDIR` unresolved.
-    With `plain`, a relative target after a leading `cd TEMP && ` resolves under TEMP.
+    With `plain`, a literal relative target after a leading `cd TEMP && ` resolves under TEMP.
     """
     roots = temp_roots()
     cd = TEMP_CD.match(command) if plain else None
@@ -337,7 +331,7 @@ def rm_targets_only_temp(command: str, plain: bool = False) -> bool:
         if not targets:
             return False
         for target in targets:
-            if cd and not target.startswith(("/", "$", "~")):
+            if cd and LITERAL_PATH.fullmatch(target):
                 target = cd[1] + "/" + target
             prefix = TMPDIR_PREFIX.match(target)
             # An unquoted $TMPDIR holding whitespace or a glob character splits or expands into other paths.
@@ -650,7 +644,8 @@ class ShellReader:
         texts = [word.text for word in cmd.words]
         lead = next((n for n, text in enumerate(texts) if text not in KEYWORDS), len(texts))
         if 0 < lead < len(texts) - 1 and texts[lead - 1] == "for" and texts[lead + 1] == "in" \
-                and NAME.fullmatch(texts[lead]) and not any(word.expands for word in cmd.words[lead + 2:]):
+                and NAME.fullmatch(texts[lead]) and not any(word.expands for word in cmd.words[lead + 2:]) \
+                and texts[lead].lower() not in SHELL_VARIABLES and not texts[lead].lower().startswith(SHELL_PREFIXES):
             self.loops[texts[lead].lower()] = self.loops.get(texts[lead].lower(), 0) + 1
         self.compound += sum(text in COMPOUND_OPEN for text in texts[:lead]) + texts[lead:].count("{") \
             - sum(text in COMPOUND_CLOSE for text in texts[:lead])
@@ -980,7 +975,7 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
     if any(word.subst for word in words) or any(cmd.body_subst for cmd in reader.commands):
         # A variable the text sets, while a substitution runs somewhere in it, may carry that
         # substitution's output (`F=$(…); cat "$F"`, `read f < <(…)`): it counts as one. With `plain`,
-        # not a variable that only `for NAME in` sets, over words with no expansion.
+        # not a variable that only `for NAME in` sets, over words with no expansion, unless the shell sets it too.
         for word in words:
             word.subst |= any(reader.dynamic or not NAME.fullmatch(name) or reader.mentions.get(name.lower(), 0)
                               > (reader.loops.get(name.lower(), 0) if plain else 0) for name in word.names)
@@ -1035,19 +1030,21 @@ def structural_ask(reader: ShellReader, sandboxed: bool, plain: bool = False) ->
 PLAIN_READERS = {"cat", "head", "tail", "grep"}  # not `rg --pre`, `less` or `more`, which can run commands
 PLAIN_PRINTERS = {"echo", "printf"}
 PLAIN_SED = re.compile(r"s([^\w\s\\])(?:(?!\1)[^\\\n]|\\.)*\1(?:(?!\1)[^\\\n]|\\.)*\1[gIip0-9]*")  # no `e` or `w`
-AWK_RUNS = re.compile(r"system|getline|\||@")
+AWK_RUNS = re.compile(r"system|getline|\||@|>")  # `>` writes a file, or a socket in gawk
 SCRIPT_OPTIONS = {"sed": re.compile(r"-[nEri]+"), "awk": re.compile(r"-F[^\s-]\S*")}
 
 
 def plain_script(cmd: Command) -> Word | None:
     """The `sed` or `awk` script of `cmd` when it can run nothing: its first word after the options that
-    `SCRIPT_OPTIONS` allows. Any other option (`-e`, `-f`, `-v`) leaves it unknown."""
+    `SCRIPT_OPTIONS` allows. Any other option (`-e`, `-f`, `-v`), before or after it, or a later word
+    that is not a literal path (`$OPTS`, `{-e,e}`), leaves it unknown: GNU `sed` reads options anywhere."""
     words = cmd.words[cmd.entry() + 1:]
     index = 0
     while index < len(words) and SCRIPT_OPTIONS[cmd.target()].fullmatch(words[index].text):
         index += 1
     word = words[index] if index < len(words) else None
-    if word is None or word.expands or word.text.startswith("-"):
+    if word is None or word.expands or word.text.startswith("-") \
+            or not all(not w.expands and LITERAL_PATH.fullmatch(w.text) for w in words[index + 1:]):
         return None
     runs_nothing = PLAIN_SED.fullmatch(word.text) if cmd.target() == "sed" else not AWK_RUNS.search(word.text)
     return word if runs_nothing else None
@@ -1056,7 +1053,7 @@ def plain_script(cmd: Command) -> Word | None:
 def plain_text(command: str) -> str:
     """The command with its plain data blanked: a reader's operands become `_`, and `$` and backticks in
     printed text and plain scripts become `_`. Unreadable text, or a line that runs an interpreter, stays."""
-    text = strip_heredoc_bodies(command, plain=True)
+    text = strip_heredoc_bodies(command)
     try:
         reader = ShellReader(text)
     except Exception:  # unreadable: nothing is plain

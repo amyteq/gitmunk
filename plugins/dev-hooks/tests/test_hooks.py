@@ -436,7 +436,7 @@ class GuardLevels(unittest.TestCase):
         session directory, its TMPDIR the test's temp root, unset for candidate 9 as in the measured sessions. A fixed
         shape returns no decision at med and high and keeps its ask at low (D1); a kept shape, listed with its reason
         in CHANGELOG.md, asks at every level; every near miss asks at every level."""
-        kept = {corpus.PLAIN_DATA[7][0][1], corpus.PLAIN_DATA[9][0][0]}
+        kept = {corpus.PLAIN_DATA[5][0][0], corpus.PLAIN_DATA[7][0][1], corpus.PLAIN_DATA[9][0][0]}
         for number, (shapes, near) in corpus.PLAIN_DATA.items():
             env = {} if number == 9 else {"TMPDIR": str(self.root)}
             for command in shapes:
@@ -638,6 +638,9 @@ class StructuralAskTest(unittest.TestCase):
             "ssh host \"$(echo 'cat `x`')\"", "grep 'rm -rf' notes.md | ssh host", "rg --pre 'rm -f' x .",
             "xargs echo 'cat `x`' < list", "printf -v D '%s' 'cat `x`'", "echo 'rm `x`' >> notes.md",
             "cat > run.sh <<'EOF'\nIt's\nrm -rf build\nEOF\nbash run.sh", "cd $TMPDIR/run && rm -f a; rm -f b",
+            "cat > run.sh <<'EOF'\n# It's ready.\nexample-tool --purge build\nEOF\nbash run.sh",
+            "sed 's/x/`cat y`/' notes.md --expression=e", "sed 's/x/`cat y`/' $OPTS notes.md",
+            "sed 's/x/`cat y`/' {-e,e} notes.md", "cd $TMPDIR/run && rm -f *",
             "cd $TMPDIR/run && rm -rf ../x", "cd $TMPDIR/run && cd ~ && rm -f a", "cd /srv/run && rm -f a",
             "for f in a b; do f=$(cat x); cat $f; done", "for f in $(ls); do cat $f; done; echo \"$(date)\"",
         ]:
