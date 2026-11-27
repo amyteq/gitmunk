@@ -1,10 +1,11 @@
 // One test per case in the dev-explain closed case lists: target parsing (AC-1, including a discussion comment
-// fragment) and the rest of argument resolution, append-only bodies and label limits (AC-2, AC-5.3, AC-5.5). Run with
+// fragment) and the rest of argument resolution, append-only bodies and label limits (AC-2, AC-5.3, AC-5.5), and
+// #76's fixed branch lookup entry point (its AC-2 and AC-3, prefixed `#76`). Run with
 // `node --test skills/dev-explain/scripts/check-explain.test.mjs` or `npm test` from the plugin root.
 // Every input is a fixture; no GitHub call is made.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -402,4 +403,150 @@ test('the documented git commands and the helper pick the topic PR when the bran
   assert.equal(input(), null);
   assert.deepEqual(branchCandidates({ branch: '', push: 'refs/remotes/origin/topic', remote: 'origin', fetch: '+refs/heads/*:refs/remotes/origin/*',
     pushSpecs: '', remoteUrl: 'https://github.com/example-org/example-repo.git', pulls: PULLS }), []);
+});
+
+// #76 — step 1.3's fixed entry point (`branch --dir`) against the jq recipe it replaces, which SKILL.md keeps
+// verbatim for DEV_EXPLAIN_BRANCH_HELPER=0. Both run through bash exactly as documented, on the same fact files.
+const SKILL = readFileSync(join(here, '..', 'SKILL.md'), 'utf8');
+const HELPER = 'node "${CLAUDE_SKILL_DIR}/scripts/check-explain.mjs" branch --dir $S > $S/branch-candidates.json';
+const RECIPE = `jq -n --rawfile branch $S/branch --rawfile push $S/push --rawfile remote $S/push-remote --rawfile fetch $S/fetch \\
+  --rawfile pushSpecs $S/push-specs --rawfile url $S/push-url --slurpfile pulls $S/pulls.json \\
+  '{branch: ($branch | rtrimstr("\\n")), push: ($push | rtrimstr("\\n")), remote: ($remote | rtrimstr("\\n")), fetch: ($fetch | rtrimstr("\\n")),
+    pushSpecs: ($pushSpecs | rtrimstr("\\n")), remoteUrl: ($url | rtrimstr("\\n")), pulls: $pulls[0]}' > $S/branch.json
+node "\${CLAUDE_SKILL_DIR}/scripts/check-explain.mjs" branch --input $S/branch.json > $S/branch-candidates.json`;
+const NO_JQ = spawnSync('jq', ['--version']).status !== 0 && 'jq is not installed, so the recipe cannot run';
+const ENV = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'DEV_EXPLAIN_BRANCH_HELPER'));
+
+// A checkout on `topic` whose upstream is origin/develop, then `setup` (git args per call); the documented Git
+// commands write the fact files into a fresh scratch directory, as Git prints them. Global Git config is ignored.
+let lookups = 0;
+function lookup(setup = [], pulls = PULLS) {
+  const S = join(scratch, `lookup-${++lookups}`);
+  const repo = `${S}-repo`;
+  const env = { ...ENV, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8', env }).stdout;
+  mkdirSync(S);
+  spawnSync('git', ['init', '-q', repo], { env });
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'x');
+  git('remote', 'add', 'origin', 'https://github.com/example-org/example-repo.git');
+  git('update-ref', 'refs/remotes/origin/develop', 'HEAD');
+  git('checkout', '-q', '-b', 'topic');
+  git('branch', '-q', '--set-upstream-to=origin/develop');
+  for (const step of setup) git(...step);
+  const branch = git('branch', '--show-current').trim();
+  const remote = git('for-each-ref', '--format=%(push:remotename)', `refs/heads/${branch}`);
+  const r = remote.trim();
+  const facts = { branch: git('branch', '--show-current'), push: git('for-each-ref', '--format=%(push)', `refs/heads/${branch}`),
+    'push-remote': remote, fetch: r ? git('config', '--get-all', `remote.${r}.fetch`) : '',
+    'push-specs': r ? git('config', '--get-all', `remote.${r}.push`) : '', 'push-url': r ? git('remote', 'get-url', '--push', r) : '',
+    'pulls.json': `${JSON.stringify(pulls, null, 2)}\n` };
+  for (const [name, text] of Object.entries(facts)) writeFileSync(join(S, name), text);
+  return S;
+}
+
+// One documented block through bash, starting from a stale candidates file so an unwritten one shows.
+function step(S, script, value) {
+  writeFileSync(join(S, 'branch-candidates.json'), 'stale');
+  const env = { ...ENV, S, CLAUDE_SKILL_DIR: join(here, '..'), ...(value === undefined ? {} : { DEV_EXPLAIN_BRANCH_HELPER: value }) };
+  const run = spawnSync('bash', ['-c', script], { encoding: 'utf8', env });
+  return { status: run.status, stdout: run.stdout, candidates: readFileSync(join(S, 'branch-candidates.json'), 'utf8'), stderr: run.stderr };
+}
+
+// AC-3: the same exit status, stdout and candidates file from both paths; returns them with both stderr texts.
+function equivalent(S) {
+  const { stderr: helperError, ...helper } = step(S, HELPER);
+  const { stderr: recipeError, ...recipe } = step(S, RECIPE);
+  assert.deepEqual(helper, recipe);
+  return { ...helper, helperError, recipeError };
+}
+
+const PUBLISH_CURRENT = [['config', 'push.default', 'current']];
+const ok = (candidates) => ({ status: 0, stdout: '', candidates: `${JSON.stringify(candidates)}\n` });
+const without = ({ helperError, recipeError, ...rest }) => rest;
+
+test('#76 AC-2 (c) SKILL.md documents the fixed entry point and keeps the jq recipe verbatim', () => {
+  assert.ok(SKILL.includes(HELPER), 'the fixed entry point is documented');
+  assert.ok(SKILL.includes(RECIPE), 'the recipe is kept verbatim');
+});
+
+test('#76 AC-3 (a) the published head with an open PR selects it on both paths', { skip: NO_JQ }, () => {
+  assert.deepEqual(without(equivalent(lookup(PUBLISH_CURRENT))), ok([2]));
+});
+
+test('#76 AC-3 (b) a push to a differently named upstream gives [] on both paths', { skip: NO_JQ }, () => {
+  assert.deepEqual(without(equivalent(lookup())), ok([]));
+});
+
+test('#76 AC-3 (c) a fetch mapping that renames the tracking ref gives [] on both paths', { skip: NO_JQ }, () => {
+  const S = lookup([['config', 'push.default', 'upstream'], ['config', '--replace-all', 'remote.origin.fetch',
+    '+refs/heads/main:refs/remotes/origin/develop'], ['config', 'branch.topic.merge', 'refs/heads/main']]);
+  assert.equal(readFileSync(join(S, 'push'), 'utf8'), 'refs/remotes/origin/develop\n');
+  assert.deepEqual(without(equivalent(S)), ok([]));
+});
+
+test('#76 AC-3 (d) a remote with its own push refspec gives [] on both paths', { skip: NO_JQ }, () => {
+  const S = lookup([...PUBLISH_CURRENT, ['config', 'remote.origin.push', 'refs/heads/topic:refs/heads/main']]);
+  assert.deepEqual(without(equivalent(S)), ok([]));
+});
+
+test('#76 AC-3 (e) no push remote, so the five remote fact files are empty, gives [] on both paths', { skip: NO_JQ }, () => {
+  const S = lookup(PUBLISH_CURRENT);
+  for (const name of ['push', 'push-remote', 'fetch', 'push-specs', 'push-url']) writeFileSync(join(S, name), '');
+  assert.deepEqual(without(equivalent(S)), ok([]));
+});
+
+test('#76 AC-3 (f) a fork\'s published head selects only the fork\'s PR, not the same-name base PR', { skip: NO_JQ }, () => {
+  const S = lookup([...PUBLISH_CURRENT, ['remote', 'add', 'fork', 'git@github.com:Someone/example-repo.git'],
+    ['config', 'remote.pushDefault', 'fork']]);
+  assert.equal(readFileSync(join(S, 'push'), 'utf8'), 'refs/remotes/fork/topic\n');
+  assert.deepEqual(without(equivalent(S)), ok([3]));
+});
+
+test('#76 AC-3 (g) a fact file ending in two newlines loses only one, as rtrimstr("\\n") does', { skip: NO_JQ }, () => {
+  const S = lookup(PUBLISH_CURRENT);
+  writeFileSync(join(S, 'push'), 'refs/remotes/origin/topic\n\n');
+  // The branch read from `push` keeps one newline, so it names no PR; trimming both would select #2.
+  assert.deepEqual(without(equivalent(S)), ok([]));
+});
+
+test('#76 AC-3 (h) a missing fact file exits 2 on both paths and leaves the candidates empty', { skip: NO_JQ }, () => {
+  const S = lookup(PUBLISH_CURRENT);
+  rmSync(join(S, 'push-specs'));
+  const result = equivalent(S);
+  assert.deepEqual(without(result), { status: 2, stdout: '', candidates: '' });
+  assert.notEqual(result.helperError, result.recipeError);
+  for (const text of [result.helperError, result.recipeError]) assert.match(text, /push-specs/);
+});
+
+test('#76 AC-3 (i) a malformed pulls.json exits 2 on both paths and leaves the candidates empty', { skip: NO_JQ }, () => {
+  const S = lookup(PUBLISH_CURRENT);
+  writeFileSync(join(S, 'pulls.json'), '[{"number": 2,');
+  const result = equivalent(S);
+  assert.deepEqual(without(result), { status: 2, stdout: '', candidates: '' });
+  assert.notEqual(result.helperError, result.recipeError);
+});
+
+test('#76 AC-2 (a) DEV_EXPLAIN_BRANCH_HELPER unset or empty: the fixed entry point writes the candidates', () => {
+  const S = lookup(PUBLISH_CURRENT);
+  for (const value of [undefined, '']) assert.deepEqual(step(S, HELPER, value), { ...ok([2]), stderr: '' }, String(value));
+});
+
+test('#76 AC-2 (b) DEV_EXPLAIN_BRANCH_HELPER=1: the fixed entry point writes the candidates', () => {
+  assert.deepEqual(step(lookup(PUBLISH_CURRENT), HELPER, '1'), { ...ok([2]), stderr: '' });
+});
+
+test('#76 AC-2 (c) DEV_EXPLAIN_BRANCH_HELPER=0: exit 3, no candidates, a stderr line naming the variable', { skip: NO_JQ }, () => {
+  const S = lookup(PUBLISH_CURRENT);
+  const { stderr, ...rest } = step(S, HELPER, '0');
+  assert.deepEqual(rest, { status: 3, stdout: '', candidates: '' });
+  assert.match(stderr, /^check-explain: DEV_EXPLAIN_BRANCH_HELPER=0 .*jq recipe/);
+  assert.equal(stderr.trimEnd().split('\n').length, 1);
+  // The session then runs the recipe SKILL.md keeps for this setting.
+  assert.deepEqual(step(S, RECIPE, '0'), { ...ok([2]), stderr: '' });
+});
+
+test('#76 AC-2 (d) DEV_EXPLAIN_BRANCH_HELPER=yes warns, naming the variable and its values, and uses the helper', () => {
+  const { stderr, ...rest } = step(lookup(PUBLISH_CURRENT), HELPER, 'yes');
+  assert.deepEqual(rest, ok([2]));
+  assert.equal(stderr, 'check-explain: DEV_EXPLAIN_BRANCH_HELPER="yes" is not 0 or 1 (unset or empty means 1); using the helper\n');
 });
