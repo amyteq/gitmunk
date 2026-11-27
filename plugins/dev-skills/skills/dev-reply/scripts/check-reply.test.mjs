@@ -84,7 +84,8 @@ test('dry-run is a flag, and the first other word starts the verbatim notes', ()
 test('a direct mention counts; code, quotes, links, bare URLs, emails, paths, teams and longer logins do not', () => {
   for (const body of [`@${ME} can you check?`, `Thanks (@${ME}).`, `cc @EXAMPLE-OWNER`, `- [ ] @${ME}: decide`, `<code>x</code> then @${ME}`, `<b>@${ME}</b>`,
     `Results: https://example.com/search?q=x @${ME} can you check?`, `Results: https://example.com/search?q=*x* @${ME} can you check?`,
-    `Results: https://example.com/search?q=*x*\n\n@${ME} can you check?`,
+    `Results: https://example.com/search?q=*x*\n\n@${ME} can you check?`, `Reference: _https://example.com_—@${ME}, can you confirm?`,
+    `See https://a_b.com/x @${ME}`, `[https://example.com/a](https://example.com)@${ME} which option?`,
     `<a href="https://example.com">\n\nDocumentation\n\n</a>\n<br>\n\n@${ME} which option?`, `<code>*x</code>* then @${ME}`,
     `<a href="https://example.com">\n\n> quoted </a>\n\n@${ME} next`, `<!-- <code> in a template -->\n\n@${ME} hi`, `<a name="top"/> @${ME}`,
     `<span title="<code>">documentation</span>\n\n@${ME} which option?`, `<abbr title='<a>'>CI</abbr> @${ME}`,
@@ -99,7 +100,8 @@ test('a direct mention counts; code, quotes, links, bare URLs, emails, paths, te
     `See <code title="a/>b">@${ME}</code>`, `See <a href="https://example.com/>">@${ME}</a>`,
     `This search shows no results: https://github.com/search?q=@${ME}&type=issues`, `See www.example.com/?by=@${ME}`,
     `This search shows no results: https://github.com/search?q=label:*bug*+mentions:@${ME}&type=issues`,
-    `See https://github.com/search?q=path:*.test.*+author:@${ME}`]) {
+    `See https://github.com/search?q=path:*.test.*+author:@${ME}`, `See https://example.com/?q=*bug*&nbsp;@${ME}`,
+    `See https://example.com/?q=*bug*&lt;@${ME}`, `See https://example.com/\`a\`@${ME}`, `See https://localhost/a@${ME}`]) {
     assert.equal(mentions(body, ME), false, String(body));
   }
 });

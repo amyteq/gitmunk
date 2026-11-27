@@ -86,10 +86,11 @@ const SKIP = new Set(['code', 'inlineCode', 'html', 'blockquote', 'link', 'linkR
 const TAG = /<(\/?)([a-z][^\s/>]*)(?=[\s/>])(?:"[^"]*"|'[^']*'|[^'">])*?(\/?)>/gi;
 const HIDING = new Set(['a', 'code']);
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
-// GitHub also links a bare URL (a GFM autolink literal) that CommonMark leaves as text. It runs to whitespace or `<`
-// over any emphasis or code delimiters inside it, so a URL that ends one text node runs on into the next text when
-// nothing but such delimiters lies between them in the source.
-const BARE_URL = /(?:https?:\/\/|www\.)[^\s<]*/gi;
+// GitHub also links a bare URL (a GFM autolink literal) that CommonMark leaves as text: `http(s)://` after anything
+// but a letter, or `www.` after whitespace, `*`, `_`, `~` or `(`; then a domain with no `_` in its last two labels;
+// then on to whitespace or `<`. It spans the source, emphasis, code and character references inside it included, so
+// each URL that starts in shown text is cut out of every text node it reaches.
+const BARE_URL = /(?:(?<![a-z])https?:\/\/|(?<![^\s*_~(])www\.)(?:(?:[\p{L}\p{N}_-]+\.)*[\p{L}\p{N}-]+\.)?[\p{L}\p{N}-]+(?!\.?[\p{L}\p{N}_-])[^\s<]*/giu;
 function plain(node, state, quiet = false) {
   if (node.type === 'html') {
     for (const [, close, name, selfClosing] of node.value.replace(HTML_COMMENT, '').matchAll(TAG)) {
@@ -99,13 +100,16 @@ function plain(node, state, quiet = false) {
   const skip = quiet || SKIP.has(node.type);
   if (node.type === 'text') {
     if (skip || state.open) return ' ';
-    const carried = state.urlEnd !== undefined && !/[\s<]/.test(state.src.slice(state.urlEnd, node.position.start.offset));
-    const text = (carried ? 'https://' : '') + node.value;
-    state.urlEnd = undefined;
-    return text.replace(BARE_URL, (url, at) => {
-      if (at + url.length === text.length) state.urlEnd = node.position.end.offset;
-      return ' ';
-    });
+    const { start: { offset: s }, end: { offset: e } } = node.position;
+    const cuts = state.urls.filter(([a]) => a >= s && a < e);
+    if (state.urlEnd > s) cuts.unshift([s, state.urlEnd]);
+    if (!cuts.length) return node.value;
+    let text = state.src.slice(s, e);
+    for (const [a, b] of cuts) {
+      text = text.slice(0, a - s) + ' '.repeat(Math.min(b, e) - a) + text.slice(Math.min(b, e) - s);
+      state.urlEnd = Math.max(state.urlEnd, b);
+    }
+    return text;
   }
   return (node.children ?? []).map((child) => plain(child, state, skip)).join(' ');
 }
@@ -115,7 +119,8 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function mentions(body, login) {
   const re = new RegExp(`(?<![\\w\`/.@-])@${escapeRe(login)}(?![\\w-]|/\\w)`, 'i');
   const src = body ?? '';
-  return re.test(plain(fromMarkdown(src), { open: 0, src }));
+  const urls = [...src.matchAll(BARE_URL)].map((m) => [m.index, m.index + m[0].length]);
+  return re.test(plain(fromMarkdown(src), { open: 0, src, urls, urlEnd: 0 }));
 }
 
 /** How a reply names its sender: `@login` for a person; a bot or agent trigger stays in a code span. */
