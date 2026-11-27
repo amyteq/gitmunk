@@ -287,9 +287,9 @@ export function tick(ctx) {
       && r.actions.some((a) => a.type === 'launch' || a.kind === 'authorization-missing')) {
       r = { ...r, status: 'waiting', next: '', actions: r.actions.filter((a) => a.type === 'stop') };
     }
-    // #58: a merge that waits for a full slot, with no session of its row still running, leaves the lock to a later row.
+    // #58: a merge that waits for a full slot leaves the lock to a later row, unless a merge session of its row may still merge.
     const launch = r.actions.find((a) => a.type === 'launch');
-    const slotWait = launch && !records.some((x) => x.issue === row.issue && RUNNING.has(x.state)) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
+    const slotWait = launch && !records.some((x) => x.issue === row.issue && x.stage === 'merge' && LIVE.has(x.state)) && fullSlot(s, records, slotsNeeded(s, f.labels, launch.stage));
     if (!holder && !slotWait && r.actions.some((a) => a.type === 'lock')) holder = { key, issue: row.issue };
     if (mergeLock === 'mine' && r.actions.some((a) => a.type === 'unlock')) holder = null;
     return { row, batch: row.batch, priority: f.priority, facts: f, actions: r.actions,
@@ -331,9 +331,8 @@ export function tick(ctx) {
     const h = d.actions.some((a) => a.type === 'unlock') && readLock(dir);
     if (h?.key === key && h.issue === d.row.issue) dropLock(dir, h);
   }
-  for (const d of decided) if (d.actions.some((a) => a.type === 'lock') && !d.actions.some((a) => a.type === 'launch')) acquireLock(dir, d.row.issue, now);
-  // #58: one cost-alert judgment per row and batch, recorded by its file in pending/ or delivered/: a tick cut short
-  // before that file exists raises it again, one after never does. The row, its Next and its launches stay as they are.
+  for (const d of decided) if (d.actions.some((a) => a.type === 'lock') && records.some((x) => x.issue === d.row.issue && x.stage === 'merge' && LIVE.has(x.state))) acquireLock(dir, d.row.issue, now);
+  // #58: one cost-alert per row and batch, recorded by its judgment file in pending/ or delivered/ (none yet: raised again); it changes no row.
   const alerted = ['pending', 'delivered'].flatMap((d) => (existsSync(at(d)) ? readdirSync(at(d)) : []).filter((n) => n.endsWith('.json'))
     .map((n) => readJson(join(at(d), n)))).filter((e) => e?.type === 'cost-alert').map((e) => e.task);
   for (const x of costAlerts(readLines(at('metrics.jsonl')), s.cost_alert, alerted)) {

@@ -1216,7 +1216,7 @@ test('cost alert: an alert whose loop died before its judgment file was written 
   assert.deepEqual([w.pending(), alerts(w).map((e) => e.task)], [[], [45, 45]]);
 });
 
-test('a limited merge whose replacement waits for a full slot keeps the merge lock from a later merge (#58 AC-1 b)', () => {
+test('a limited merge whose replacement waits for a full slot keeps the merge lock, on disk too, from a later merge of this or another batch (#58 AC-1 b)', async () => {
   const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
     row(3, 44, { status: 'implementing', session: 'er-i44a' })], accounts: ['A1', 'A2'] });
   configure(w, { slots: 'e2e=1' });
@@ -1229,4 +1229,41 @@ test('a limited merge whose replacement waits for a full slot keeps the merge lo
   holder(w, 'er-i44a', { stage: 'implement', issue: 44 }); // e2e is full, and no merge lock is on disk (a takeover whose facts query failed)
   assert.deepEqual(w.tick(T(12)).launched, []); // #41's limited merge can still resume, so #43 waits for the lock
   assert.deepEqual(w.sessions().filter((s) => s.stage === 'merge').map((s) => [s.name, s.state]), [['er-pr50m', 'limited']]);
+  assert.deepEqual(rowOf(w, 43).slice(0, 2), ['reviewing', 'waiting for the merge lock']);
+  // The lock is on disk for #41 again, so another batch of the repository cannot claim it for a merge of its own.
+  assert.deepEqual(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 41);
+  const { claimLock } = await import('./loop.mjs');
+  assert.equal(claimLock(join(dirname(w.dir), 'i99'), 7, T(12)), null);
+});
+
+test('a merge that waits for a full slot leaves the merge lock to a later merge while its row\'s blocked or limited review session is stopped (#58 AC-1 b)', () => {
+  for (const limit of [false, true]) {
+    const w = world({ rows: [row(1, 41, { status: 'reviewing', pr: 50, session: 'er-pr50' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+      row(3, 44, { status: 'implementing', session: 'er-i44a' })], accounts: ['A1', 'A2'] }); // A1 cools after a usage limit
+    configure(w, { slots: 'e2e=1' });
+    w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+    w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+    w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+    const id = w.agent('er-pr50', { alias: 'A1', state: 'blocked', stage: 'review', issue: 41, pr: 50 });
+    if (limit) w.logs[id] = "You've hit your session limit · resets 4pm (UTC)\n";
+    w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+    holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+    assert.deepEqual(w.tick(T(10)).launched, ['er-pr51m'], `limited: ${limit}`);
+    assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
+  }
+});
+
+test('a merge whose earlier merge session was stopped at a usage limit leaves the lock to a later merge while its replacement waits for a full slot (#58 AC-1 b)', () => {
+  const w = world({ rows: [row(1, 41, { status: 'merging', pr: 50, session: 'er-pr50m' }), row(2, 43, { status: 'reviewing', pr: 51, session: 'er-pr51' }),
+    row(3, 44, { status: 'implementing', session: 'er-i44a' })] });
+  configure(w, { slots: 'e2e=1' });
+  w.issues[41] = { refined: true, labels: ['slot:e2e'], pr: { number: 50, approved: true } };
+  w.issues[43] = { refined: true, pr: { number: 51, approved: true } };
+  w.issues[44] = { refined: true, labels: ['slot:e2e'] };
+  w.agent('er-pr50m', { state: 'stopped', stage: 'merge', issue: 41, pr: 50 });
+  Object.assign(w.records.at(-1), { limited: true, endedAt: new Date(T(11)).toISOString() }); // stopped for a replacement that never launched: it cannot merge
+  w.agent('er-pr51', { stage: 'review', issue: 43, pr: 51 });
+  holder(w, 'er-i44a', { stage: 'implement', issue: 44 });
+  assert.deepEqual(w.tick(T(12)).launched, ['er-pr51m']);
+  assert.equal(JSON.parse(readFileSync(w.lock, 'utf8')).issue, 43);
 });
