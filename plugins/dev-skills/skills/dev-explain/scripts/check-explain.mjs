@@ -343,7 +343,7 @@ function readBranchDir(args) {
 }
 
 // DEV_EXPLAIN_BRANCH_HELPER: unset, empty or 1 runs `branch --dir`; 0 hands step 1.3 back to its jq recipe.
-export function branchHelper(value = '') {
+function branchHelper(value = '') {
   if (value === '0') return { use: false };
   if (value === '' || value === '1') return { use: true };
   return { use: true, warning: `DEV_EXPLAIN_BRANCH_HELPER="${value}" is not 0 or 1 (unset or empty means 1); using the helper` };
